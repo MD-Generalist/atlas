@@ -1945,6 +1945,45 @@ async fn a_reply_is_refused_naming_its_root_and_nothing_is_sent() {
     client.cancel().await.ok();
 }
 
+/// A comment the user linked in the composer arrives as its
+/// `atlas-org://comment/…` link; the tool reads the comment AND its recorded
+/// session from it, with no `session` argument.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_comment_link_names_the_comment_and_its_session() {
+    let org = commented();
+    let (_server, client) = org_client(org.clone()).await;
+    let (err, answer) = call_json(
+        &client,
+        "org_comment_resolve",
+        json!({ "comment": "atlas-org://comment/ws-atlas/rs-2/z1" }),
+    )
+    .await;
+    assert!(!err, "{answer}");
+    assert_eq!(answer["session"]["id"], json!("rs-2"));
+    assert!(org.asked().contains(&("org-acme".to_string(), "resolve ws-atlas/rs-2/z1 resolved=true".to_string())));
+    client.cancel().await.ok();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_comment_link_that_contradicts_the_session_or_is_another_kind_is_refused() {
+    let org = commented();
+    let (_server, client) = org_client(org.clone()).await;
+    let (err, text) = call(
+        &client,
+        "org_comment_resolve",
+        json!({ "comment": "atlas-org://comment/ws-atlas/rs-2/z1", "session": "rs-1" }),
+    )
+    .await;
+    assert!(err);
+    assert!(text.contains("pass the link alone"), "{text}");
+    let (err, text) =
+        call(&client, "org_comment_resolve", json!({ "comment": "atlas-org://member/u-1" })).await;
+    assert!(err);
+    assert!(text.contains("is not a comment"), "{text}");
+    assert!(!org.asked().iter().any(|(_, what)| what.starts_with("resolve")));
+    client.cancel().await.ok();
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn an_unknown_comment_id_is_an_error_and_nothing_is_sent() {
     let org = commented();

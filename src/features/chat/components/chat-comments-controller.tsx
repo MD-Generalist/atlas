@@ -17,7 +17,7 @@
  *    same post/resolve/remove.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
@@ -27,6 +27,7 @@ import { safeUnlistenPromise } from "@/lib/safe-unlisten";
 import { isBusyAgentStatus } from "@/types/agent";
 
 import { buildAnchorMap, structureKey, type AnchorEntry } from "../lib/comment-anchors";
+import { commentToMention, linkCommentToComposer } from "../lib/comment-mentions";
 import { projectPathForTab } from "../lib/tab-project";
 import { useChatCommentsStore, type CommentTargetIds } from "../stores/chat-comments-store";
 import { useChatStore } from "../stores/chat-store";
@@ -150,8 +151,27 @@ export function ChatCommentsController({ tabId }: { tabId: string }) {
     visible ? (target?.remoteProjectId ?? null) : null,
     visible ? (target?.sessionId ?? null) : null,
   );
+  // The chat's popovers can link a comment into THIS pane's composer. Added
+  // here, where the tab is known, so the Timeline's popovers (no composer of
+  // their own) keep drawing no link button.
+  // `actions` is memoised on its own: every row subscribes to it, and a new
+  // object per comment frame would re-render all of them.
+  const baseActions = comments?.actions ?? null;
+  const actions = useMemo(() => {
+    if (!baseActions) return null;
+    const link = (comment: Parameters<typeof commentToMention>[0]) => {
+      const tab = useChatCommentsStore.getState().byTab[tabId];
+      const mention = tab ? commentToMention(comment, tab) : null;
+      if (mention) linkCommentToComposer(tabId, mention);
+    };
+    return { ...baseActions, link };
+  }, [baseActions, tabId]);
+  const linkable = useMemo(
+    () => (comments && actions ? { ...comments, actions } : null),
+    [comments, actions],
+  );
   useEffect(() => {
-    setComments(tabId, comments);
+    setComments(tabId, linkable);
     if (!comments || !target) return;
     // A comment on a row the map cannot place: a turn that landed after the
     // last resolve. Ask once per change of the buckets, not per frame.
@@ -162,7 +182,7 @@ export function ChatCommentsController({ tabId }: { tabId: string }) {
         break;
       }
     }
-  }, [tabId, comments, target, setComments]);
+  }, [tabId, comments, linkable, target, setComments]);
 
   useEffect(() => () => clear(tabId), [tabId, clear]);
 

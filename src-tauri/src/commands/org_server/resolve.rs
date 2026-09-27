@@ -43,14 +43,20 @@ pub const ORG_LINK_SCHEME: &str = "atlas-org://";
 /// - `atlas-org://member/<user id>`
 /// - `atlas-org://conversation/<conversation id>`
 /// - `atlas-org://recorded-session/<Workspace id>/<session id>`
+/// - `atlas-org://comment/<Workspace id>/<session id>/<comment id>`
 ///
 /// A recorded session is not a local past session: that one is a transcript on
 /// this disk, inlined into the prompt, and never becomes a link.
+///
+/// A comment link names one comment on a recorded session — a root or a reply
+/// — which the user linked for the agent to attend to. The comment tools take
+/// it as their `comment`, reading the recorded session from it too.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OrgLink {
     Member { user_id: String },
     Conversation { id: String },
     RecordedSession { workspace_id: String, session_id: String },
+    Comment { workspace_id: String, session_id: String, comment_id: String },
 }
 
 /// One id as a path segment: the characters that would end or re-scope it
@@ -98,6 +104,12 @@ impl OrgLink {
             OrgLink::RecordedSession { workspace_id, session_id } => {
                 format!("{ORG_LINK_SCHEME}recorded-session/{}/{}", segment(workspace_id), segment(session_id))
             }
+            OrgLink::Comment { workspace_id, session_id, comment_id } => format!(
+                "{ORG_LINK_SCHEME}comment/{}/{}/{}",
+                segment(workspace_id),
+                segment(session_id),
+                segment(comment_id)
+            ),
         }
     }
 
@@ -117,6 +129,11 @@ impl OrgLink {
             ["recorded-session", workspace, session] => Some(OrgLink::RecordedSession {
                 workspace_id: unsegment(workspace)?,
                 session_id: unsegment(session)?,
+            }),
+            ["comment", workspace, session, comment] => Some(OrgLink::Comment {
+                workspace_id: unsegment(workspace)?,
+                session_id: unsegment(session)?,
+                comment_id: unsegment(comment)?,
             }),
             _ => None,
         }
@@ -347,6 +364,11 @@ mod tests {
             OrgLink::Member { user_id: "u-1".into() },
             OrgLink::Conversation { id: "c-general".into() },
             OrgLink::RecordedSession { workspace_id: "ws-atlas".into(), session_id: "rs-1".into() },
+            OrgLink::Comment {
+                workspace_id: "ws-atlas".into(),
+                session_id: "rs-1".into(),
+                comment_id: "cm/1 odd".into(),
+            },
             OrgLink::Member { user_id: "odd/id?#with space%".into() },
         ] {
             assert_eq!(OrgLink::parse(&link.uri()), Some(link.clone()), "{}", link.uri());
@@ -356,6 +378,10 @@ mod tests {
         assert_eq!(
             OrgLink::RecordedSession { workspace_id: "ws".into(), session_id: "rs".into() }.uri(),
             "atlas-org://recorded-session/ws/rs",
+        );
+        assert_eq!(
+            OrgLink::Comment { workspace_id: "ws".into(), session_id: "rs".into(), comment_id: "cm".into() }.uri(),
+            "atlas-org://comment/ws/rs/cm",
         );
     }
 
@@ -369,6 +395,8 @@ mod tests {
             "atlas-org://member",
             "atlas-org://member/a/b",
             "atlas-org://recorded-session/ws",
+            "atlas-org://comment/ws/rs",
+            "atlas-org://comment/ws/rs/cm/extra",
             "atlas-org://session/rs-1",
             "atlas-org://member/%zz",
         ] {

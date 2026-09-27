@@ -25,7 +25,7 @@
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Popover } from "@base-ui/react/popover";
-import { Check, CornerDownLeft, Loader2, MessageSquare, Trash2 } from "lucide-react";
+import { Check, CornerDownLeft, Link2, Loader2, MessageSquare, Trash2 } from "lucide-react";
 
 import { AccountAvatar } from "@/features/auth/components/account-avatar";
 import type { AccountUser, OrgMember } from "@/features/auth/lib/auth-api";
@@ -44,6 +44,12 @@ export interface CommentActions {
   ) => Promise<void>;
   resolve: (commentId: string, resolved: boolean) => Promise<void>;
   remove: (commentId: string) => Promise<void>;
+  /**
+   * Reference this comment in the agent chat composer, so the agent attends
+   * to it. Only a surface with a composer to link into supplies it (the live
+   * chat); without it the link button is not drawn.
+   */
+  link?: (comment: Comment) => void;
 }
 
 /**
@@ -449,6 +455,20 @@ const CommentRow = memo(function CommentRow({
             )}
             <span className="flex-1" />
             {busy && <Loader2 size={10} className="animate-spin text-[var(--muted-foreground)]" />}
+            {/* Link first, then delete. Every comment can be linked — it
+             *  tells the agent "attend to this one" — so it is not gated on
+             *  authorship the way delete is. */}
+            {actions.link && !busy && (
+              <button
+                type="button"
+                aria-label="Reference comment in agent chat"
+                title="Reference in agent chat"
+                onClick={() => actions.link?.(comment)}
+                className="flex shrink-0 cursor-pointer items-center rounded p-0.5 text-[var(--muted-foreground)] opacity-0 transition-colors hover:text-[var(--foreground)] focus-visible:opacity-100 group-hover/comment:opacity-100"
+              >
+                <Link2 size={11} />
+              </button>
+            )}
             {/* Where the reference design puts an overflow menu. There is one
              *  action behind it and only the author has it, so the menu would
              *  be a click in front of a single item. */}

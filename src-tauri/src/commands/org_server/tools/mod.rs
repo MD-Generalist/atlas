@@ -374,6 +374,32 @@ fn not_an_id(what: &str, text: &str) -> CallToolResult {
     tool_error(format!("\"{text}\" is not {what} id. Nothing was read."))
 }
 
+/// A comment tool's `comment` argument and its `session`, with a comment
+/// link ([`OrgLink::Comment`], what the composer puts in the prompt when the
+/// user links a comment) read as the comment id it carries — and, when no
+/// `session` is given, as the session too: `session_target` reads the link
+/// as the recorded session it names. A plain id passes through untouched.
+fn linked_comment<'a>(
+    comment: &'a str,
+    session: Option<&'a str>,
+) -> Result<(String, Option<&'a str>), CallToolResult> {
+    if !OrgLink::looks_like(comment) {
+        return Ok((comment.to_string(), session));
+    }
+    let Some(OrgLink::Comment { session_id, comment_id, .. }) = OrgLink::parse(comment) else {
+        return Err(tool_error(format!(
+            "\"{comment}\" is not a comment; name one by its id or its atlas-org://comment link (org_comments lists them)"
+        )));
+    };
+    match session {
+        None => Ok((comment_id, Some(comment))),
+        Some(asked) if asked == session_id || asked == comment => Ok((comment_id, Some(comment))),
+        Some(asked) => Err(tool_error(format!(
+            "the link names recorded session {session_id} but `session` says {asked}; pass the link alone"
+        ))),
+    }
+}
+
 /// An optional boolean argument, absent read as `false`.
 fn bool_arg(request: &CallToolRequestParams, name: &str) -> bool {
     request.arguments.as_ref().and_then(|args| args.get(name)).and_then(Value::as_bool).unwrap_or(false)
@@ -592,11 +618,16 @@ impl OrgTools {
                 let Some(comment) = string_arg(request, "comment") else {
                     return tool_error("name the comment to resolve: `comment` is its id (see org_comments)");
                 };
+                let (comment, session) = match linked_comment(comment, string_arg(request, "session")) {
+                    Ok(found) => found,
+                    Err(answer) => return answer,
+                };
+                let comment = comment.as_str();
                 if let Err(answer) = checked_id("a comment", comment) {
                     return answer;
                 }
                 let resolved = bool_arg_or(request, "resolved", true);
-                let session = (string_arg(request, "session"), string_arg(request, "workspace"));
+                let session = (session, string_arg(request, "workspace"));
                 self.resolve_comment(grant, &scope, session, comment, resolved).await
             }
             "org_comment_reply" => {
@@ -604,13 +635,18 @@ impl OrgTools {
                 let Some(comment) = args.comment else {
                     return tool_error("name the comment to reply to: `comment` is its id (see org_comments)");
                 };
+                let (comment, session) = match linked_comment(comment, args.session) {
+                    Ok(found) => found,
+                    Err(answer) => return answer,
+                };
+                let comment = comment.as_str();
                 if let Err(answer) = checked_id("a comment", comment) {
                     return answer;
                 }
                 let Some(body) = args.body else {
                     return tool_error("say what to reply: `body` is the reply's text");
                 };
-                self.reply_comment(grant, &scope, (args.session, args.workspace), comment, body, &args.mentions).await
+                self.reply_comment(grant, &scope, (session, args.workspace), comment, body, &args.mentions).await
             }
             "org_send" => self.send(grant, &scope, &SendArgs::of(request.arguments.as_ref())).await,
             "org_sessions" => {
@@ -729,9 +765,13 @@ impl OrgTools {
         };
         let named = match session {
             // A recorded-session link (a composer mention) is read first, as
-            // the Workspace and id it carries.
+            // the Workspace and id it carries. A comment link names the
+            // recorded session its comment is on, so it reads the same way.
             Some(text) if OrgLink::looks_like(text) => match OrgLink::parse(text) {
-                Some(OrgLink::RecordedSession { workspace_id: linked, session_id }) => {
+                Some(
+                    OrgLink::RecordedSession { workspace_id: linked, session_id }
+                    | OrgLink::Comment { workspace_id: linked, session_id, .. },
+                ) => {
                     if let Some(asked) = workspace.filter(|asked| *asked != linked) {
                         return Err(tool_error(format!(
                             "the link names Workspace {linked} but `workspace` says {asked}; pass the link alone"

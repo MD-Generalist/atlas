@@ -43,11 +43,13 @@ impl OrgTools {
     /// thread is, and the reply.
     async fn describe_reply(&self, grant: &Grant, arguments: &Value) -> Option<CallDescription> {
         let args = ReplyArgs::of(arguments.as_object());
-        let comment_id = args.comment.unwrap_or_default();
+        let (comment_id, session) =
+            super::linked_comment(args.comment.unwrap_or_default(), args.session).ok()?;
+        let comment_id = comment_id.as_str();
         let body = args.body.unwrap_or_default();
         let scope = grant.org.clone();
         let thread = match &scope {
-            Some(scope) => self.reply_thread(grant, scope, (args.session, args.workspace), comment_id).await.ok(),
+            Some(scope) => self.reply_thread(grant, scope, (session, args.workspace), comment_id).await.ok(),
             None => None,
         };
         // The thread's first author is named from the roster, so it is read
