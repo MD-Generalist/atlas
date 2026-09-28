@@ -743,7 +743,11 @@ const TabContentContainer = memo(function TabContentContainer({
           );
         })}
 
-        {activeIsNonPersistent && <TabContent tab={activeTab} />}
+        {/* Keyed by tab id: two tabs of one type (two drafts, two diffs) sit in
+            the same slot here, and without a key React reuses the first tab's
+            component — and its state — for the second. Two draft tabs shared
+            one Y.Doc that way and wrote each other's content. */}
+        {activeIsNonPersistent && <TabContent key={activeTab.id} tab={activeTab} />}
       </Suspense>
     </div>
   );
@@ -932,7 +936,7 @@ function ProjectlessCenter() {
 
       <div className="relative min-h-0 flex-1 overflow-hidden">
         <Suspense fallback={<PanelLoading />}>
-          {active ? <TabContent tab={active} /> : <WelcomeScreen />}
+          {active ? <TabContent key={active.id} tab={active} /> : <WelcomeScreen />}
         </Suspense>
       </div>
     </div>
