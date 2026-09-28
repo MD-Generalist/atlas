@@ -440,6 +440,7 @@ export interface CaptureResponses {
   capture_connect_options: ConnectOptions;
   capture_register_cloud: Unread;
   capture_connect: ConnectResult;
+  capture_switch_project: ConnectResult;
   capture_promotion_preview: PromotionPreview;
   capture_promote: Unread;
 }
@@ -609,6 +610,37 @@ export const captureHandlers: TypedHandlers<CaptureResponses> = {
     };
     captureChanged();
     return { binding: project.binding, candidates: [], matched: true, moved: 0 };
+  },
+
+  // Cloud→Cloud. The server has no move, so the whole history is re-queued
+  // for the new destination — the pending count jumps by everything sent.
+  capture_switch_project: ({ projectPath, orgId, slug, workspaceId }): ConnectResult => {
+    const project = projectFor(projectPath);
+    if (!project.binding) throw new Error("enable capture for this Project first");
+    if (project.binding.mode !== "cloud") {
+      throw new Error("this Project is not on Cloud yet — promote it first");
+    }
+    if (String(slug) === "internal-scratch") {
+      return {
+        binding: null,
+        candidates: REMOTE_WORKSPACES.slice(0, 2),
+        matched: false,
+        moved: 0,
+      };
+    }
+    // Everything already sent plus what failed against the old destination.
+    const moved = project.preview.newSessionCount + project.failedRows;
+    project.pendingRows += moved;
+    project.failedRows = 0;
+    project.binding = {
+      ...project.binding,
+      slug: String(slug),
+      orgId: String(orgId),
+      remoteWorkspaceId: String(workspaceId),
+      drainState: "ok",
+    };
+    captureChanged();
+    return { binding: project.binding, candidates: [], matched: true, moved };
   },
 
   capture_promotion_preview: ({ projectPath }): PromotionPreview => {

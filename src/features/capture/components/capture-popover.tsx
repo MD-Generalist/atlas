@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
+  ArrowLeftRight,
   ArrowUpRight,
   Check,
   ChevronDown,
@@ -166,6 +167,14 @@ type View =
   /** Local→Cloud promotion onto an EXISTING Project: the disclosure. */
   | {
       kind: "promote-connect-confirm";
+      pick: ConnectPick;
+      preview: PromotionPreview;
+    }
+  /** Cloud→Cloud: pick a different Project in the same Organisation. */
+  | { kind: "switch-form" }
+  /** Cloud→Cloud: the disclosure — everything is re-sent, comments stay. */
+  | {
+      kind: "switch-confirm";
       pick: ConnectPick;
       preview: PromotionPreview;
     };
@@ -360,6 +369,7 @@ export function CapturePopover({ projectPath, health, onChanged, onClose }: Prop
                 importPreview && setView({ kind: "import-confirm", preview: importPreview })
               }
               onPromote={() => setView({ kind: "promote-form", tab: "create" })}
+              onSwitch={() => setView({ kind: "switch-form" })}
             />
           ) : (
             <UnboundState
@@ -468,6 +478,50 @@ export function CapturePopover({ projectPath, health, onChanged, onClose }: Prop
                 if (!result.matched) throw new Error(connectRefusal(result.candidates));
               });
               setView(ok ? { kind: "main" } : { kind: "promote-form", tab: "connect" });
+            }}
+          />
+        )}
+
+        {view.kind === "switch-form" && binding && (
+          <SwitchForm
+            projectPath={projectPath}
+            binding={binding}
+            cloudOrgs={cloudOrgs}
+            cloudReason={cloudReason}
+            busy={busy}
+            run={run}
+            onCancel={() => setView({ kind: "main" })}
+            onContinue={async (pick) => {
+              const preview = await loadPromotionPreview();
+              if (preview) setView({ kind: "switch-confirm", pick, preview });
+            }}
+          />
+        )}
+
+        {view.kind === "switch-confirm" && (
+          <DisclosureStep
+            title={`Move this Project's sync to “${view.pick.slug}”?`}
+            lines={[
+              ...promotionLines(view.preview).map((line, i) =>
+                i === 0 ? `${line} re-sent to the new Project` : line,
+              ),
+              // The server keeps one object per Project and has no move.
+              `“${binding?.slug ?? "the current Project"}” keeps its copy; comments stay there`,
+            ]}
+            confirmLabel="Move sync"
+            busy={busy}
+            onCancel={() => setView({ kind: "switch-form" })}
+            onConfirm={async () => {
+              const ok = await run(async () => {
+                const result = await invoke<ConnectResult>("capture_switch_project", {
+                  projectPath,
+                  orgId: view.pick.orgId,
+                  slug: view.pick.slug,
+                  workspaceId: view.pick.workspaceId,
+                });
+                if (!result.matched) throw new Error(connectRefusal(result.candidates));
+              });
+              setView(ok ? { kind: "main" } : { kind: "switch-form" });
             }}
           />
         )}
@@ -836,6 +890,7 @@ function BoundState({
   run,
   onReviewImport,
   onPromote,
+  onSwitch,
 }: {
   projectPath: string;
   binding: Binding;
@@ -851,6 +906,8 @@ function BoundState({
   run: (action: () => Promise<unknown>) => Promise<boolean>;
   onReviewImport: () => void;
   onPromote: () => void;
+  /** Cloud only: sync this Project to a different Cloud Project. */
+  onSwitch: () => void;
 }) {
   const orgName =
     binding.orgId != null
@@ -967,6 +1024,33 @@ function BoundState({
             >
               <ArrowUpRight size={11} />
               Sync
+            </button>
+          ))}
+
+        {/* The Cloud counterpart of Sync: the destination is a choice, not a
+         *  fact, and the way to change it lives beside the label that states
+         *  it. Same availability rule as Sync — it needs the server. */}
+        {binding.mode === "cloud" &&
+          (cloudReason ? (
+            <button
+              type="button"
+              disabled
+              title={cloudReason}
+              className="inline-flex cursor-not-allowed items-center gap-1.5 rounded-full border border-[var(--atlas-element-selected)] bg-[var(--atlas-element-hover)] px-2.5 py-1 text-xs text-[var(--muted-foreground)] opacity-40"
+            >
+              <ArrowLeftRight size={11} />
+              Change
+            </button>
+          ) : (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={onSwitch}
+              title="Sync to a different Project"
+              className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-[var(--atlas-element-selected)] bg-[var(--atlas-element-hover)] px-2.5 py-1 text-xs text-[var(--secondary-foreground)] transition-colors hover:bg-[var(--atlas-element-selected)] hover:text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <ArrowLeftRight size={11} />
+              Change
             </button>
           ))}
 
@@ -1479,6 +1563,7 @@ function ConnectTab({
   run,
   onCancel,
   onContinue,
+  excludeId = null,
 }: {
   projectPath: string;
   cloudOrgs: Array<Organisation & { remoteId: string }>;
@@ -1493,6 +1578,8 @@ function ConnectTab({
    * (an unbound Project has nothing to disclose).
    */
   onContinue?: (pick: ConnectPick) => void;
+  /** Hide this Project from the list — the one already synced to. */
+  excludeId?: string | null;
 }) {
   const [orgId, setOrgId] = useState<string>(cloudOrgs[0]?.remoteId ?? "");
   const [options, setOptions] = useState<ConnectOptions | null | undefined>(undefined);
@@ -1520,14 +1607,14 @@ function ConnectTab({
       .then((result) => {
         if (mine !== seq.current) return;
         setOptions(result);
-        setSelected(result.preselected);
+        setSelected(result.preselected === excludeId ? null : result.preselected);
       })
       .catch((e: unknown) => {
         if (mine !== seq.current) return;
         setOptions(null);
         setListError(String(e));
       });
-  }, [projectPath, orgId, cloudReason]);
+  }, [projectPath, orgId, cloudReason, excludeId]);
 
   if (cloudReason) {
     return (
@@ -1538,7 +1625,8 @@ function ConnectTab({
     );
   }
 
-  const project = options?.workspaces.find((w) => w.id === selected);
+  const workspaces = options?.workspaces.filter((w) => w.id !== excludeId) ?? [];
+  const project = workspaces.find((w) => w.id === selected);
 
   return (
     <div className="space-y-2">
@@ -1553,9 +1641,11 @@ function ConnectTab({
             ? `Could not list this Organisation's Projects: ${listError}`
             : "Could not reach the server. Check the connection and reopen this tab."}
         </p>
-      ) : options.workspaces.length === 0 ? (
+      ) : workspaces.length === 0 ? (
         <p className={cn(GROUP, "text-xs text-[var(--muted-foreground)]")}>
-          This Organisation has no Projects yet. Create one from the Create tab instead.
+          {excludeId
+            ? "This Organisation has no other Projects to sync to."
+            : "This Organisation has no Projects yet. Create one from the Create tab instead."}
         </p>
       ) : (
         <>
@@ -1586,7 +1676,7 @@ function ConnectTab({
               <ChevronDown size={11} className="shrink-0 text-[var(--muted-foreground)]" />
             </DropdownMenuTrigger>
             <DropdownMenuContent className="max-h-[220px] w-(--anchor-width)">
-              {options.workspaces.map((remote) => (
+              {workspaces.map((remote) => (
                 <DropdownMenuItem
                   key={remote.id}
                   onClick={() => setSelected(remote.id)}
@@ -1651,6 +1741,53 @@ function ConnectTab({
           label={onContinue ? "Continue" : "Connect"}
         />
       </div>
+    </div>
+  );
+}
+
+/**
+ * Cloud→Cloud step one: which other Project this one should sync to.
+ *
+ * The Connect picker in its no-mutation mode, minus the Project already synced
+ * to. Nothing here changes anything — the disclosure step owns the move.
+ */
+function SwitchForm({
+  projectPath,
+  binding,
+  cloudOrgs,
+  cloudReason,
+  busy,
+  run,
+  onCancel,
+  onContinue,
+}: {
+  projectPath: string;
+  binding: Binding;
+  cloudOrgs: Array<Organisation & { remoteId: string }>;
+  cloudReason: string | null;
+  busy: boolean;
+  run: (action: () => Promise<unknown>) => Promise<boolean>;
+  onCancel: () => void;
+  onContinue: (pick: ConnectPick) => void;
+}) {
+  return (
+    <div className="space-y-2">
+      <p className="text-sm font-medium text-[var(--foreground)]">Change Project</p>
+      <p className="text-xs text-[var(--muted-foreground)]">
+        Currently syncing to{" "}
+        <span className="font-mono text-[var(--secondary-foreground)]">{binding.slug ?? "—"}</span>.
+        Everything captured here will be re-sent to the Project you pick.
+      </p>
+      <ConnectTab
+        projectPath={projectPath}
+        cloudOrgs={cloudOrgs}
+        cloudReason={cloudReason}
+        busy={busy}
+        run={run}
+        onCancel={onCancel}
+        onContinue={onContinue}
+        excludeId={binding.remoteWorkspaceId}
+      />
     </div>
   );
 }

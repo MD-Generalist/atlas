@@ -2379,6 +2379,95 @@ pub async fn capture_connect(
     Ok(result)
 }
 
+/// Point a Cloud Project at a different Cloud Project in the same Organisation.
+///
+/// The server has no move between Projects — each is its own object — so the
+/// old one keeps what it was sent, and this re-queues the whole history for
+/// the new one. The server call is the same explicit-pick connect as
+/// [`capture_connect`], and it happens first, outside the store lock, so a
+/// refusal or a dead network leaves the Project exactly where it was.
+///
+/// Comments do not follow: they live in the old Project's object, anchored to
+/// rows that only exist there. The disclosure step says so before Confirm.
+#[tauri::command]
+pub async fn capture_switch_project(
+    project_path: String,
+    org_id: String,
+    slug: String,
+    workspace_id: String,
+    app: AppHandle,
+) -> Result<ConnectResult, String> {
+    let hook_app = app.clone();
+    let hook_path = project_path.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || -> Result<ConnectResult, String> {
+        let root = std::path::Path::new(&project_path);
+        let state = app.state::<CaptureState>();
+
+        let current = {
+            let handle = state.writer(root)?;
+            let store = lock_ok(&handle);
+            store
+                .binding()
+                .map_err(|e| e.to_string())?
+                .ok_or("enable capture for this Project first")?
+        };
+        if current.mode != ProjectMode::Cloud {
+            return Err("this Project is not on Cloud yet — promote it first".into());
+        }
+        if current.remote_workspace_id.as_deref() == Some(workspace_id.as_str()) {
+            return Err("this Project already syncs there".into());
+        }
+
+        let detection = atlas_checkpoint::detect(root);
+        let token = token_provider(&app);
+        let config = sync_config(&project_path, &org_id, &token);
+        let outcome = atlas_checkpoint::connect_workspace(
+            &config,
+            atlas_checkpoint::ConnectRequest {
+                workspace_id: Some(&workspace_id),
+                slug: Some(&slug),
+                root_commit_sha: detection.root_commit_sha.as_deref(),
+                git_url: detection.git_url.as_deref(),
+                create: false,
+            },
+        )
+        .map_err(|e| e.to_string())?;
+
+        let (remote_id, remote_slug) = match outcome {
+            atlas_checkpoint::ConnectOutcome::Connected { workspace_id, slug: s, .. } => {
+                (workspace_id, s.unwrap_or(slug))
+            }
+            atlas_checkpoint::ConnectOutcome::Ambiguous { candidates } => {
+                return Ok(ConnectResult { binding: None, candidates, matched: false, moved: 0 })
+            }
+            atlas_checkpoint::ConnectOutcome::NoMatch => {
+                return Ok(ConnectResult { binding: None, candidates: Vec::new(), matched: false, moved: 0 })
+            }
+        };
+
+        let handle = state.writer(root)?;
+        let (binding, moved) = {
+            let store = lock_ok(&handle);
+            let moved = store
+                .switch_cloud_project(&project_path, &org_id, &remote_slug, &remote_id)
+                .map_err(|e| e.to_string())?;
+            let binding = store
+                .binding()
+                .map_err(|e| e.to_string())?
+                .ok_or("enable capture for this Project first")?;
+            (binding, moved)
+        };
+        state.note_drain(root);
+        Ok(ConnectResult { binding: Some(binding), candidates: Vec::new(), matched: true, moved })
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    if result.matched {
+        crate::commands::artifacts_cloud::resync_targets(&hook_app, Some(&hook_path));
+    }
+    Ok(result)
+}
+
 /// The answer to a connect attempt.
 ///
 /// `matched: false` with candidates is the server declining to guess, which is

@@ -565,6 +565,7 @@ pub fn run() {
             commands::capture::capture_promote,
             commands::capture::capture_connect_options,
             commands::capture::capture_connect,
+            commands::capture::capture_switch_project,
             commands::capture::capture_activate,
             commands::capture::capture_retry_failed,
             commands::capture::capture_retry_watcher,
