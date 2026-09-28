@@ -162,8 +162,14 @@ const ACME_MEMBERS: OrgMember[] = [
     "Maximilian Alexander Featherstonehaugh-Wetherby III",
     "maximilian.featherstonehaugh-wetherby@acme-industries-worldwide.example",
     "developer",
-    { userId: "usr_mira" },
+    // A roster row only: nobody by this id writes in the fixtures, so the
+    // truncation stress stays on the members screen and out of every byline.
+    { userId: "usr_max" },
   ),
+  member("mem-mira", "Mirabel Fitzgerald-Okonkwo", "mirabel.fitzgerald@acme.dev", "developer", {
+    userId: "usr_mira",
+    createdAt: iso(-140),
+  }),
   // The server has an account but no display name for it — a real state for an
   // invite accepted from an email link and never completed.
   member("mem-blank", "", "j.okonkwo@acme.dev", "developer", { createdAt: null }),
