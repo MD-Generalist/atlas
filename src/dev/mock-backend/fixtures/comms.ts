@@ -44,6 +44,7 @@ import {
   type ChatPin,
   type ChatReaction,
   type ChatReadState,
+  type ChatSessionReference,
   type CommsMessage,
   type OrgMemberProfile,
   type PromptDraft,
@@ -77,8 +78,14 @@ const TOBI = "usr_tobi";
  */
 export const COMMS_MEMBERS: OrgMemberProfile[] = [
   { id: ME, name: "Dev", email: "dev@acme.dev", image: null, role: "admin" },
-  { id: PRIYA, name: "Priya Raman", email: "priya@acme.dev", image: null, role: "product_owner" },
-  { id: SAM, name: "Sam Okafor", email: "sam@acme.dev", image: null, role: "developer" },
+  {
+    id: PRIYA,
+    name: "Priya Raghunathan",
+    email: "priya@acme.dev",
+    image: null,
+    role: "product_owner",
+  },
+  { id: SAM, name: "Sam Oyelaran", email: "sam@acme.dev", image: null, role: "developer" },
   {
     id: MIRA,
     name: "Mirabel Fitzgerald-Okonkwo",
@@ -211,6 +218,8 @@ interface Seed {
   status?: SendStatus;
   attachments?: ChatAttachment[];
   codeRefs?: ChatCodeRef[];
+  /** Timeline Sessions or Checkpoints shared into the message (`artifact_refs`). */
+  sessionRefs?: ChatSessionReference[];
   reactions?: [emoji: string, users: string[]][];
   pinned?: boolean;
   draftId?: string;
@@ -492,6 +501,47 @@ const DESKTOP_SEEDS: Seed[] = [
   },
   {
     by: ME,
+    gap: 4,
+    // Session References: a whole recorded Session and one Checkpoint inside
+    // it, pointing at real rows in `artifacts.ts` so the cards open on the
+    // Timeline. `rw_1d55e903` is acme-app's Workspace there.
+    body: "Unrelated, but the /v2 move is done — here's the session if anyone wants to see how the retry helper ended up.",
+    sessionRefs: [
+      {
+        kind: "session",
+        workspace_ref_id: "rw_1d55e903",
+        session_id: "sess-8f21ac",
+        session_title: "Move the user reads onto /v2 and keep the retry helper honest",
+        agent: "claude-code",
+        started_at: NOW - 150 * MIN,
+        messages: 14,
+        tool_calls: 23,
+        checkpoints: 2,
+      },
+    ],
+    reactions: [[EMOJI.eyes, [PRIYA, SAM]]],
+  },
+  {
+    by: SAM,
+    gap: 3,
+    body: "This checkpoint is the one to review — the rest is call sites.",
+    sessionRefs: [
+      {
+        kind: "checkpoint",
+        workspace_ref_id: "rw_1d55e903",
+        session_id: "sess-8f21ac",
+        session_title: "Move the user reads onto /v2 and keep the retry helper honest",
+        row_id: "sess-8f21ac-e30",
+        commit_sha: "4f21a9033c1d8e77b0a5f1c2d3e4b5a6c7d8e9f0",
+        branch: "feature/auth-v2",
+        insertions: 96,
+        deletions: 41,
+        files: 3,
+      },
+    ],
+  },
+  {
+    by: ME,
     gap: 5,
     // A send that failed and STAYED in the transcript. Rust keeps the row and
     // marks it, because a message that silently disappears from the composer
@@ -630,6 +680,7 @@ function build(convId: string, startAt: number, seeds: Seed[]): CommsMessage[] {
       created_at: at,
       attachments: seed.attachments ?? [],
       code_refs: seed.codeRefs ?? [],
+      ...(seed.sessionRefs ? { artifact_refs: seed.sessionRefs } : {}),
       draft_id: seed.draftId ?? null,
       ...(seed.deleted ? { deleted: true } : {}),
       ...(seed.status ? { status: seed.status } : {}),
@@ -760,13 +811,13 @@ const RECORDINGS = new Map<string, RecordingsResponse>([
       tracks: [
         {
           id: "trk_priya",
-          filename: "priya-raman.m4a",
+          filename: "priya-raghunathan.m4a",
           bytes: 8_412_006,
           url: "https://chat.acme.dev/recordings/trk_priya?ticket=mock",
         },
         {
           id: "trk_sam",
-          filename: "sam-okafor.m4a",
+          filename: "sam-oyelaran.m4a",
           bytes: 7_118_440,
           url: "https://chat.acme.dev/recordings/trk_sam?ticket=mock",
         },

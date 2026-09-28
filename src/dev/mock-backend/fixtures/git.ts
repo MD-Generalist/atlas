@@ -441,7 +441,7 @@ const COMMITS: FakeCommit[] = [
   {
     sha: "c0ffee11223344556677889900aabbccddeeff01",
     message: "fix(pdf): keep highlight rects on rotate",
-    author: "Priya Raman",
+    author: "Priya Raghunathan",
     email: "priya@acme.dev",
     date: "2026-09-16T11:48:00Z",
     parents: ["1b2c3d4e5f60718293a4b5c6d7e8f9012345678a"],
@@ -463,7 +463,7 @@ const COMMITS: FakeCommit[] = [
   {
     sha: "2c3d4e5f60718293a4b5c6d7e8f9012345678abc",
     message: "chore: drop the legacy token reader",
-    author: "Sam Okafor",
+    author: "Sam Oyelaran",
     email: "sam@acme.dev",
     date: "2026-09-14T10:15:00Z",
     parents: ["3d4e5f60718293a4b5c6d7e8f9012345678abcde"],
@@ -489,7 +489,7 @@ const COMMITS: FakeCommit[] = [
   {
     sha: "4e5f60718293a4b5c6d7e8f9012345678abcdef0",
     message: "build: move to Vite 6",
-    author: "Priya Raman",
+    author: "Priya Raghunathan",
     email: "priya@acme.dev",
     date: "2026-09-09T09:41:00Z",
     parents: ["5f60718293a4b5c6d7e8f9012345678abcdef012"],
@@ -503,7 +503,7 @@ const COMMITS: FakeCommit[] = [
   {
     sha: "5f60718293a4b5c6d7e8f9012345678abcdef012",
     message: "docs: rewrite the README layout table",
-    author: "Sam Okafor",
+    author: "Sam Oyelaran",
     email: "sam@acme.dev",
     date: "2026-09-05T15:20:00Z",
     parents: [],
@@ -517,8 +517,9 @@ const shortSha = (sha: string) => sha.slice(0, 7);
 
 /**
  * A commit's diff. Files that are also dirty in the working tree reuse that
- * change (one fixture, two surfaces); the rest get a synthetic "this commit
- * introduced the first line" diff so no commit opens empty.
+ * change (one fixture, two surfaces); the rest get a synthetic hunk — a block
+ * from the middle of the file that this commit "added" — so no commit opens
+ * empty and none reads as a one-line stub in screenshots.
  */
 function commitDiff(commit: FakeCommit): string {
   return commit.files
@@ -527,9 +528,19 @@ function commitDiff(commit: FakeCommit): string {
       if (change && !change.binary) return unifiedDiff(change.before(), change.after(), file.path);
       if (file.status === "D") return unifiedDiff(LEGACY_AUTH_TS, "", file.path);
       const text = fileText(file.path);
-      return unifiedDiff(text.split("\n").slice(1).join("\n"), text, file.path);
+      return unifiedDiff(withoutMiddleBlock(text), text, file.path);
     })
     .join("");
+}
+
+/** `text` minus up to eight lines from its middle: the "before" of a commit
+ *  that added them. Short files lose their last line instead. */
+function withoutMiddleBlock(text: string): string {
+  const lines = text.split("\n");
+  if (lines.length < 6) return lines.slice(0, -1).join("\n");
+  const size = Math.min(8, Math.max(2, Math.floor(lines.length / 5)));
+  const start = Math.floor((lines.length - size) / 2);
+  return [...lines.slice(0, start), ...lines.slice(start + size)].join("\n");
 }
 
 function graph(): BuiltGraph {
@@ -810,7 +821,7 @@ function materialiseTip(branch: BranchInfo, lane: number): FakeCommit {
   const tip: FakeCommit = {
     sha: newSha(),
     message: branch.subject,
-    author: "Priya Raman",
+    author: "Priya Raghunathan",
     email: "priya@acme.dev",
     date: branch.date,
     parents: [HEAD().sha],
@@ -1388,7 +1399,7 @@ export const gitHandlers: TypedHandlers<GitResponses> = {
         // and the remote ref sits on it with ours.
         const pulled = addCommit({
           message: "fix(admin): guard the seat-limit banner on an empty plan",
-          author: "Sam Okafor",
+          author: "Sam Oyelaran",
           email: "sam@acme.dev",
           files: [{ path: "src/main.tsx", status: "M" }],
         });
@@ -1401,7 +1412,7 @@ export const gitHandlers: TypedHandlers<GitResponses> = {
       const remoteTip: FakeCommit = {
         sha: newSha(),
         message: "fix(admin): guard the seat-limit banner on an empty plan",
-        author: "Sam Okafor",
+        author: "Sam Oyelaran",
         email: "sam@acme.dev",
         date: new Date().toISOString(),
         parents: [upstream.sha],

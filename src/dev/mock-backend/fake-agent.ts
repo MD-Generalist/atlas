@@ -9,6 +9,7 @@ import type {
   SessionInit,
   SessionKey,
   SessionMessage,
+  SessionModeInfo,
   SessionSnapshot,
   ToolCall,
 } from "@/types/agents";
@@ -58,6 +59,27 @@ function sessionOrThrow(key: SessionKey): FakeSession {
   return s;
 }
 
+/** The native agent's approval presets, so the composer's mode pill has a
+ *  mode to name instead of sitting on "Loading…". */
+const MODES: SessionModeInfo[] = [
+  {
+    id: "read-only",
+    name: "Read Only",
+    description: "Reads files; asks before any edit or command.",
+  },
+  {
+    id: "auto",
+    name: "Auto",
+    description: "Edits and runs commands in the workspace; asks outside it.",
+  },
+  {
+    id: "full-access",
+    name: "Full Access",
+    description: "Edits and runs anything without asking.",
+  },
+];
+const DEFAULT_MODE = "auto";
+
 function snapshot(s: FakeSession, withMessages: boolean): SessionSnapshot {
   const now = new Date().toISOString();
   return {
@@ -65,9 +87,9 @@ function snapshot(s: FakeSession, withMessages: boolean): SessionSnapshot {
     cwd: s.cwd,
     plugin_id: s.pluginId,
     status: "idle",
-    current_mode: null,
+    current_mode: DEFAULT_MODE,
     current_model: "mock-model",
-    available_modes: [],
+    available_modes: MODES,
     available_models: [{ id: "mock-model", name: "Mock model" }],
     available_commands: [],
     config_options: [],
@@ -390,7 +412,7 @@ export const agentHandlers: TypedHandlers<AgentResponses> = {
       // After the frontend has stored the binding.
       setTimeout(() => void playTranscript(seedTranscript), 50);
     }
-    return { key, current_mode: null, available_modes: [] };
+    return { key, current_mode: DEFAULT_MODE, available_modes: MODES };
   },
   // Rust answers an unknown key with `Err`, never `null`.
   agents_snapshot: ({ key }) => snapshot(sessionOrThrow(key), true),
