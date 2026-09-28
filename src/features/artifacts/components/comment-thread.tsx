@@ -644,7 +644,11 @@ function Composer({
                 send();
               }
             }}
-            className="min-w-0 w-full resize-none rounded-lg border border-border bg-panel-input py-1.5 pl-2 pr-8 text-xs text-[var(--foreground)] outline-none transition-colors placeholder:text-[var(--muted-foreground)] focus:border-border-strong"
+            // `hide-scrollbar` + `overflow-x-hidden`: the global 8px webkit
+            // scrollbar otherwise renders as a strip under a one-row field on
+            // any sub-pixel overflow. Vertical scrolling for Shift+Enter text
+            // still works, just without a visible bar.
+            className="hide-scrollbar min-w-0 w-full resize-none overflow-x-hidden break-words rounded-lg border border-border bg-panel-input py-1.5 pl-2 pr-8 text-xs text-[var(--foreground)] outline-none transition-colors placeholder:text-[var(--muted-foreground)] focus:border-border-strong"
           />
           {/* The agent composer's squircle send, at this surface's scale, and
            *  pinned so it does not ride down as the field grows. It carries the

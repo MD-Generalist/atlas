@@ -2295,7 +2295,10 @@ pub struct ConnectOptions {
 /// Connect this repository to an existing Project.
 ///
 /// From here on it behaves exactly like a Project created as Cloud — same
-/// capture, same drain, no separate code path. `workspace_id` is the picked
+/// capture, same drain, no separate code path. Works for a never-bound
+/// Project (the caller enables Local first) and for a Local Project being
+/// promoted onto an existing Cloud Project — in the latter case its captured
+/// history is queued for the drain in the same transaction as the binding. `workspace_id` is the picked
 /// `RemoteWorkspace.id`.
 ///
 /// The server does the binding, not us: `POST /workspaces/connect` re-checks the
@@ -2340,27 +2343,33 @@ pub async fn capture_connect(
             // Nothing bound. Hand the candidates back so the picker can ask
             // again rather than reporting a failure the developer cannot act on.
             atlas_checkpoint::ConnectOutcome::Ambiguous { candidates } => {
-                return Ok(ConnectResult { binding: None, candidates, matched: false })
+                return Ok(ConnectResult { binding: None, candidates, matched: false, moved: 0 })
             }
             atlas_checkpoint::ConnectOutcome::NoMatch => {
-                return Ok(ConnectResult { binding: None, candidates: Vec::new(), matched: false })
+                return Ok(ConnectResult { binding: None, candidates: Vec::new(), matched: false, moved: 0 })
             }
         };
 
         let handle = state.writer(root)?;
-        let binding = {
+        let (binding, moved) = {
             let store = lock_ok(&handle);
-            store
-                .set_cloud_binding(&org_id, &remote_slug, Some(&remote_id))
+            // `promote_to_cloud`, not `set_cloud_binding`: a Project that was
+            // captured Locally before being connected carries history, and the
+            // binding flip and the `local` → `pending` row flip must commit
+            // together (see `capture_promote`). A freshly enabled Project has
+            // no rows, so this moves zero and is exactly `set_cloud_binding`.
+            let moved = store
+                .promote_to_cloud(&project_path, &org_id, &remote_slug, Some(&remote_id))
                 .map_err(|e| e.to_string())?;
             approve_import_if_nothing_to_disclose(&store, root);
-            store
+            let binding = store
                 .binding()
                 .map_err(|e| e.to_string())?
-                .ok_or("enable capture for this Project first")?
+                .ok_or("enable capture for this Project first")?;
+            (binding, moved)
         };
         state.note_drain(root);
-        Ok(ConnectResult { binding: Some(binding), candidates: Vec::new(), matched: true })
+        Ok(ConnectResult { binding: Some(binding), candidates: Vec::new(), matched: true, moved })
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -2380,6 +2389,9 @@ pub struct ConnectResult {
     pub binding: Option<atlas_checkpoint::Binding>,
     pub candidates: Vec<atlas_checkpoint::RemoteWorkspace>,
     pub matched: bool,
+    /// Locally captured Sessions now queued for the drain — non-zero only when
+    /// a Local Project was connected to an existing Cloud Project.
+    pub moved: i64,
 }
 
 /// Is `git` on this machine at all?

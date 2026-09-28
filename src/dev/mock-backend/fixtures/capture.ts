@@ -595,6 +595,7 @@ export const captureHandlers: TypedHandlers<CaptureResponses> = {
         binding: null,
         candidates: REMOTE_WORKSPACES.slice(0, 2),
         matched: false,
+        moved: 0,
       };
     }
     project.binding = {
@@ -607,7 +608,7 @@ export const captureHandlers: TypedHandlers<CaptureResponses> = {
       drainState: "ok",
     };
     captureChanged();
-    return { binding: project.binding, candidates: [], matched: true };
+    return { binding: project.binding, candidates: [], matched: true, moved: 0 };
   },
 
   capture_promotion_preview: ({ projectPath }): PromotionPreview => {
