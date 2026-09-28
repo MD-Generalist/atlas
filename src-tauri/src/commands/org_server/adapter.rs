@@ -111,7 +111,8 @@ impl OrganisationCloud for AppOrganisationCloud {
             // one it shows; otherwise ask for the session itself.
             let artifacts = self.artifacts()?;
             let org_id = &query.scope.org_id;
-            let summary = match artifacts.board.snapshot(org_id).sessions.get(&id).cloned() {
+            let cached = artifacts.board.snapshot(org_id).sessions.get(&(workspace_id.clone(), id.clone())).cloned();
+            let summary = match cached {
                 Some(summary) => summary,
                 None => match artifacts.client.session_detail(org_id, &workspace_id, &id).await {
                     Ok(page) => page.summary,

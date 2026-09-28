@@ -37,7 +37,7 @@
 //! truncated to its opening tokens — so the middleware accumulates per message
 //! id and submits the completed bodies when the turn finishes.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -1742,6 +1742,9 @@ pub async fn artifacts_board(projects: Vec<String>, app: AppHandle) -> Result<Bo
     let cloud_pending = cloud.pending;
     let cloud_failed = cloud.failed;
     let (remote, remote_names) = (cloud.sessions, cloud.names);
+    // For local rows that do not know their Project's server id (never synced,
+    // or bound by an older build): the only thing they can be matched on.
+    let remote_ids: HashSet<String> = remote.keys().map(|(_, id)| id.clone()).collect();
 
     tauri::async_runtime::spawn_blocking(move || {
         // One project means the board is filtered, and the caller wants that
@@ -1796,7 +1799,10 @@ pub async fn artifacts_board(projects: Vec<String>, app: AppHandle) -> Result<Bo
                 // A local row this Project has pushed is on both sides. We do
                 // not know per-row whether it drained, and do not need to: the
                 // point of `Both` is that it can be opened from disk.
-                origin: if remote.contains_key(&session.id) {
+                origin: if match &remote_project_id {
+                    Some(project) => remote.contains_key(&(project.clone(), session.id.clone())),
+                    None => remote_ids.contains(&session.id),
+                } {
                     SessionOrigin::Both
                 } else {
                     SessionOrigin::Local
@@ -1811,12 +1817,26 @@ pub async fn artifacts_board(projects: Vec<String>, app: AppHandle) -> Result<Bo
         }
 
         // Everything the Organisation has that this machine does not. Keyed by
-        // Session id, which is the id the local store minted and pushed
-        // verbatim — so this is a keyed union, not a reconciliation.
-        let seen: std::collections::HashSet<String> =
-            out.iter().map(|row| row.session.id.clone()).collect();
-        for (id, row) in remote {
-            if seen.contains(&id) {
+        // (Project, Session): the Session id is the one the local store minted
+        // and pushed verbatim, but one Session can live in two Projects — a
+        // Project whose sync was moved leaves its copy in the old one. A local
+        // row only stands in for the remote copy in its own Project; the other
+        // copy is a separate row. A local row with no Project id falls back to
+        // matching on the Session id alone, as before.
+        let mut seen: HashSet<(String, String)> = HashSet::new();
+        let mut seen_unbound: HashSet<String> = HashSet::new();
+        for row in &out {
+            match &row.remote_project_id {
+                Some(project) => {
+                    seen.insert((project.clone(), row.session.id.clone()));
+                }
+                None => {
+                    seen_unbound.insert(row.session.id.clone());
+                }
+            }
+        }
+        for (key, row) in remote {
+            if seen.contains(&key) || seen_unbound.contains(&key.1) {
                 continue;
             }
             let (project_path, project_name) = local_projects
@@ -1876,7 +1896,8 @@ pub struct BoardPage {
     pub cloud_failed: bool,
 }
 
-/// The Organisation's remote Sessions as of the last refresh, keyed by id.
+/// The Organisation's remote Sessions as of the last refresh, keyed by
+/// `(Project id, Session id)`.
 ///
 /// Empty when signed out, in a local-only Organisation, or before the first
 /// refresh lands — all three of which mean "show the local board", which is a
@@ -1884,7 +1905,7 @@ pub struct BoardPage {
 /// The remote board as of the last refresh.
 #[derive(Default)]
 struct CloudSnapshot {
-    sessions: HashMap<String, atlas_artifacts::RemoteSession>,
+    sessions: HashMap<atlas_artifacts::SessionKey, atlas_artifacts::RemoteSession>,
     /// Project id → the name the Organisation gave that Project.
     names: HashMap<String, String>,
     /// The first refresh for this Organisation has not finished yet, so an
@@ -3478,7 +3499,6 @@ fn bump_backoff(backoff: &BackoffMap, root: &std::path::Path, retry_after: Optio
 /// Log the "Cloud binding with no wire identity" condition once per root, not
 /// every 30 seconds forever.
 fn warn_once_unregistered(root: &std::path::Path) {
-    use std::collections::HashSet;
     use std::sync::OnceLock;
     static WARNED: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
     let warned = WARNED.get_or_init(|| Mutex::new(HashSet::new()));

@@ -595,12 +595,17 @@ impl ArtifactsManager {
             // Nothing to record: the roster arrives again as `presence`, and
             // the board is refreshed over HTTP rather than from the greeting.
             ServerFrame::Hello { .. } => {}
-            ServerFrame::SessionSummary { summary } => {
+            ServerFrame::SessionSummary { mut summary } => {
                 // Every socket on a Project gets the summary. The board socket
                 // owns it when there is one; a follower only steps in for a
                 // Project this machine has no board socket for.
                 if slot.session.is_some() && self.has_board_socket(key) {
                     return;
+                }
+                // The board is keyed by (Project, Session). The socket is one
+                // Project's, so a frame that omits its Project still belongs to it.
+                if summary.workspace_id.is_empty() {
+                    summary.workspace_id = key.1.clone();
                 }
                 self.board.upsert(&key.0, summary);
                 let _ = self.events.send(ArtifactsEvent::BoardChanged { key: key.clone() });

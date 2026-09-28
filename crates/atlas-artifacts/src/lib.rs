@@ -36,7 +36,7 @@ mod manager;
 mod model;
 mod socket;
 
-pub use board::{CloudBoard, OrgBoard, ProjectKey};
+pub use board::{CloudBoard, OrgBoard, ProjectKey, SessionKey};
 pub use client::{
     ArtifactsClient, BoardQuery, CommentTarget, NewComment, BOARD_PAGE_MAX, ENTRY_PAGE_MAX, SEARCH_MAX_CHARS,
 };
