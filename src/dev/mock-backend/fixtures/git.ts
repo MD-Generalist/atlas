@@ -577,7 +577,7 @@ function graph(): BuiltGraph {
       segments,
     };
   });
-  return { rows, laneCount };
+  return { rows, laneCount, totalCommits: rows.length };
 }
 
 /** Per-line blame for the editor's inline annotation. */
