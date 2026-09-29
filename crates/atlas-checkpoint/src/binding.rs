@@ -77,12 +77,7 @@ pub fn suggest_slug(root: &Path) -> String {
 /// creating a second binding or refusing.
 ///
 /// For [`ProjectMode::Local`] this touches no network and needs no account.
-pub fn bind(
-    store: &Store,
-    workspace_id: &str,
-    root: &Path,
-    mode: ProjectMode,
-) -> Result<Binding> {
+pub fn bind(store: &Store, workspace_id: &str, root: &Path, mode: ProjectMode) -> Result<Binding> {
     let detection = detect(root);
     store.upsert_binding(
         workspace_id,
@@ -135,7 +130,10 @@ mod tests {
     fn a_slug_is_suggested_from_the_directory_name() {
         assert_eq!(suggest_slug(Path::new("/Users/nafiz/dev/atlas")), "atlas");
         assert_eq!(suggest_slug(Path::new("/dev/My Project")), "my-project");
-        assert_eq!(suggest_slug(Path::new("/dev/atlas_server.v2")), "atlas-server-v2");
+        assert_eq!(
+            suggest_slug(Path::new("/dev/atlas_server.v2")),
+            "atlas-server-v2"
+        );
         assert_eq!(suggest_slug(Path::new("/dev/--weird--")), "weird");
     }
 

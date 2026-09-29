@@ -108,8 +108,18 @@ pub struct ClaudeImportPreview {
 /// Case-insensitive, whole words only.
 pub fn states_a_choice(text: &str) -> bool {
     const WORDS: &[&str] = &[
-        "decided", "decision", "decisions", "chose", "chosen", "opted", "prefer", "prefers",
-        "preferred", "picked", "adopted", "locked",
+        "decided",
+        "decision",
+        "decisions",
+        "chose",
+        "chosen",
+        "opted",
+        "prefer",
+        "prefers",
+        "preferred",
+        "picked",
+        "adopted",
+        "locked",
     ];
     const PHRASES: &[&str] = &[
         "instead of",
@@ -212,7 +222,10 @@ fn read_dir(dir: &Path) -> Vec<Mapped> {
         out.push(Mapped {
             kind,
             content,
-            file: path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+            file: path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
             claude_type,
         });
     }
@@ -251,7 +264,11 @@ fn err(e: anyhow::Error) -> String {
 impl SharedMemoryStore {
     /// What importing `dirs` into `project_path`'s scope would write. Reads
     /// only: nothing in the record changes.
-    pub fn claude_import_preview(&self, project_path: &str, dirs: &[PathBuf]) -> Result<ClaudeImportPreview, String> {
+    pub fn claude_import_preview(
+        &self,
+        project_path: &str,
+        dirs: &[PathBuf],
+    ) -> Result<ClaudeImportPreview, String> {
         let store = store_for(project_path)?;
         let mut lines: Vec<ImportLine> = Vec::new();
         // Line id → its index in `lines`: one line per id across sources.
@@ -280,7 +297,10 @@ impl SharedMemoryStore {
             }
         }
         Ok(ClaudeImportPreview {
-            sources: dirs.iter().map(|d| d.to_string_lossy().into_owned()).collect(),
+            sources: dirs
+                .iter()
+                .map(|d| d.to_string_lossy().into_owned())
+                .collect(),
             already_imported: all_imported,
             lines,
         })
@@ -292,7 +312,12 @@ impl SharedMemoryStore {
     /// imported — lines the user left unticked are not offered again — and
     /// announces the change. Returns how many lines were stored anew (a line
     /// merged into a near-duplicate does not count). Empty `ids` is a no-op.
-    pub fn claude_import_confirm(&self, project_path: &str, dirs: &[PathBuf], ids: &[String]) -> Result<usize, String> {
+    pub fn claude_import_confirm(
+        &self,
+        project_path: &str,
+        dirs: &[PathBuf],
+        ids: &[String],
+    ) -> Result<usize, String> {
         // Nothing kept is not a consent to import: no write, no gate.
         if ids.is_empty() {
             return Ok(0);
@@ -303,7 +328,11 @@ impl SharedMemoryStore {
         let wanted: HashSet<&str> = ids.iter().map(String::as_str).collect();
         let mut written = 0;
         let mut kinds: Vec<&str> = Vec::new();
-        for line in preview.lines.into_iter().filter(|l| l.is_new && wanted.contains(l.id.as_str())) {
+        for line in preview
+            .lines
+            .into_iter()
+            .filter(|l| l.is_new && wanted.contains(l.id.as_str()))
+        {
             let kind = line.kind;
             let outcome = store
                 .upsert_outcome(NewEntry {
@@ -386,7 +415,8 @@ mod tests {
     /// envelope in front of the user's words. Readers must still strip it
     /// from files written back then.
     fn legacy_wire_prompt(block: &str, user_text: &str) -> String {
-        let envelope = atlas_agent_transcript::wrap_memory_envelope(&[block]).expect("a present block");
+        let envelope =
+            atlas_agent_transcript::wrap_memory_envelope(&[block]).expect("a present block");
         format!("{envelope}\n\n{user_text}")
     }
     use std::sync::Arc;
@@ -397,7 +427,10 @@ mod tests {
     use crate::commands::shared_memory::MemoryChanged;
 
     fn scratch(label: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("atlas-claude-import-{label}-{}", uuid::Uuid::new_v4()));
+        let d = std::env::temp_dir().join(format!(
+            "atlas-claude-import-{label}-{}",
+            uuid::Uuid::new_v4()
+        ));
         std::fs::create_dir_all(&d).unwrap();
         d
     }
@@ -407,24 +440,57 @@ mod tests {
         let dir = scratch("claude").join("memory");
         std::fs::create_dir_all(&dir).unwrap();
         for (file, ty, description, body) in files {
-            let desc = if description.is_empty() { String::new() } else { format!("description: {description}\n") };
+            let desc = if description.is_empty() {
+                String::new()
+            } else {
+                format!("description: {description}\n")
+            };
             std::fs::write(
                 dir.join(file),
                 format!("---\nname: {file}\n{desc}metadata:\n  node_type: memory\n  type: {ty}\n---\n\n{body}\n"),
             )
             .unwrap();
         }
-        std::fs::write(dir.join("MEMORY.md"), "# Memory Index\n- [x](x.md) — index line\n").unwrap();
+        std::fs::write(
+            dir.join("MEMORY.md"),
+            "# Memory Index\n- [x](x.md) — index line\n",
+        )
+        .unwrap();
         dir
     }
 
     fn sample() -> PathBuf {
         claude_dir(&[
-            ("prefs.md", "user", "Prefers small PRs", "The user prefers small PRs."),
-            ("no-mocks.md", "feedback", "Integration tests hit a real database", "Why: mocks hid a bug."),
-            ("jwt.md", "project", "JWT signing uses RS256 instead of HS256", "Decided on 2026-07-14."),
-            ("freeze.md", "project", "Merge freeze begins 2026-03-05", "Mobile release cut."),
-            ("dash.md", "reference", "Latency dashboard is grafana.internal/d/api", ""),
+            (
+                "prefs.md",
+                "user",
+                "Prefers small PRs",
+                "The user prefers small PRs.",
+            ),
+            (
+                "no-mocks.md",
+                "feedback",
+                "Integration tests hit a real database",
+                "Why: mocks hid a bug.",
+            ),
+            (
+                "jwt.md",
+                "project",
+                "JWT signing uses RS256 instead of HS256",
+                "Decided on 2026-07-14.",
+            ),
+            (
+                "freeze.md",
+                "project",
+                "Merge freeze begins 2026-03-05",
+                "Mobile release cut.",
+            ),
+            (
+                "dash.md",
+                "reference",
+                "Latency dashboard is grafana.internal/d/api",
+                "",
+            ),
         ])
     }
 
@@ -433,8 +499,11 @@ mod tests {
     }
 
     fn kinds(p: &ClaudeImportPreview) -> Vec<(String, String)> {
-        let mut out: Vec<(String, String)> =
-            p.lines.iter().map(|l| (l.file.clone(), l.kind.as_str().to_string())).collect();
+        let mut out: Vec<(String, String)> = p
+            .lines
+            .iter()
+            .map(|l| (l.file.clone(), l.kind.as_str().to_string()))
+            .collect();
         out.sort();
         out
     }
@@ -466,8 +535,14 @@ mod tests {
         assert_eq!(map_kind("feedback", "we decided X"), EntryKind::Fact);
         assert_eq!(map_kind("reference", "chose Y"), EntryKind::Fact);
         assert_eq!(map_kind("user", "prefers Z"), EntryKind::Fact);
-        assert_eq!(map_kind("project", "use RS256 instead of HS256"), EntryKind::Decision);
-        assert_eq!(map_kind("project", "freeze begins Thursday"), EntryKind::Fact);
+        assert_eq!(
+            map_kind("project", "use RS256 instead of HS256"),
+            EntryKind::Decision
+        );
+        assert_eq!(
+            map_kind("project", "freeze begins Thursday"),
+            EntryKind::Fact
+        );
         assert_eq!(map_kind("", "anything"), EntryKind::Fact);
     }
 
@@ -498,13 +573,19 @@ mod tests {
         assert!(preview.lines.iter().all(|l| l.is_new));
         assert!(!preview.already_imported);
         let jwt = preview.lines.iter().find(|l| l.file == "jwt.md").unwrap();
-        assert_eq!((jwt.content.as_str(), jwt.claude_type.as_str()), ("JWT signing uses RS256 instead of HS256", "project"));
+        assert_eq!(
+            (jwt.content.as_str(), jwt.claude_type.as_str()),
+            ("JWT signing uses RS256 instead of HS256", "project")
+        );
 
         // Cancel = never confirming: the record is untouched.
         assert!(store.entries(&p).is_empty());
         assert!(heard.lock().is_empty());
         let again = store.claude_import_preview(&p, &[dir]).unwrap();
-        assert!(again.lines.iter().all(|l| l.is_new), "a preview records no import");
+        assert!(
+            again.lines.iter().all(|l| l.is_new),
+            "a preview records no import"
+        );
     }
 
     /// Confirm writes the kept lines with import provenance and announces them.
@@ -518,18 +599,33 @@ mod tests {
         });
         let preview = store.claude_import_preview(&p, &[dir.clone()]).unwrap();
         // The user unticks the dashboard line.
-        let ids: Vec<String> = preview.lines.iter().filter(|l| l.file != "dash.md").map(|l| l.id.clone()).collect();
+        let ids: Vec<String> = preview
+            .lines
+            .iter()
+            .filter(|l| l.file != "dash.md")
+            .map(|l| l.id.clone())
+            .collect();
 
         assert_eq!(store.claude_import_confirm(&p, &[dir], &ids).unwrap(), 4);
 
         let entries = store.entries(&p);
         assert_eq!(entries.len(), 4);
         for e in &entries {
-            assert_eq!((e.source.as_str(), e.agent.as_str(), e.confidence), ("import:claude", "", 0.7), "{e:?}");
+            assert_eq!(
+                (e.source.as_str(), e.agent.as_str(), e.confidence),
+                ("import:claude", "", 0.7),
+                "{e:?}"
+            );
         }
-        let jwt = entries.iter().find(|e| e.content.contains("RS256")).unwrap();
+        let jwt = entries
+            .iter()
+            .find(|e| e.content.contains("RS256"))
+            .unwrap();
         assert_eq!(jwt.kind, "decision");
-        assert!(entries.iter().all(|e| !e.content.contains("grafana")), "an unticked line is not written");
+        assert!(
+            entries.iter().all(|e| !e.content.contains("grafana")),
+            "an unticked line is not written"
+        );
         let heard = heard.lock().clone();
         assert_eq!(heard.len(), 1, "one change for the whole import");
         let mut announced = heard[0].kinds.clone();
@@ -542,16 +638,27 @@ mod tests {
     #[test]
     fn a_second_import_of_the_same_source_is_a_no_op() {
         let (store, p, dir) = (SharedMemoryStore::new(), project(), sample());
-        let ids = |pv: &ClaudeImportPreview| pv.lines.iter().map(|l| l.id.clone()).collect::<Vec<_>>();
+        let ids =
+            |pv: &ClaudeImportPreview| pv.lines.iter().map(|l| l.id.clone()).collect::<Vec<_>>();
         let first = store.claude_import_preview(&p, &[dir.clone()]).unwrap();
-        assert_eq!(store.claude_import_confirm(&p, &[dir.clone()], &ids(&first)).unwrap(), 5);
+        assert_eq!(
+            store
+                .claude_import_confirm(&p, &[dir.clone()], &ids(&first))
+                .unwrap(),
+            5
+        );
         let forgotten = store.entries(&p)[0].id;
         store.forget_entry(&p, forgotten).unwrap();
 
         let second = store.claude_import_preview(&p, &[dir.clone()]).unwrap();
         assert!(second.already_imported);
         assert!(second.lines.iter().all(|l| !l.is_new), "{:?}", second.lines);
-        assert_eq!(store.claude_import_confirm(&p, &[dir], &ids(&second)).unwrap(), 0);
+        assert_eq!(
+            store
+                .claude_import_confirm(&p, &[dir], &ids(&second))
+                .unwrap(),
+            0
+        );
         assert_eq!(store.entries(&p).len(), 4);
     }
 
@@ -598,7 +705,12 @@ mod tests {
         let ids = vec![line.id.clone()];
         store.claude_import_confirm(&p, &[dir], &ids).unwrap();
         for e in store.entries(&p) {
-            for leaked in ["<atlas-memory>", "SHARED MEMORY", "Use RS256", "Do not save any of it"] {
+            for leaked in [
+                "<atlas-memory>",
+                "SHARED MEMORY",
+                "Use RS256",
+                "Do not save any of it",
+            ] {
                 assert!(!e.content.contains(leaked), "{leaked:?} was imported");
             }
         }
@@ -607,7 +719,10 @@ mod tests {
     /// A body-only memory contributes its first paragraph, headings skipped.
     #[test]
     fn a_memory_without_a_description_contributes_its_first_paragraph() {
-        assert_eq!(line_of("", "# Title\n\nFirst line\ncontinues.\n\nSecond paragraph."), "First line continues.");
+        assert_eq!(
+            line_of("", "# Title\n\nFirst line\ncontinues.\n\nSecond paragraph."),
+            "First line continues."
+        );
         assert_eq!(line_of("  The summary  ", "Body."), "The summary");
     }
 
@@ -616,9 +731,16 @@ mod tests {
     fn a_top_level_type_is_read() {
         let dir = scratch("top-level").join("memory");
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("a.md"), "---\nname: a\ndescription: Chose Fly over Render\ntype: project\n---\n\nbody").unwrap();
+        std::fs::write(
+            dir.join("a.md"),
+            "---\nname: a\ndescription: Chose Fly over Render\ntype: project\n---\n\nbody",
+        )
+        .unwrap();
         let lines = read_dir(&dir);
-        assert_eq!((lines[0].kind, lines[0].claude_type.as_str()), (EntryKind::Decision, "project"));
+        assert_eq!(
+            (lines[0].kind, lines[0].claude_type.as_str()),
+            (EntryKind::Decision, "project")
+        );
     }
 
     /// Confirming with nothing kept writes nothing and does not use up the
@@ -626,7 +748,12 @@ mod tests {
     #[test]
     fn confirming_nothing_leaves_the_source_importable() {
         let (store, p, dir) = (SharedMemoryStore::new(), project(), sample());
-        assert_eq!(store.claude_import_confirm(&p, &[dir.clone()], &[]).unwrap(), 0);
+        assert_eq!(
+            store
+                .claude_import_confirm(&p, &[dir.clone()], &[])
+                .unwrap(),
+            0
+        );
         let preview = store.claude_import_preview(&p, &[dir]).unwrap();
         assert!(!preview.already_imported && preview.lines.iter().all(|l| l.is_new));
     }
@@ -637,7 +764,9 @@ mod tests {
     fn a_memory_in_two_sources_is_one_line() {
         let (store, p) = (SharedMemoryStore::new(), project());
         let old = claude_dir(&[("a.md", "user", "Prefers small PRs", "")]);
-        store.claude_import_confirm(&p, &[old.clone()], &["nothing-kept".into()]).unwrap();
+        store
+            .claude_import_confirm(&p, &[old.clone()], &["nothing-kept".into()])
+            .unwrap();
         let fresh = claude_dir(&[("b.md", "user", "Prefers small PRs", "")]);
         let preview = store.claude_import_preview(&p, &[old, fresh]).unwrap();
         assert_eq!(preview.lines.len(), 1);
@@ -649,7 +778,9 @@ mod tests {
     fn no_source_previews_nothing() {
         let (store, p) = (SharedMemoryStore::new(), project());
         let preview = store.claude_import_preview(&p, &[]).unwrap();
-        assert!(preview.lines.is_empty() && preview.sources.is_empty() && !preview.already_imported);
+        assert!(
+            preview.lines.is_empty() && preview.sources.is_empty() && !preview.already_imported
+        );
         assert_eq!(store.claude_import_confirm(&p, &[], &[]).unwrap(), 0);
     }
 }

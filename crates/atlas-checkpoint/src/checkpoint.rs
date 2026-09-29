@@ -58,10 +58,10 @@ use std::path::Path;
 use chrono::Utc;
 
 use crate::blobs;
-use crate::sketch;
 use crate::error::{Error, Result};
 use crate::git::{self, ChangedPath};
 use crate::model::{FileTouch, ProjectMode};
+use crate::sketch;
 use crate::store::{CheckpointInput, LinkCandidate, Store};
 
 /// A git read that should have worked did not — lock contention, a mid-gc
@@ -148,8 +148,14 @@ pub fn walk_new_commits(
     };
 
     for commit in &commits {
-        outcome.checkpoints_created +=
-            link_commit(store, repo, commit, &mut candidates, branch.as_deref(), mode)?;
+        outcome.checkpoints_created += link_commit(
+            store,
+            repo,
+            commit,
+            &mut candidates,
+            branch.as_deref(),
+            mode,
+        )?;
 
         // Advance per commit rather than once at the end: a crash mid-walk then
         // resumes from the last commit whose Checkpoints are durably written,
@@ -209,7 +215,14 @@ pub fn link_commits(
     let branch = git::current_branch(repo);
     let mut created = 0;
     for commit in commits {
-        created += link_commit(store, repo, commit, &mut candidates, branch.as_deref(), mode)?;
+        created += link_commit(
+            store,
+            repo,
+            commit,
+            &mut candidates,
+            branch.as_deref(),
+            mode,
+        )?;
     }
     Ok(created)
 }
@@ -248,11 +261,13 @@ fn link_commit(
         let mut created = 0;
         let first_parent = &info.parents[0];
         for side_parent in &info.parents[1..] {
-            let sides = git::merge_side_commits(repo, first_parent, side_parent, RECOVERY_SCAN_LIMIT)
-                .map_err(git_unavailable)?;
+            let sides =
+                git::merge_side_commits(repo, first_parent, side_parent, RECOVERY_SCAN_LIMIT)
+                    .map_err(git_unavailable)?;
             for side in sides {
                 let side_info = git::commit_info(repo, &side).map_err(git_unavailable)?;
-                created += evaluate_commit(store, repo, &side, &side_info, candidates, branch, mode)?;
+                created +=
+                    evaluate_commit(store, repo, &side, &side_info, candidates, branch, mode)?;
             }
         }
         return Ok(created);
@@ -340,9 +355,9 @@ fn evaluate_commit(
         let up_to = chrono::DateTime::<chrono::Utc>::from_timestamp(info.commit_time + 1, 0)
             .unwrap_or_else(chrono::Utc::now);
         store.consume_touches(&candidate.session_id, commit_sha, &matches.touched, up_to)?;
-        candidate.touches.retain(|touch| {
-            !matches.touched.contains(&touch.path) || touch.created_at > up_to
-        });
+        candidate
+            .touches
+            .retain(|touch| !matches.touched.contains(&touch.path) || touch.created_at > up_to);
     }
     Ok(created)
 }
@@ -378,7 +393,10 @@ fn matching_paths(
         .map(|touch| (touch.path.to_lowercase(), touch))
         .collect();
 
-    let mut matches = PathMatches { linked: Vec::new(), touched: Vec::new() };
+    let mut matches = PathMatches {
+        linked: Vec::new(),
+        touched: Vec::new(),
+    };
     for change in changed {
         // A rename carries the agent's work under its *pre*-rename path: the
         // agent edited the file, the commit moved it. Either spelling counts.
@@ -548,7 +566,11 @@ pub const MASS_ORPHAN_THRESHOLD: usize = 5;
 ///
 /// Safe and cheap to call on every ref movement: it does nothing when every
 /// Checkpoint's commit is still reachable.
-pub fn reconcile_rewrites(store: &Store, workspace_id: &str, repo: &Path) -> Result<ReconcileOutcome> {
+pub fn reconcile_rewrites(
+    store: &Store,
+    workspace_id: &str,
+    repo: &Path,
+) -> Result<ReconcileOutcome> {
     use crate::model::LinkState;
 
     let mut outcome = ReconcileOutcome::default();
@@ -609,8 +631,13 @@ pub fn reconcile_rewrites(store: &Store, workspace_id: &str, repo: &Path) -> Res
             // a reverted force-push. Re-link it rather than leaving the record
             // pessimistic.
             LinkState::Orphaned if reachable => {
-                let branch = branch_hint(repo, &checkpoint.commit_sha, checkpoint.branch.as_deref());
-                match store.relink_checkpoint(&checkpoint.id, &checkpoint.commit_sha, branch.as_deref()) {
+                let branch =
+                    branch_hint(repo, &checkpoint.commit_sha, checkpoint.branch.as_deref());
+                match store.relink_checkpoint(
+                    &checkpoint.id,
+                    &checkpoint.commit_sha,
+                    branch.as_deref(),
+                ) {
                     Ok(()) => outcome.recovered += 1,
                     Err(_) => outcome.failed += 1,
                 }
@@ -678,7 +705,11 @@ pub fn reconcile_rewrites(store: &Store, workspace_id: &str, repo: &Path) -> Res
 /// explanation living only in a log file is the same as no explanation. A clean
 /// pass zeroes the note rather than leaving the old alarm standing, so the
 /// signal reports current state, not history.
-fn record_reconcile_note(store: &Store, workspace_id: &str, outcome: &ReconcileOutcome) -> Result<()> {
+fn record_reconcile_note(
+    store: &Store,
+    workspace_id: &str,
+    outcome: &ReconcileOutcome,
+) -> Result<()> {
     let noteworthy = outcome.is_mass_orphan() || outcome.failed > 0;
     if noteworthy {
         let note = serde_json::json!({
@@ -741,7 +772,11 @@ fn resolve_candidate(
             let branch = recorded_branch?;
             let on_branch: Vec<&String> = candidates
                 .iter()
-                .filter(|sha| git::branches_containing(repo, sha).iter().any(|b| b == branch))
+                .filter(|sha| {
+                    git::branches_containing(repo, sha)
+                        .iter()
+                        .any(|b| b == branch)
+                })
                 .collect();
             // Still ambiguous after the branch preference — two commits with the
             // same diff on the same branch. Orphan rather than guess.

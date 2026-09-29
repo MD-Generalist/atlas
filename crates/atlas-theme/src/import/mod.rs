@@ -34,7 +34,9 @@ use crate::{parse_theme, Theme, ThemeError, THEME_SCHEMA_VERSION};
 use draft::VariantDraft;
 use report::ImportReport;
 
-pub use report::{DerivedKey, Fidelity, ImportCounts, ImportReport as Report, IgnoredKey, MappedKey};
+pub use report::{
+    DerivedKey, Fidelity, IgnoredKey, ImportCounts, ImportReport as Report, MappedKey,
+};
 
 /// How many `include` hops a VS Code theme may take. Dark+ → dark_vs is two;
 /// eight is room to spare and a hard stop on a cycle a path check missed.
@@ -55,13 +57,19 @@ pub fn read_source_file(path: &Path) -> std::io::Result<String> {
         return Err(Error::new(ErrorKind::InvalidInput, "not a regular file"));
     }
     if metadata.len() > MAX_SOURCE_BYTES {
-        return Err(Error::new(ErrorKind::InvalidData, "larger than the 4 MB a theme may be"));
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            "larger than the 4 MB a theme may be",
+        ));
     }
     let mut text = String::new();
     // `take` too: the file can grow between the metadata read and this one.
     file.take(MAX_SOURCE_BYTES + 1).read_to_string(&mut text)?;
     if text.len() as u64 > MAX_SOURCE_BYTES {
-        return Err(Error::new(ErrorKind::InvalidData, "larger than the 4 MB a theme may be"));
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            "larger than the 4 MB a theme may be",
+        ));
     }
     Ok(text)
 }
@@ -124,14 +132,18 @@ pub fn detect_format(source: &str) -> Option<ImportFormat> {
         // A rule block with no custom property in it is still CSS, and the CSS
         // importer's "no custom properties found in :root, .dark or @theme" is
         // a far more actionable answer than "unrecognised format".
-        return (trimmed.contains("--") || trimmed.contains('{')).then_some(ImportFormat::ShadcnCss);
+        return (trimmed.contains("--") || trimmed.contains('{'))
+            .then_some(ImportFormat::ShadcnCss);
     }
     let value: Value = serde_json::from_str(&strip_jsonc(source)).ok()?;
     if value.get("themes").and_then(Value::as_array).is_some() {
         return Some(ImportFormat::Zed);
     }
     if value.get("cssVars").is_some()
-        || value.get("type").and_then(Value::as_str).is_some_and(|kind| kind.starts_with("registry:"))
+        || value
+            .get("type")
+            .and_then(Value::as_str)
+            .is_some_and(|kind| kind.starts_with("registry:"))
     {
         return Some(ImportFormat::Shadcn);
     }
@@ -190,18 +202,30 @@ fn finish_theme(
     mut report: ImportReport,
     options: &ImportOptions,
 ) -> Result<ImportedTheme, ThemeError> {
-    let name = options.name_hint.clone().unwrap_or_else(|| report.source_name.clone());
+    let name = options
+        .name_hint
+        .clone()
+        .unwrap_or_else(|| report.source_name.clone());
     let id = options.id_hint.clone().unwrap_or_else(|| slug(&name));
     if id.is_empty() {
-        return Err(crate::validation(&options.origin, "could not derive a theme id from the source"));
+        return Err(crate::validation(
+            &options.origin,
+            "could not derive a theme id from the source",
+        ));
     }
 
     let mut theme = Theme {
         schema: THEME_SCHEMA_VERSION,
         id,
         name,
-        author: options.author_hint.clone().unwrap_or_else(|| "Imported".to_string()),
-        license: options.license_hint.clone().unwrap_or_else(|| "Unknown".to_string()),
+        author: options
+            .author_hint
+            .clone()
+            .unwrap_or_else(|| "Imported".to_string()),
+        license: options
+            .license_hint
+            .clone()
+            .unwrap_or_else(|| "Unknown".to_string()),
         dark: None,
         light: None,
         warnings: Vec::new(),
@@ -223,7 +247,11 @@ fn finish_theme(
 
     let toml = theme_to_toml(&theme);
     let theme = parse_theme(&toml, &options.origin)?;
-    Ok(ImportedTheme { theme, toml, report })
+    Ok(ImportedTheme {
+        theme,
+        toml,
+        report,
+    })
 }
 
 /// A theme id: lowercase, `a-z0-9-`, no leading or trailing dash.
@@ -252,7 +280,9 @@ fn fold(ch: char) -> &'static str {
         // SAFETY-free trick: index a static table so the return can borrow.
         const LOWER: &str = "0123456789abcdefghijklmnopqrstuvwxyz";
         let lower = ch.to_ascii_lowercase();
-        let index = LOWER.find(lower).expect("alphanumeric ASCII is in the table");
+        let index = LOWER
+            .find(lower)
+            .expect("alphanumeric ASCII is in the table");
         return &LOWER[index..index + 1];
     }
     match ch {
@@ -290,7 +320,11 @@ fn resolve_includes(
     let mut dir = base_dir.map(Path::to_path_buf);
 
     for _ in 0..MAX_INCLUDE_DEPTH {
-        let Some(target) = value.get("include").and_then(Value::as_str).map(str::to_string) else {
+        let Some(target) = value
+            .get("include")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+        else {
             break;
         };
         let Some(current_dir) = dir.clone() else {
@@ -312,17 +346,30 @@ fn resolve_includes(
         dir = path.parent().map(Path::to_path_buf);
         value = merge_theme(parent, value);
     }
-    if value.get("include").is_some() && unresolved.is_empty() && includes.len() >= MAX_INCLUDE_DEPTH {
-        unresolved.push(format!("include chain deeper than {MAX_INCLUDE_DEPTH} files"));
+    if value.get("include").is_some()
+        && unresolved.is_empty()
+        && includes.len() >= MAX_INCLUDE_DEPTH
+    {
+        unresolved.push(format!(
+            "include chain deeper than {MAX_INCLUDE_DEPTH} files"
+        ));
     }
-    Ok(vscode::Resolved { value, includes, unresolved })
+    Ok(vscode::Resolved {
+        value,
+        includes,
+        unresolved,
+    })
 }
 
 /// `child` wins, except that `tokenColors` accumulate.
 fn merge_theme(parent: Value, child: Value) -> Value {
     // A non-object on either side is not a theme document; keep the other.
-    let Value::Object(parent) = parent else { return child };
-    let Value::Object(mut child) = child else { return Value::Object(parent) };
+    let Value::Object(parent) = parent else {
+        return child;
+    };
+    let Value::Object(mut child) = child else {
+        return Value::Object(parent);
+    };
     // The child's own `include` is the hop being resolved right now; the
     // parent's is the next one, and has to survive the merge for the walk in
     // `resolve_includes` to take it. Dropping it stopped every chain at one hop.
@@ -399,7 +446,9 @@ fn strip_jsonc(source: &str) -> String {
             }
             ('/', Some('*')) => {
                 index += 2;
-                while index < chars.len() && !(chars[index] == '*' && chars.get(index + 1) == Some(&'/')) {
+                while index < chars.len()
+                    && !(chars[index] == '*' && chars.get(index + 1) == Some(&'/'))
+                {
                     index += 1;
                 }
                 index += 2;
@@ -444,11 +493,23 @@ mod tests {
 
     #[test]
     fn sniffs_each_format_apart() {
-        assert_eq!(detect_format(r#"{"cssVars":{"dark":{}}}"#), Some(ImportFormat::Shadcn));
-        assert_eq!(detect_format(r#"{"type":"registry:style"}"#), Some(ImportFormat::Shadcn));
+        assert_eq!(
+            detect_format(r#"{"cssVars":{"dark":{}}}"#),
+            Some(ImportFormat::Shadcn)
+        );
+        assert_eq!(
+            detect_format(r#"{"type":"registry:style"}"#),
+            Some(ImportFormat::Shadcn)
+        );
         assert_eq!(detect_format(r#"{"themes":[]}"#), Some(ImportFormat::Zed));
-        assert_eq!(detect_format(r#"{"colors":{},"tokenColors":[]}"#), Some(ImportFormat::VsCode));
-        assert_eq!(detect_format(":root { --background: #000; }"), Some(ImportFormat::ShadcnCss));
+        assert_eq!(
+            detect_format(r#"{"colors":{},"tokenColors":[]}"#),
+            Some(ImportFormat::VsCode)
+        );
+        assert_eq!(
+            detect_format(":root { --background: #000; }"),
+            Some(ImportFormat::ShadcnCss)
+        );
         assert_eq!(detect_format("hello"), None);
         assert_eq!(detect_format("{ not json"), None);
     }
@@ -475,10 +536,20 @@ mod tests {
     #[test]
     fn an_include_chain_is_followed_past_the_first_hop() {
         let dir = tempfile::tempdir().unwrap();
-        write(dir.path(), "b.json", r##"{"include":"./c.json","colors":{"b":"#bbbbbb","shared":"#b0b0b0"}}"##);
-        write(dir.path(), "c.json", r##"{"colors":{"c":"#cccccc","shared":"#c0c0c0"},"tokenColors":[{"scope":"c"}]}"##);
-        let source = r##"{"include":"./b.json","colors":{"a":"#aaaaaa"},"tokenColors":[{"scope":"a"}]}"##;
-        let resolved = resolve_includes(source, Some(dir.path()), &ImportOptions::default()).unwrap();
+        write(
+            dir.path(),
+            "b.json",
+            r##"{"include":"./c.json","colors":{"b":"#bbbbbb","shared":"#b0b0b0"}}"##,
+        );
+        write(
+            dir.path(),
+            "c.json",
+            r##"{"colors":{"c":"#cccccc","shared":"#c0c0c0"},"tokenColors":[{"scope":"c"}]}"##,
+        );
+        let source =
+            r##"{"include":"./b.json","colors":{"a":"#aaaaaa"},"tokenColors":[{"scope":"a"}]}"##;
+        let resolved =
+            resolve_includes(source, Some(dir.path()), &ImportOptions::default()).unwrap();
         assert_eq!(resolved.includes, ["./b.json", "./c.json"]);
         assert!(resolved.unresolved.is_empty(), "{:?}", resolved.unresolved);
         let colors = &resolved.value["colors"];
@@ -496,12 +567,24 @@ mod tests {
     fn an_include_chain_past_the_depth_limit_is_reported() {
         let dir = tempfile::tempdir().unwrap();
         for index in 0..=MAX_INCLUDE_DEPTH {
-            write(dir.path(), &format!("{index}.json"), &format!(r#"{{"include":"./{}.json"}}"#, index + 1));
+            write(
+                dir.path(),
+                &format!("{index}.json"),
+                &format!(r#"{{"include":"./{}.json"}}"#, index + 1),
+            );
         }
         let source = r#"{"include":"./0.json"}"#;
-        let resolved = resolve_includes(source, Some(dir.path()), &ImportOptions::default()).unwrap();
+        let resolved =
+            resolve_includes(source, Some(dir.path()), &ImportOptions::default()).unwrap();
         assert_eq!(resolved.includes.len(), MAX_INCLUDE_DEPTH);
-        assert!(resolved.unresolved.iter().any(|entry| entry.contains("deeper than")), "{:?}", resolved.unresolved);
+        assert!(
+            resolved
+                .unresolved
+                .iter()
+                .any(|entry| entry.contains("deeper than")),
+            "{:?}",
+            resolved.unresolved
+        );
     }
 
     #[test]
@@ -509,16 +592,36 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write(dir.path(), "a.json", r#"{"include":"./b.json"}"#);
         write(dir.path(), "b.json", r#"{"include":"./a.json"}"#);
-        let resolved = resolve_includes(r#"{"include":"./a.json"}"#, Some(dir.path()), &ImportOptions::default()).unwrap();
-        assert!(resolved.unresolved.iter().any(|entry| entry.contains("cycle")), "{:?}", resolved.unresolved);
+        let resolved = resolve_includes(
+            r#"{"include":"./a.json"}"#,
+            Some(dir.path()),
+            &ImportOptions::default(),
+        )
+        .unwrap();
+        assert!(
+            resolved
+                .unresolved
+                .iter()
+                .any(|entry| entry.contains("cycle")),
+            "{:?}",
+            resolved.unresolved
+        );
     }
 
     #[test]
     fn an_oversized_include_is_unresolved_rather_than_read() {
         let dir = tempfile::tempdir().unwrap();
-        let big = format!(r#"{{"colors":{{}},"pad":"{}"}}"#, "x".repeat(MAX_SOURCE_BYTES as usize));
+        let big = format!(
+            r#"{{"colors":{{}},"pad":"{}"}}"#,
+            "x".repeat(MAX_SOURCE_BYTES as usize)
+        );
         write(dir.path(), "big.json", &big);
-        let resolved = resolve_includes(r#"{"include":"./big.json"}"#, Some(dir.path()), &ImportOptions::default()).unwrap();
+        let resolved = resolve_includes(
+            r#"{"include":"./big.json"}"#,
+            Some(dir.path()),
+            &ImportOptions::default(),
+        )
+        .unwrap();
         assert!(resolved.includes.is_empty());
         assert_eq!(resolved.unresolved, ["./big.json"]);
     }

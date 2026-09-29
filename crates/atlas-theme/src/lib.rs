@@ -114,8 +114,9 @@ pub const NON_COLOR_BASE_TOKENS: &[&str] = &[
 
 /// The optional eight-colour palette, which 36 theme keys resolve through
 /// (plus the four derived status fills on top of those).
-pub const PALETTE_KEYS: &[&str] =
-    &["red", "orange", "yellow", "green", "cyan", "blue", "purple", "pink"];
+pub const PALETTE_KEYS: &[&str] = &[
+    "red", "orange", "yellow", "green", "cyan", "blue", "purple", "pink",
+];
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -227,9 +228,15 @@ impl Theme {
 #[derive(Debug, Error)]
 pub enum ThemeError {
     #[error("failed to read {path}: {source}")]
-    Read { path: PathBuf, source: std::io::Error },
+    Read {
+        path: PathBuf,
+        source: std::io::Error,
+    },
     #[error("invalid TOML in {origin}: {source}")]
-    Toml { origin: String, source: toml::de::Error },
+    Toml {
+        origin: String,
+        source: toml::de::Error,
+    },
     #[error("invalid theme in {origin}: {message}")]
     Validation { origin: String, message: String },
     #[error("theme '{0}' was not found")]
@@ -258,15 +265,30 @@ const BUILT_INS: &[(&str, &str)] = &[
     ("chyral.toml", include_str!("../themes/chyral.toml")),
     ("mirage.toml", include_str!("../themes/mirage.toml")),
     ("rose-pine.toml", include_str!("../themes/rose-pine.toml")),
-    ("rose-pine-moon.toml", include_str!("../themes/rose-pine-moon.toml")),
+    (
+        "rose-pine-moon.toml",
+        include_str!("../themes/rose-pine-moon.toml"),
+    ),
     ("one-dark.toml", include_str!("../themes/one-dark.toml")),
     ("phosphor.toml", include_str!("../themes/phosphor.toml")),
     ("dracula.toml", include_str!("../themes/dracula.toml")),
     ("monokai.toml", include_str!("../themes/monokai.toml")),
-    ("tokyo-night.toml", include_str!("../themes/tokyo-night.toml")),
-    ("catppuccin-frappe.toml", include_str!("../themes/catppuccin-frappe.toml")),
-    ("catppuccin-macchiato.toml", include_str!("../themes/catppuccin-macchiato.toml")),
-    ("catppuccin-mocha.toml", include_str!("../themes/catppuccin-mocha.toml")),
+    (
+        "tokyo-night.toml",
+        include_str!("../themes/tokyo-night.toml"),
+    ),
+    (
+        "catppuccin-frappe.toml",
+        include_str!("../themes/catppuccin-frappe.toml"),
+    ),
+    (
+        "catppuccin-macchiato.toml",
+        include_str!("../themes/catppuccin-macchiato.toml"),
+    ),
+    (
+        "catppuccin-mocha.toml",
+        include_str!("../themes/catppuccin-mocha.toml"),
+    ),
     ("vesper.toml", include_str!("../themes/vesper.toml")),
 ];
 
@@ -277,15 +299,27 @@ pub fn parse_theme(source: &str, origin: impl Into<String>) -> Result<Theme, The
         source,
     })?;
     if raw.schema != THEME_SCHEMA_VERSION {
-        return Err(validation(&origin, format!("unsupported schema {}; expected 1", raw.schema)));
+        return Err(validation(
+            &origin,
+            format!("unsupported schema {}; expected 1", raw.schema),
+        ));
     }
     if raw.id.trim().is_empty() || raw.name.trim().is_empty() {
         return Err(validation(&origin, "id and name must not be empty"));
     }
-    let dark = raw.dark.map(|value| parse_variant(value, &origin, "dark")).transpose()?;
-    let light = raw.light.map(|value| parse_variant(value, &origin, "light")).transpose()?;
+    let dark = raw
+        .dark
+        .map(|value| parse_variant(value, &origin, "dark"))
+        .transpose()?;
+    let light = raw
+        .light
+        .map(|value| parse_variant(value, &origin, "light"))
+        .transpose()?;
     if dark.is_none() && light.is_none() {
-        return Err(validation(&origin, "at least one of [dark] or [light] is required"));
+        return Err(validation(
+            &origin,
+            "at least one of [dark] or [light] is required",
+        ));
     }
     let mut theme = Theme {
         schema: raw.schema,
@@ -310,7 +344,10 @@ pub fn load_theme_file(path: &Path) -> Result<Theme, ThemeError> {
 }
 
 pub fn built_in_themes() -> Result<Vec<Theme>, ThemeError> {
-    BUILT_INS.iter().map(|(name, source)| parse_theme(source, *name)).collect()
+    BUILT_INS
+        .iter()
+        .map(|(name, source)| parse_theme(source, *name))
+        .collect()
 }
 
 /// `~/.config/atlas/themes` (or `$XDG_CONFIG_HOME/atlas/themes`).
@@ -368,15 +405,25 @@ fn config_root_from(xdg: Option<&Path>, home: Option<&Path>) -> Option<PathBuf> 
 pub fn write_theme_to(dir: &Path, source: &str) -> Result<PathBuf, ThemeError> {
     let theme = parse_theme(source, "import")?;
     let id = theme.id.trim();
-    if id.is_empty() || !id.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_') {
+    if id.is_empty()
+        || !id
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+    {
         return Err(validation(
             "import",
             format!("theme id '{id}' must be letters, digits, '-' or '_'"),
         ));
     }
-    fs::create_dir_all(dir).map_err(|source| ThemeError::Read { path: dir.to_path_buf(), source })?;
+    fs::create_dir_all(dir).map_err(|source| ThemeError::Read {
+        path: dir.to_path_buf(),
+        source,
+    })?;
     let path = dir.join(format!("{id}.toml"));
-    fs::write(&path, source).map_err(|source| ThemeError::Read { path: path.clone(), source })?;
+    fs::write(&path, source).map_err(|source| ThemeError::Read {
+        path: path.clone(),
+        source,
+    })?;
     Ok(path)
 }
 
@@ -390,7 +437,10 @@ pub fn write_user_theme(source: &str) -> Result<PathBuf, ThemeError> {
 /// Is there already a theme with this id? Distinguishes "you are about to
 /// replace your own import" from "you are about to shadow a built-in".
 pub fn theme_origin(id: &str) -> ThemeOrigin {
-    if BUILT_INS.iter().any(|(name, _)| *name == format!("{id}.toml")) {
+    if BUILT_INS
+        .iter()
+        .any(|(name, _)| *name == format!("{id}.toml"))
+    {
         return ThemeOrigin::BuiltIn;
     }
     match user_theme_dir() {
@@ -441,10 +491,16 @@ pub fn load_user_themes_from(dir: &Path) -> Result<(Vec<Theme>, Vec<ThemeWarning
     let entries = match fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(source) => {
-            let error = ThemeError::Read { path: dir.to_path_buf(), source };
+            let error = ThemeError::Read {
+                path: dir.to_path_buf(),
+                source,
+            };
             return Ok((
                 Vec::new(),
-                vec![ThemeWarning { key: dir.display().to_string(), message: error.to_string() }],
+                vec![ThemeWarning {
+                    key: dir.display().to_string(),
+                    message: error.to_string(),
+                }],
             ));
         }
     };
@@ -460,9 +516,10 @@ pub fn load_user_themes_from(dir: &Path) -> Result<(Vec<Theme>, Vec<ThemeWarning
         match load_theme_file(path) {
             Ok(theme) => themes.push(theme),
             Err(error) => warnings.push(ThemeWarning {
-                key: path
-                    .file_name()
-                    .map_or_else(|| path.display().to_string(), |name| name.to_string_lossy().into_owned()),
+                key: path.file_name().map_or_else(
+                    || path.display().to_string(),
+                    |name| name.to_string_lossy().into_owned(),
+                ),
                 message: error.to_string(),
             }),
         }
@@ -483,7 +540,10 @@ pub fn all_themes() -> Result<ThemeCatalog, ThemeError> {
         }
         warnings = failures;
     }
-    Ok(ThemeCatalog { themes: by_id.into_values().collect(), warnings })
+    Ok(ThemeCatalog {
+        themes: by_id.into_values().collect(),
+        warnings,
+    })
 }
 
 pub fn list_themes() -> Result<ThemeCatalogSummary, ThemeError> {
@@ -515,8 +575,12 @@ pub fn watch_user_themes<F>(on_change: F) -> Result<RecommendedWatcher, ThemeErr
 where
     F: FnMut() + Send + 'static,
 {
-    let dir = user_theme_dir().ok_or_else(|| validation("themes", "could not resolve config directory"))?;
-    fs::create_dir_all(&dir).map_err(|source| ThemeError::Read { path: dir.clone(), source })?;
+    let dir = user_theme_dir()
+        .ok_or_else(|| validation("themes", "could not resolve config directory"))?;
+    fs::create_dir_all(&dir).map_err(|source| ThemeError::Read {
+        path: dir.clone(),
+        source,
+    })?;
     let (tx, rx) = mpsc::channel::<()>();
     let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
         if event.is_ok_and(|event| is_theme_change(&event)) {
@@ -529,7 +593,10 @@ where
     std::thread::Builder::new()
         .name("atlas-theme-watch".to_string())
         .spawn(move || debounce(&rx, WATCH_DEBOUNCE, on_change))
-        .map_err(|source| ThemeError::Read { path: dir.clone(), source })?;
+        .map_err(|source| ThemeError::Read {
+            path: dir.clone(),
+            source,
+        })?;
     Ok(watcher)
 }
 
@@ -540,7 +607,10 @@ where
 /// fired the watcher again, which reloaded again, forever.
 fn is_theme_change(event: &notify::Event) -> bool {
     !matches!(event.kind, EventKind::Access(_))
-        && event.paths.iter().any(|path| path.extension().and_then(|ext| ext.to_str()) == Some("toml"))
+        && event
+            .paths
+            .iter()
+            .any(|path| path.extension().and_then(|ext| ext.to_str()) == Some("toml"))
 }
 
 /// Call `on_change` once per burst: after a signal, wait until `window` passes
@@ -573,12 +643,16 @@ fn debounce(rx: &mpsc::Receiver<()>, window: Duration, mut on_change: impl FnMut
 /// unknown key as a warning for forward compatibility. That is deliberate — the
 /// editor should flag a key this build has never heard of.
 pub fn json_schema() -> serde_json::Value {
-    let mut schema = serde_json::to_value(schema_for!(Theme)).expect("Theme JSON schema serializes");
+    let mut schema =
+        serde_json::to_value(schema_for!(Theme)).expect("Theme JSON schema serializes");
     let keys = schema
         .pointer_mut("/definitions/ThemeVariant/properties/keys")
         .and_then(serde_json::Value::as_object_mut)
         .expect("ThemeVariant has a keys property");
-    keys.insert("additionalProperties".to_string(), serde_json::Value::Bool(false));
+    keys.insert(
+        "additionalProperties".to_string(),
+        serde_json::Value::Bool(false),
+    );
     keys.insert(
         "properties".to_string(),
         theme_key_docs()
@@ -597,17 +671,38 @@ pub fn json_schema() -> serde_json::Value {
     schema
 }
 
-fn parse_variant(value: toml::Value, origin: &str, appearance: &str) -> Result<ThemeVariant, ThemeError> {
-    let table = value.as_table().ok_or_else(|| validation(origin, format!("[{appearance}] must be a table")))?;
-    let unknown = table.keys().filter(|key| !matches!(key.as_str(), "base" | "palette" | "keys")).cloned().collect::<Vec<_>>();
+fn parse_variant(
+    value: toml::Value,
+    origin: &str,
+    appearance: &str,
+) -> Result<ThemeVariant, ThemeError> {
+    let table = value
+        .as_table()
+        .ok_or_else(|| validation(origin, format!("[{appearance}] must be a table")))?;
+    let unknown = table
+        .keys()
+        .filter(|key| !matches!(key.as_str(), "base" | "palette" | "keys"))
+        .cloned()
+        .collect::<Vec<_>>();
     if !unknown.is_empty() {
-        return Err(validation(origin, format!("unknown {appearance} field(s): {}", unknown.join(", "))));
+        return Err(validation(
+            origin,
+            format!("unknown {appearance} field(s): {}", unknown.join(", ")),
+        ));
     }
     let base = flatten_string_table(table.get("base"), origin, &format!("{appearance}.base"))?;
-    let palette = flatten_string_table(table.get("palette"), origin, &format!("{appearance}.palette"))?;
+    let palette = flatten_string_table(
+        table.get("palette"),
+        origin,
+        &format!("{appearance}.palette"),
+    )?;
     let keys = flatten_key_table(table.get("keys"), origin, &format!("{appearance}.keys"))?;
     validate_variant(&base, &palette, &keys, origin, appearance)?;
-    Ok(ThemeVariant { base, palette, keys })
+    Ok(ThemeVariant {
+        base,
+        palette,
+        keys,
+    })
 }
 
 fn flatten_string_table(
@@ -632,7 +727,9 @@ fn flatten_key_table(
     origin: &str,
     field: &str,
 ) -> Result<BTreeMap<String, ThemeKeyValue>, ThemeError> {
-    let Some(value) = value else { return Ok(BTreeMap::new()) };
+    let Some(value) = value else {
+        return Ok(BTreeMap::new());
+    };
     let mut out = BTreeMap::new();
     flatten_keys(value, "", &mut out, origin, field)?;
     Ok(out)
@@ -645,15 +742,24 @@ fn flatten_strings(
     origin: &str,
     field: &str,
 ) -> Result<(), ThemeError> {
-    let table = value.as_table().ok_or_else(|| validation(origin, format!("[{field}] must contain string leaves")))?;
+    let table = value
+        .as_table()
+        .ok_or_else(|| validation(origin, format!("[{field}] must contain string leaves")))?;
     for (key, value) in table {
-        let dotted = if prefix.is_empty() { key.clone() } else { format!("{prefix}.{key}") };
+        let dotted = if prefix.is_empty() {
+            key.clone()
+        } else {
+            format!("{prefix}.{key}")
+        };
         if let Some(string) = value.as_str() {
             insert_leaf(out, dotted, string.to_string(), origin)?;
         } else if value.is_table() {
             flatten_strings(value, &dotted, out, origin, field)?;
         } else {
-            return Err(validation(origin, format!("{field}.{dotted} must be a string")));
+            return Err(validation(
+                origin,
+                format!("{field}.{dotted} must be a string"),
+            ));
         }
     }
     Ok(())
@@ -666,17 +772,33 @@ fn flatten_keys(
     origin: &str,
     field: &str,
 ) -> Result<(), ThemeError> {
-    let table = value.as_table().ok_or_else(|| validation(origin, format!("[{field}] must be a table")))?;
+    let table = value
+        .as_table()
+        .ok_or_else(|| validation(origin, format!("[{field}] must be a table")))?;
     for (key, value) in table {
-        let dotted = if prefix.is_empty() { key.clone() } else { format!("{prefix}.{key}") };
+        let dotted = if prefix.is_empty() {
+            key.clone()
+        } else {
+            format!("{prefix}.{key}")
+        };
         if let Some(string) = value.as_str() {
-            insert_leaf(out, dotted, ThemeKeyValue::Color(string.to_string()), origin)?;
-        } else if let Some(style) = parse_style(value, &dotted).map_err(|message| validation(origin, message))? {
+            insert_leaf(
+                out,
+                dotted,
+                ThemeKeyValue::Color(string.to_string()),
+                origin,
+            )?;
+        } else if let Some(style) =
+            parse_style(value, &dotted).map_err(|message| validation(origin, message))?
+        {
             insert_leaf(out, dotted, ThemeKeyValue::Styled(style), origin)?;
         } else if value.is_table() {
             flatten_keys(value, &dotted, out, origin, field)?;
         } else {
-            return Err(validation(origin, format!("{field}.{dotted} must be a colour or style")));
+            return Err(validation(
+                origin,
+                format!("{field}.{dotted} must be a colour or style"),
+            ));
         }
     }
     Ok(())
@@ -686,8 +808,12 @@ fn flatten_keys(
 /// into it as a nested group of keys. `Err` is reserved for a table that is
 /// unmistakably meant as a style and cannot be honoured.
 fn parse_style(value: &toml::Value, key: &str) -> Result<Option<ThemeKeyStyle>, String> {
-    let Some(table) = value.as_table() else { return Ok(None) };
-    let Some(color) = table.get("color").and_then(toml::Value::as_str) else { return Ok(None) };
+    let Some(table) = value.as_table() else {
+        return Ok(None);
+    };
+    let Some(color) = table.get("color").and_then(toml::Value::as_str) else {
+        return Ok(None);
+    };
     if table.contains_key("font_style") {
         return Err(format!(
             "{key} sets font_style, which Atlas does not apply — a theme key is a colour. \
@@ -697,7 +823,9 @@ fn parse_style(value: &toml::Value, key: &str) -> Result<Option<ThemeKeyStyle>, 
     if table.keys().any(|key| key != "color") {
         return Ok(None);
     }
-    Ok(Some(ThemeKeyStyle { color: color.to_string() }))
+    Ok(Some(ThemeKeyStyle {
+        color: color.to_string(),
+    }))
 }
 
 fn insert_leaf<T>(
@@ -706,15 +834,22 @@ fn insert_leaf<T>(
     value: T,
     origin: &str,
 ) -> Result<(), ThemeError> {
-    if out.keys().any(|existing| is_leaf_prefix(existing, &key) || is_leaf_prefix(&key, existing)) {
-        return Err(validation(origin, format!("'{key}' is both a leaf and a prefix")));
+    if out
+        .keys()
+        .any(|existing| is_leaf_prefix(existing, &key) || is_leaf_prefix(&key, existing))
+    {
+        return Err(validation(
+            origin,
+            format!("'{key}' is both a leaf and a prefix"),
+        ));
     }
     out.insert(key, value);
     Ok(())
 }
 
 fn is_leaf_prefix(leaf: &str, key: &str) -> bool {
-    key.strip_prefix(leaf).is_some_and(|rest| rest.starts_with('.'))
+    key.strip_prefix(leaf)
+        .is_some_and(|rest| rest.starts_with('.'))
 }
 
 fn validate_variant(
@@ -726,15 +861,34 @@ fn validate_variant(
 ) -> Result<(), ThemeError> {
     let allowed_base = BASE_TOKENS.iter().copied().collect::<BTreeSet<_>>();
     if let Some(key) = base.keys().find(|key| !allowed_base.contains(key.as_str())) {
-        return Err(validation(origin, format!("unknown base token '{key}' in {appearance}")));
+        return Err(validation(
+            origin,
+            format!("unknown base token '{key}' in {appearance}"),
+        ));
     }
-    let missing = BASE_TOKENS.iter().filter(|key| !base.contains_key(**key)).copied().collect::<Vec<_>>();
+    let missing = BASE_TOKENS
+        .iter()
+        .filter(|key| !base.contains_key(**key))
+        .copied()
+        .collect::<Vec<_>>();
     if !missing.is_empty() {
-        return Err(validation(origin, format!("missing base token(s) in {appearance}: {}", missing.join(", "))));
+        return Err(validation(
+            origin,
+            format!(
+                "missing base token(s) in {appearance}: {}",
+                missing.join(", ")
+            ),
+        ));
     }
     let palette_keys = PALETTE_KEYS.iter().copied().collect::<BTreeSet<_>>();
-    if let Some(key) = palette.keys().find(|key| !palette_keys.contains(key.as_str())) {
-        return Err(validation(origin, format!("unknown palette colour '{key}' in {appearance}")));
+    if let Some(key) = palette
+        .keys()
+        .find(|key| !palette_keys.contains(key.as_str()))
+    {
+        return Err(validation(
+            origin,
+            format!("unknown palette colour '{key}' in {appearance}"),
+        ));
     }
     for (key, value) in base {
         if NON_COLOR_BASE_TOKENS.contains(&key.as_str()) {
@@ -745,17 +899,26 @@ fn validate_variant(
                 ));
             }
         } else if !is_css_color(value) {
-            return Err(validation(origin, format!("{appearance}.base.{key} is not a CSS colour")));
+            return Err(validation(
+                origin,
+                format!("{appearance}.base.{key} is not a CSS colour"),
+            ));
         }
     }
     for (key, value) in palette {
         if !is_css_color(value) {
-            return Err(validation(origin, format!("{appearance}.palette.{key} is not a CSS colour")));
+            return Err(validation(
+                origin,
+                format!("{appearance}.palette.{key} is not a CSS colour"),
+            ));
         }
     }
     for (key, value) in keys {
         if !is_css_color(value.color()) {
-            return Err(validation(origin, format!("{appearance}.keys.{key} is not a CSS colour")));
+            return Err(validation(
+                origin,
+                format!("{appearance}.keys.{key} is not a CSS colour"),
+            ));
         }
     }
     Ok(())
@@ -763,9 +926,16 @@ fn validate_variant(
 
 fn collect_warnings(theme: &mut Theme) {
     let known = theme_keys().collect::<BTreeSet<_>>();
-    for (appearance, variant) in [("dark", theme.dark.as_ref()), ("light", theme.light.as_ref())] {
+    for (appearance, variant) in [
+        ("dark", theme.dark.as_ref()),
+        ("light", theme.light.as_ref()),
+    ] {
         if let Some(variant) = variant {
-            for key in variant.keys.keys().filter(|key| !known.contains(key.as_str())) {
+            for key in variant
+                .keys
+                .keys()
+                .filter(|key| !known.contains(key.as_str()))
+            {
                 theme.warnings.push(ThemeWarning {
                     key: format!("{appearance}.keys.{key}"),
                     message: "unknown theme key; preserved for forward compatibility".to_string(),
@@ -797,7 +967,9 @@ pub fn is_valid_base_value(key: &str, value: &str) -> bool {
 pub fn is_safe_css_value(value: &str) -> bool {
     let lower = value.to_ascii_lowercase();
     value.len() <= 512
-        && !value.chars().any(|c| matches!(c, ';' | '{' | '}' | '<' | '>' | '\\') || c.is_control())
+        && !value
+            .chars()
+            .any(|c| matches!(c, ';' | '{' | '}' | '<' | '>' | '\\') || c.is_control())
         && !value.contains("/*")
         && !value.contains("*/")
         && !lower.contains("url(")
@@ -811,10 +983,15 @@ pub fn is_safe_css_value(value: &str) -> bool {
 pub fn is_css_color(value: &str) -> bool {
     let value = value.trim();
     if let Some(hex) = value.strip_prefix('#') {
-        return matches!(hex.len(), 3 | 4 | 6 | 8) && hex.bytes().all(|byte| byte.is_ascii_hexdigit());
+        return matches!(hex.len(), 3 | 4 | 6 | 8)
+            && hex.bytes().all(|byte| byte.is_ascii_hexdigit());
     }
     for name in ["rgb", "rgba", "hsl", "hsla", "oklch"] {
-        if let Some(body) = value.strip_prefix(name).and_then(|rest| rest.strip_prefix('(')).and_then(|rest| rest.strip_suffix(')')) {
+        if let Some(body) = value
+            .strip_prefix(name)
+            .and_then(|rest| rest.strip_prefix('('))
+            .and_then(|rest| rest.strip_suffix(')'))
+        {
             return validate_color_function(name, body);
         }
     }
@@ -830,7 +1007,11 @@ fn validate_color_function(name: &str, body: &str) -> bool {
     let slash = parts.iter().position(|part| *part == "/");
     // Both arms are a comparison and a length, so there is nothing to defer.
     let alpha_as_fourth_channel = matches!(name, "rgba" | "hsla") && parts.len() == 4;
-    let channels = slash.unwrap_or(if alpha_as_fourth_channel { 3 } else { parts.len() });
+    let channels = slash.unwrap_or(if alpha_as_fourth_channel {
+        3
+    } else {
+        parts.len()
+    });
     if channels != 3 || slash.is_some_and(|index| parts.len() != index + 2) {
         return false;
     }
@@ -858,7 +1039,10 @@ fn parse_number(value: &str) -> bool {
 }
 
 pub(crate) fn validation(origin: &str, message: impl Into<String>) -> ThemeError {
-    ThemeError::Validation { origin: origin.to_string(), message: message.into() }
+    ThemeError::Validation {
+        origin: origin.to_string(),
+        message: message.into(),
+    }
 }
 
 #[cfg(test)]
@@ -869,7 +1053,11 @@ mod tests {
         let base = BASE_TOKENS
             .iter()
             .map(|key| {
-                let value = if NON_COLOR_BASE_TOKENS.contains(key) { "1rem" } else { "#123456" };
+                let value = if NON_COLOR_BASE_TOKENS.contains(key) {
+                    "1rem"
+                } else {
+                    "#123456"
+                };
                 format!("\"{key}\" = \"{value}\"")
             })
             .collect::<Vec<_>>()
@@ -883,7 +1071,10 @@ mod tests {
     fn built_ins_load_and_have_unique_ids() {
         let themes = built_in_themes().unwrap();
         assert_eq!(themes.len(), BUILT_INS.len());
-        let ids = themes.iter().map(|theme| &theme.id).collect::<BTreeSet<_>>();
+        let ids = themes
+            .iter()
+            .map(|theme| &theme.id)
+            .collect::<BTreeSet<_>>();
         assert_eq!(ids.len(), themes.len());
     }
 
@@ -894,24 +1085,31 @@ mod tests {
             "test",
         )
         .unwrap();
-        assert_eq!(theme.dark.unwrap().keys["terminal.ansi.red"].color(), "rgb(255 0 0)");
+        assert_eq!(
+            theme.dark.unwrap().keys["terminal.ansi.red"].color(),
+            "rgb(255 0 0)"
+        );
     }
 
     #[test]
     fn rejects_unknown_top_level_and_base_fields() {
         let top = minimal_theme("").replacen("[dark.base]", "mystery = true\n[dark.base]", 1);
-        assert!(matches!(parse_theme(&top, "test"), Err(ThemeError::Toml { .. })));
-        let base = minimal_theme("").replacen(
-            "[dark.base]\n",
-            "[dark.base]\nmystery = \"#fff\"\n",
-            1,
-        );
-        assert!(parse_theme(&base, "test").unwrap_err().to_string().contains("unknown base token"));
+        assert!(matches!(
+            parse_theme(&top, "test"),
+            Err(ThemeError::Toml { .. })
+        ));
+        let base =
+            minimal_theme("").replacen("[dark.base]\n", "[dark.base]\nmystery = \"#fff\"\n", 1);
+        assert!(parse_theme(&base, "test")
+            .unwrap_err()
+            .to_string()
+            .contains("unknown base token"));
     }
 
     #[test]
     fn rejects_leaf_prefix_conflicts() {
-        let source = minimal_theme("[dark.keys]\nsyntax = \"#fff\"\n[dark.keys.syntax]\nkeyword = \"#000\"");
+        let source =
+            minimal_theme("[dark.keys]\nsyntax = \"#fff\"\n[dark.keys.syntax]\nkeyword = \"#000\"");
         assert!(parse_theme(&source, "test").is_err());
     }
 
@@ -919,8 +1117,9 @@ mod tests {
     /// gets no error and no italics, and nothing tells them which it is.
     #[test]
     fn font_style_is_rejected_rather_than_silently_dropped() {
-        let source =
-            minimal_theme("[dark.keys]\nsyntax.keyword = { color = \"#c678dd\", font_style = \"italic\" }");
+        let source = minimal_theme(
+            "[dark.keys]\nsyntax.keyword = { color = \"#c678dd\", font_style = \"italic\" }",
+        );
         let error = parse_theme(&source, "test").unwrap_err().to_string();
         assert!(error.contains("font_style"), "{error}");
         assert!(error.contains("syntax.keyword"), "{error}");
@@ -941,7 +1140,16 @@ mod tests {
 
     #[test]
     fn validates_supported_css_colour_syntaxes() {
-        for color in ["#abc", "#abcd", "#aabbcc", "#aabbccdd", "rgb(1 2 3 / 50%)", "rgba(1, 2, 3, 0.5)", "hsl(120 50% 50%)", "oklch(0.7 0.2 120 / .8)"] {
+        for color in [
+            "#abc",
+            "#abcd",
+            "#aabbcc",
+            "#aabbccdd",
+            "rgb(1 2 3 / 50%)",
+            "rgba(1, 2, 3, 0.5)",
+            "hsl(120 50% 50%)",
+            "oklch(0.7 0.2 120 / .8)",
+        ] {
             assert!(is_css_color(color), "{color}");
         }
         for color in ["red", "#12", "rgb()", "oklch(nope 1 2)"] {
@@ -957,7 +1165,11 @@ mod tests {
     fn one_bad_user_theme_is_skipped_and_the_rest_still_load() {
         let dir = tempfile::tempdir().unwrap();
         // Sorted first, so a short-circuit would drop both good files.
-        fs::write(dir.path().join("0-broken.toml"), "schema = 1\nid = \"broken\"\n").unwrap();
+        fs::write(
+            dir.path().join("0-broken.toml"),
+            "schema = 1\nid = \"broken\"\n",
+        )
+        .unwrap();
         fs::write(dir.path().join("1-not-toml.toml"), "}{ this is not toml").unwrap();
         fs::write(
             dir.path().join("2-good.toml"),
@@ -968,7 +1180,13 @@ mod tests {
 
         let (themes, warnings) = load_user_themes_from(dir.path()).unwrap();
 
-        assert_eq!(themes.iter().map(|theme| theme.id.as_str()).collect::<Vec<_>>(), ["good"]);
+        assert_eq!(
+            themes
+                .iter()
+                .map(|theme| theme.id.as_str())
+                .collect::<Vec<_>>(),
+            ["good"]
+        );
         assert_eq!(warnings.len(), 2, "{warnings:?}");
         assert_eq!(warnings[0].key, "0-broken.toml");
         assert_eq!(warnings[1].key, "1-not-toml.toml");
@@ -1039,12 +1257,21 @@ mod tests {
             "Inter\nsans",
             "@import 'x'",
         ] {
-            let source = minimal_theme("").replacen("\"font-sans\" = \"1rem\"", &format!("\"font-sans\" = {bad:?}"), 1);
+            let source = minimal_theme("").replacen(
+                "\"font-sans\" = \"1rem\"",
+                &format!("\"font-sans\" = {bad:?}"),
+                1,
+            );
             assert_ne!(source, minimal_theme(""), "fixture replaced");
             let error = parse_theme(&source, "test").unwrap_err().to_string();
             assert!(error.contains("dark.base.font-sans"), "{bad:?}: {error}");
         }
-        for good in ["\"Segoe UI\", ui-sans-serif, system-ui", "0 1px 3px 0 hsl(0 0% 0% / 0.1)", "0.625rem", "-0.01em"] {
+        for good in [
+            "\"Segoe UI\", ui-sans-serif, system-ui",
+            "0 1px 3px 0 hsl(0 0% 0% / 0.1)",
+            "0.625rem",
+            "-0.01em",
+        ] {
             assert!(is_safe_css_value(good), "{good:?}");
             assert!(is_valid_base_value("font-sans", good), "{good:?}");
         }
@@ -1067,11 +1294,16 @@ mod tests {
     fn reads_are_not_theme_changes() {
         use notify::event::{AccessKind, AccessMode, CreateKind, ModifyKind};
         let event = |kind| notify::Event::new(kind).add_path(PathBuf::from("/t/x.toml"));
-        assert!(!is_theme_change(&event(EventKind::Access(AccessKind::Open(AccessMode::Read)))));
-        assert!(!is_theme_change(&event(EventKind::Access(AccessKind::Close(AccessMode::Read)))));
+        assert!(!is_theme_change(&event(EventKind::Access(
+            AccessKind::Open(AccessMode::Read)
+        ))));
+        assert!(!is_theme_change(&event(EventKind::Access(
+            AccessKind::Close(AccessMode::Read)
+        ))));
         assert!(is_theme_change(&event(EventKind::Modify(ModifyKind::Any))));
         assert!(is_theme_change(&event(EventKind::Create(CreateKind::File))));
-        let other = notify::Event::new(EventKind::Modify(ModifyKind::Any)).add_path(PathBuf::from("/t/x.txt"));
+        let other = notify::Event::new(EventKind::Modify(ModifyKind::Any))
+            .add_path(PathBuf::from("/t/x.txt"));
         assert!(!is_theme_change(&other));
     }
 
@@ -1079,14 +1311,25 @@ mod tests {
     fn a_burst_of_changes_is_reported_once() {
         let (tx, rx) = mpsc::channel();
         let (done_tx, done_rx) = mpsc::channel();
-        let worker = std::thread::spawn(move || debounce(&rx, Duration::from_millis(50), move || done_tx.send(()).unwrap()));
+        let worker = std::thread::spawn(move || {
+            debounce(&rx, Duration::from_millis(50), move || {
+                done_tx.send(()).unwrap()
+            })
+        });
         for _ in 0..20 {
             tx.send(()).unwrap();
         }
-        done_rx.recv_timeout(Duration::from_secs(5)).expect("one change is reported");
-        assert!(done_rx.recv_timeout(Duration::from_millis(200)).is_err(), "and only one");
+        done_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("one change is reported");
+        assert!(
+            done_rx.recv_timeout(Duration::from_millis(200)).is_err(),
+            "and only one"
+        );
         tx.send(()).unwrap();
-        done_rx.recv_timeout(Duration::from_secs(5)).expect("a later change is reported again");
+        done_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("a later change is reported again");
         drop(tx);
         worker.join().unwrap();
     }
@@ -1108,9 +1351,18 @@ mod tests {
         assert!(docs.len() > 50, "{} keys", docs.len());
         for (key, description) in &docs {
             assert!(!key.is_empty() && !key.contains(' '), "key {key:?}");
-            assert!(description.ends_with('.'), "{key} description: {description:?}");
+            assert!(
+                description.ends_with('.'),
+                "{key} description: {description:?}"
+            );
         }
-        assert_eq!(docs.iter().map(|(key, _)| *key).collect::<BTreeSet<_>>().len(), docs.len());
+        assert_eq!(
+            docs.iter()
+                .map(|(key, _)| *key)
+                .collect::<BTreeSet<_>>()
+                .len(),
+            docs.len()
+        );
     }
 
     /// The point of the generated enum: an author's typo is an editor error
@@ -1118,7 +1370,9 @@ mod tests {
     #[test]
     fn schema_closes_the_key_set() {
         let schema = json_schema();
-        let keys = schema.pointer("/definitions/ThemeVariant/properties/keys").unwrap();
+        let keys = schema
+            .pointer("/definitions/ThemeVariant/properties/keys")
+            .unwrap();
         assert_eq!(keys["additionalProperties"], serde_json::Value::Bool(false));
         let properties = keys["properties"].as_object().unwrap();
         assert_eq!(properties.len(), theme_keys().count());
@@ -1141,7 +1395,10 @@ mod tests {
 
         for bad in ["../escape", "a/b", "", "with space"] {
             let source = minimal_theme("").replace("id = \"test\"", &format!("id = \"{bad}\""));
-            assert!(write_theme_to(dir.path(), &source).is_err(), "accepted id {bad:?}");
+            assert!(
+                write_theme_to(dir.path(), &source).is_err(),
+                "accepted id {bad:?}"
+            );
         }
         // Nothing else was created along the way.
         let written = fs::read_dir(dir.path()).unwrap().count();
@@ -1157,7 +1414,10 @@ mod tests {
     #[test]
     fn browser_mock_snapshot_is_current() {
         let expected = serde_json::to_string_pretty(&built_in_themes().unwrap()).unwrap() + "\n";
-        assert_eq!(include_str!("../../../src/dev/mock-backend/fixtures/builtin-themes.json"), expected);
+        assert_eq!(
+            include_str!("../../../src/dev/mock-backend/fixtures/builtin-themes.json"),
+            expected
+        );
     }
 
     /// The eight `[<variant>.palette]` names are *hues*, and everything
@@ -1188,7 +1448,11 @@ mod tests {
         /// A theme is allowed to file a hue under a distant name when its
         /// upstream does. Each entry is (theme id, palette name, why).
         const EXCEPTIONS: &[(&str, &str, &str)] = &[
-            ("rose-pine", "green", "Rosé Pine has no green; upstream's ANSI green is pine"),
+            (
+                "rose-pine",
+                "green",
+                "Rosé Pine has no green; upstream's ANSI green is pine",
+            ),
             ("rose-pine-moon", "green", "same as rose-pine"),
         ];
 
@@ -1196,7 +1460,9 @@ mod tests {
         fn hue_and_saturation(hex: &str) -> Option<(f64, f64)> {
             let hex = hex.strip_prefix('#').filter(|rest| rest.len() == 6)?;
             let channel = |index: usize| {
-                u8::from_str_radix(&hex[index..index + 2], 16).ok().map(|v| f64::from(v) / 255.0)
+                u8::from_str_radix(&hex[index..index + 2], 16)
+                    .ok()
+                    .map(|v| f64::from(v) / 255.0)
             };
             let (r, g, b) = (channel(0)?, channel(2)?, channel(4)?);
             let max = r.max(g).max(b);
@@ -1218,12 +1484,15 @@ mod tests {
         }
 
         for theme in built_in_themes().unwrap() {
-            for (appearance, variant) in
-                [("dark", theme.dark.as_ref()), ("light", theme.light.as_ref())]
-            {
+            for (appearance, variant) in [
+                ("dark", theme.dark.as_ref()),
+                ("light", theme.light.as_ref()),
+            ] {
                 let Some(variant) = variant else { continue };
                 for (name, canonical) in CANONICAL {
-                    let Some(value) = variant.palette.get(*name) else { continue };
+                    let Some(value) = variant.palette.get(*name) else {
+                        continue;
+                    };
                     let (hue, saturation) =
                         hue_and_saturation(value).unwrap_or_else(|| panic!("{value} is #rrggbb"));
                     // A deliberately achromatic theme (Atlas Mono, Vesper's
@@ -1273,9 +1542,10 @@ mod tests {
         }
 
         for theme in built_in_themes().unwrap() {
-            for (appearance, variant) in
-                [("dark", theme.dark.as_ref()), ("light", theme.light.as_ref())]
-            {
+            for (appearance, variant) in [
+                ("dark", theme.dark.as_ref()),
+                ("light", theme.light.as_ref()),
+            ] {
                 let Some(variant) = variant else { continue };
                 for (index, key) in CHART_KEYS.iter().enumerate() {
                     for other in &CHART_KEYS[index + 1..] {
@@ -1308,17 +1578,29 @@ mod tests {
     /// light its own ramp, and that ramp must actually be lighter.
     #[test]
     fn light_shadow_ramp_is_not_copied_from_dark() {
-        const SHADOW_KEYS: &[&str] =
-            &["shadow-2xs", "shadow-xs", "shadow-sm", "shadow-md", "shadow-lg", "shadow-xl", "shadow-2xl"];
+        const SHADOW_KEYS: &[&str] = &[
+            "shadow-2xs",
+            "shadow-xs",
+            "shadow-sm",
+            "shadow-md",
+            "shadow-lg",
+            "shadow-xl",
+            "shadow-2xl",
+        ];
 
         fn shadow_alpha(value: &str) -> f64 {
             let start = value.rfind(',').expect("shadow value has an alpha channel");
             let end = value.rfind(')').expect("shadow value is a function call");
-            value[start + 1..end].trim().parse().expect("alpha channel is numeric")
+            value[start + 1..end]
+                .trim()
+                .parse()
+                .expect("alpha channel is numeric")
         }
 
         for theme in built_in_themes().unwrap() {
-            let (Some(dark), Some(light)) = (&theme.dark, &theme.light) else { continue };
+            let (Some(dark), Some(light)) = (&theme.dark, &theme.light) else {
+                continue;
+            };
             for key in SHADOW_KEYS {
                 let dark_value = &dark.base[*key];
                 let light_value = &light.base[*key];

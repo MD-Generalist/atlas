@@ -65,13 +65,18 @@ pub struct IconRequest {
 /// makes a prefixed association beat a bare one without a second pass.
 fn suffixes(path: &str) -> Vec<String> {
     let normalised = path.replace('\\', "/").to_lowercase();
-    let segments: Vec<&str> = normalised.split('/').filter(|segment| !segment.is_empty()).collect();
+    let segments: Vec<&str> = normalised
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect();
     // A deep absolute path would otherwise generate one candidate per ancestor
     // for every lookup, and no published theme prefixes more than two folders.
     // Four is slack over the observed maximum, not a guess at the format.
     const MAX_SEGMENTS: usize = 4;
     let start = segments.len().saturating_sub(MAX_SEGMENTS);
-    (start..segments.len()).map(|from| segments[from..].join("/")).collect()
+    (start..segments.len())
+        .map(|from| segments[from..].join("/"))
+        .collect()
 }
 
 /// The extensions of `name`, longest first: `a.test.ts` -> `test.ts`, `ts`.
@@ -215,7 +220,11 @@ pub fn resolve<'a>(
                 document,
                 &IconRequest {
                     path: request.path.clone(),
-                    kind: if expanded { IconKind::FolderExpanded } else { IconKind::Folder },
+                    kind: if expanded {
+                        IconKind::FolderExpanded
+                    } else {
+                        IconKind::Folder
+                    },
                     language_id: None,
                 },
                 appearance,
@@ -270,7 +279,11 @@ mod tests {
     fn pick(path: &str, kind: IconKind) -> Option<String> {
         resolve(
             &document(),
-            &IconRequest { path: path.into(), kind, language_id: None },
+            &IconRequest {
+                path: path.into(),
+                kind,
+                language_id: None,
+            },
             Appearance::Dark,
         )
         .map(str::to_string)
@@ -278,7 +291,10 @@ mod tests {
 
     #[test]
     fn file_names_beat_file_extensions() {
-        assert_eq!(pick("a/tsconfig.json", IconKind::File).as_deref(), Some("tsconfig"));
+        assert_eq!(
+            pick("a/tsconfig.json", IconKind::File).as_deref(),
+            Some("tsconfig")
+        );
     }
 
     #[test]
@@ -307,12 +323,18 @@ mod tests {
 
     #[test]
     fn falls_back_to_the_generic_file_icon() {
-        assert_eq!(pick("a/whatever.qqq", IconKind::File).as_deref(), Some("file"));
+        assert_eq!(
+            pick("a/whatever.qqq", IconKind::File).as_deref(),
+            Some("file")
+        );
     }
 
     #[test]
     fn a_parent_prefixed_file_name_beats_a_bare_one() {
-        assert_eq!(pick("x/graphqlrc", IconKind::File).as_deref(), Some("graphql"));
+        assert_eq!(
+            pick("x/graphqlrc", IconKind::File).as_deref(),
+            Some("graphql")
+        );
         assert_eq!(
             pick("x/.config/graphqlrc", IconKind::File).as_deref(),
             Some("graphql-config"),
@@ -322,7 +344,10 @@ mod tests {
 
     #[test]
     fn a_parent_prefixed_folder_name_beats_a_bare_one() {
-        assert_eq!(pick("repo/.github/workflows", IconKind::Folder).as_deref(), Some("workflows"));
+        assert_eq!(
+            pick("repo/.github/workflows", IconKind::Folder).as_deref(),
+            Some("workflows")
+        );
     }
 
     #[test]
@@ -345,7 +370,10 @@ mod tests {
     #[test]
     fn folders_use_their_expanded_association_when_open() {
         assert_eq!(pick("p/src", IconKind::Folder).as_deref(), Some("src"));
-        assert_eq!(pick("p/src", IconKind::FolderExpanded).as_deref(), Some("src-open"));
+        assert_eq!(
+            pick("p/src", IconKind::FolderExpanded).as_deref(),
+            Some("src-open")
+        );
     }
 
     #[test]
@@ -360,24 +388,43 @@ mod tests {
     #[test]
     fn generic_folders_use_the_open_icon_when_expanded() {
         assert_eq!(pick("p/plain", IconKind::Folder).as_deref(), Some("folder"));
-        assert_eq!(pick("p/plain", IconKind::FolderExpanded).as_deref(), Some("folder-open"));
+        assert_eq!(
+            pick("p/plain", IconKind::FolderExpanded).as_deref(),
+            Some("folder-open")
+        );
     }
 
     #[test]
     fn a_root_folder_uses_its_own_icon() {
-        assert_eq!(pick("/home/me/project", IconKind::RootFolder).as_deref(), Some("root"));
+        assert_eq!(
+            pick("/home/me/project", IconKind::RootFolder).as_deref(),
+            Some("root")
+        );
     }
 
     #[test]
     fn the_light_section_overrides_only_what_it_sets() {
         let doc = document();
-        let file = IconRequest { path: "a/x.qqq".into(), kind: IconKind::File, language_id: None };
-        let typescript =
-            IconRequest { path: "a/x.ts".into(), kind: IconKind::File, language_id: None };
-        let folder =
-            IconRequest { path: "a/src".into(), kind: IconKind::Folder, language_id: None };
+        let file = IconRequest {
+            path: "a/x.qqq".into(),
+            kind: IconKind::File,
+            language_id: None,
+        };
+        let typescript = IconRequest {
+            path: "a/x.ts".into(),
+            kind: IconKind::File,
+            language_id: None,
+        };
+        let folder = IconRequest {
+            path: "a/src".into(),
+            kind: IconKind::Folder,
+            language_id: None,
+        };
         assert_eq!(resolve(&doc, &file, Appearance::Light), Some("file-light"));
-        assert_eq!(resolve(&doc, &typescript, Appearance::Light), Some("ts-light"));
+        assert_eq!(
+            resolve(&doc, &typescript, Appearance::Light),
+            Some("ts-light")
+        );
         assert_eq!(
             resolve(&doc, &folder, Appearance::Light),
             Some("src"),
@@ -390,18 +437,31 @@ mod tests {
         // The failure this pins: running the whole chain against `light` first
         // would answer `ts-light` for a file the base section names outright.
         let doc = document();
-        let request =
-            IconRequest { path: "a/tsconfig.json".into(), kind: IconKind::File, language_id: None };
+        let request = IconRequest {
+            path: "a/tsconfig.json".into(),
+            kind: IconKind::File,
+            language_id: None,
+        };
         assert_eq!(resolve(&doc, &request, Appearance::Light), Some("tsconfig"));
     }
 
     #[test]
     fn high_contrast_overrides_fall_back_to_the_base_and_not_to_light() {
         let doc = document();
-        let typescript =
-            IconRequest { path: "a/x.ts".into(), kind: IconKind::File, language_id: None };
-        let other = IconRequest { path: "a/x.qqq".into(), kind: IconKind::File, language_id: None };
-        assert_eq!(resolve(&doc, &typescript, Appearance::HighContrast), Some("ts-hc"));
+        let typescript = IconRequest {
+            path: "a/x.ts".into(),
+            kind: IconKind::File,
+            language_id: None,
+        };
+        let other = IconRequest {
+            path: "a/x.qqq".into(),
+            kind: IconKind::File,
+            language_id: None,
+        };
+        assert_eq!(
+            resolve(&doc, &typescript, Appearance::HighContrast),
+            Some("ts-hc")
+        );
         assert_eq!(
             resolve(&doc, &other, Appearance::HighContrast),
             Some("file"),
@@ -417,13 +477,19 @@ mod tests {
             "test",
         )
         .expect("parses");
-        let request =
-            IconRequest { path: "a/x.qqq".into(), kind: IconKind::File, language_id: None };
+        let request = IconRequest {
+            path: "a/x.qqq".into(),
+            kind: IconKind::File,
+            language_id: None,
+        };
         assert_eq!(resolve(&doc, &request, Appearance::Dark), None);
     }
 
     #[test]
     fn windows_separators_resolve_the_same_as_posix_ones() {
-        assert_eq!(pick(r"repo\.github\workflows", IconKind::Folder).as_deref(), Some("workflows"));
+        assert_eq!(
+            pick(r"repo\.github\workflows", IconKind::Folder).as_deref(),
+            Some("workflows")
+        );
     }
 }

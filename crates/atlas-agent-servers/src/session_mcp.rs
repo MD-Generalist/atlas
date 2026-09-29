@@ -87,7 +87,10 @@ pub trait SessionMcpServers: Send + Sync {
     /// not a person). `None` — the default — leaves the card to the tool's own
     /// name and arguments. Boxed, because the trait is used as `dyn` and a
     /// description may have to ask the host's cloud.
-    fn describe_call(&self, call: CallToApprove<'_>) -> futures::future::BoxFuture<'static, Option<CallDescription>> {
+    fn describe_call(
+        &self,
+        call: CallToApprove<'_>,
+    ) -> futures::future::BoxFuture<'static, Option<CallDescription>> {
         let _ = call;
         Box::pin(async { None })
     }
@@ -150,7 +153,10 @@ impl OutwardConsent {
 
     /// Records that the user approved `call`.
     pub fn record(&self, call: CallToApprove<'_>) {
-        let mut approved = self.approved.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut approved = self
+            .approved
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         approved.retain(|a| a.at.elapsed() < CONSENT_LIFETIME);
         approved.push(ApprovedCall {
             session_id: call.session_id.to_string(),
@@ -163,12 +169,24 @@ impl OutwardConsent {
 
     /// Whether the user approved this call, spending the approval: `true`
     /// once per recorded approval, `false` for a call nobody asked about.
-    pub fn take(&self, session_id: &str, server: &str, tool: &str, arguments: &serde_json::Value) -> bool {
+    pub fn take(
+        &self,
+        session_id: &str,
+        server: &str,
+        tool: &str,
+        arguments: &serde_json::Value,
+    ) -> bool {
         let arguments = canonical(arguments);
-        let mut approved = self.approved.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut approved = self
+            .approved
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         approved.retain(|a| a.at.elapsed() < CONSENT_LIFETIME);
         let found = approved.iter().position(|a| {
-            a.session_id == session_id && a.server == server && a.tool == tool && a.arguments == arguments
+            a.session_id == session_id
+                && a.server == server
+                && a.tool == tool
+                && a.arguments == arguments
         });
         found.map(|i| approved.remove(i)).is_some()
     }
@@ -177,7 +195,9 @@ impl OutwardConsent {
 impl std::fmt::Debug for OutwardConsent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let pending = self.approved.lock().map_or(0, |a| a.len());
-        f.debug_struct("OutwardConsent").field("pending", &pending).finish()
+        f.debug_struct("OutwardConsent")
+            .field("pending", &pending)
+            .finish()
     }
 }
 
@@ -211,7 +231,11 @@ impl AskFirst {
     /// `tools` on the offered server named `server` ask first.
     #[must_use]
     pub fn on(mut self, server: &str, tools: &[&str]) -> Self {
-        self.tools.extend(tools.iter().map(|tool| (server.to_string(), (*tool).to_string())));
+        self.tools.extend(
+            tools
+                .iter()
+                .map(|tool| (server.to_string(), (*tool).to_string())),
+        );
         self
     }
 
@@ -234,19 +258,26 @@ impl AskFirst {
 
     /// The tools on `server` that ask first.
     pub fn tools_on<'a>(&'a self, server: &'a str) -> impl Iterator<Item = &'a str> + 'a {
-        self.tools.iter().filter(move |(s, _)| s == server).map(|(_, tool)| tool.as_str())
+        self.tools
+            .iter()
+            .filter(move |(s, _)| s == server)
+            .map(|(_, tool)| tool.as_str())
     }
 
     /// Every `(server, tool)` that asks on every call.
     pub fn every_time_tools(&self) -> impl Iterator<Item = (&str, &str)> + '_ {
-        self.every_time.iter().map(|(s, t)| (s.as_str(), t.as_str()))
+        self.every_time
+            .iter()
+            .map(|(s, t)| (s.as_str(), t.as_str()))
     }
 
     /// Whether `server`'s `tool` asks on every call — its card offers no
     /// "Allow for this session" (ADR-0014: a message's recipient and words
     /// are approved one call at a time).
     pub fn asks_every_time(&self, server: &str, tool: &str) -> bool {
-        self.every_time.iter().any(|(s, t)| s == server && t == tool)
+        self.every_time
+            .iter()
+            .any(|(s, t)| s == server && t == tool)
     }
 }
 
@@ -365,7 +396,9 @@ mod tests {
         let log = Arc::new(Mutex::new(Vec::new()));
         let sink = log.clone();
         (log, move |id: Option<&acp::SessionId>| {
-            sink.lock().unwrap().push(id.map(std::string::ToString::to_string));
+            sink.lock()
+                .unwrap()
+                .push(id.map(std::string::ToString::to_string));
         })
     }
 
@@ -383,8 +416,16 @@ mod tests {
         assert_eq!(*log.lock().unwrap(), vec![None]);
     }
 
-    fn approval<'a>(session: &'a acp::SessionId, arguments: &'a serde_json::Value) -> CallToApprove<'a> {
-        CallToApprove { session_id: session, server: "atlas_org", tool: "org_comment_reply", arguments }
+    fn approval<'a>(
+        session: &'a acp::SessionId,
+        arguments: &'a serde_json::Value,
+    ) -> CallToApprove<'a> {
+        CallToApprove {
+            session_id: session,
+            server: "atlas_org",
+            tool: "org_comment_reply",
+            arguments,
+        }
     }
 
     #[test]
@@ -395,28 +436,59 @@ mod tests {
         consent.record(approval(&session, &args));
 
         let other = serde_json::json!({ "comment": "k1", "body": "Something else." });
-        assert!(!consent.take("s-1", "atlas_org", "org_comment_reply", &other), "another body");
-        assert!(!consent.take("s-2", "atlas_org", "org_comment_reply", &args), "another session");
-        assert!(!consent.take("s-1", "atlas_org", "org_send", &args), "another tool");
+        assert!(
+            !consent.take("s-1", "atlas_org", "org_comment_reply", &other),
+            "another body"
+        );
+        assert!(
+            !consent.take("s-2", "atlas_org", "org_comment_reply", &args),
+            "another session"
+        );
+        assert!(
+            !consent.take("s-1", "atlas_org", "org_send", &args),
+            "another tool"
+        );
         let reordered = serde_json::json!({ "body": "Done.", "comment": "k1" });
-        assert!(consent.take("s-1", "atlas_org", "org_comment_reply", &reordered), "key order is not the call");
-        assert!(!consent.take("s-1", "atlas_org", "org_comment_reply", &args), "spent on use");
+        assert!(
+            consent.take("s-1", "atlas_org", "org_comment_reply", &reordered),
+            "key order is not the call"
+        );
+        assert!(
+            !consent.take("s-1", "atlas_org", "org_comment_reply", &args),
+            "spent on use"
+        );
     }
 
     #[test]
     fn a_call_nobody_approved_has_no_consent() {
         let consent = OutwardConsent::new();
-        assert!(!consent.take("s-1", "atlas_org", "org_comment_reply", &serde_json::json!({})));
+        assert!(!consent.take(
+            "s-1",
+            "atlas_org",
+            "org_comment_reply",
+            &serde_json::json!({})
+        ));
         let session = acp::SessionId::new("s-1");
         consent.record(approval(&session, &serde_json::Value::Null));
-        assert!(consent.take("s-1", "atlas_org", "org_comment_reply", &serde_json::json!({})), "none is empty");
+        assert!(
+            consent.take(
+                "s-1",
+                "atlas_org",
+                "org_comment_reply",
+                &serde_json::json!({})
+            ),
+            "none is empty"
+        );
     }
 
     #[test]
     fn an_offer_carries_the_tools_its_host_declared_ask_first_per_server() {
         let offer = SessionMcpOffer::new(vec![http("a"), http("b")], |_| {})
             .asking_first(AskFirst::none().on("b", &["send", "reply"]));
-        assert_eq!(offer.ask_first().tools_on("b").collect::<Vec<_>>(), ["send", "reply"]);
+        assert_eq!(
+            offer.ask_first().tools_on("b").collect::<Vec<_>>(),
+            ["send", "reply"]
+        );
         assert_eq!(offer.ask_first().tools_on("a").count(), 0);
         assert_eq!(SessionMcpOffer::none().ask_first(), &AskFirst::none());
     }
@@ -425,13 +497,21 @@ mod tests {
     /// whose card may not be allowed for the rest of the session.
     #[test]
     fn a_tool_declared_every_time_asks_first_and_has_no_session_allowance() {
-        let ask = AskFirst::none().on("b", &["send", "reply"]).every_time("b", &["send", "post"]);
-        assert_eq!(ask.tools_on("b").collect::<Vec<_>>(), ["send", "reply", "post"]);
+        let ask = AskFirst::none()
+            .on("b", &["send", "reply"])
+            .every_time("b", &["send", "post"]);
+        assert_eq!(
+            ask.tools_on("b").collect::<Vec<_>>(),
+            ["send", "reply", "post"]
+        );
         assert!(ask.asks_every_time("b", "send"));
         assert!(ask.asks_every_time("b", "post"));
         assert!(!ask.asks_every_time("b", "reply"));
         assert!(!ask.asks_every_time("a", "send"), "per server");
-        assert_eq!(ask.every_time_tools().collect::<Vec<_>>(), [("b", "send"), ("b", "post")]);
+        assert_eq!(
+            ask.every_time_tools().collect::<Vec<_>>(),
+            [("b", "send"), ("b", "post")]
+        );
     }
 
     #[test]

@@ -206,7 +206,13 @@ pub fn worktree_changes(repo: &Path) -> Option<std::collections::BTreeSet<String
 pub fn changed_between(repo: &Path, from: &str, to: &str) -> Option<Vec<ChangedPath>> {
     let out = run(
         repo,
-        &["diff", "--name-status", "-z", "-M", &format!("{from}..{to}")],
+        &[
+            "diff",
+            "--name-status",
+            "-z",
+            "-M",
+            &format!("{from}..{to}"),
+        ],
     )
     .ok()?;
     Some(parse_name_status(&out))
@@ -230,7 +236,11 @@ pub fn main_worktree(dir: &Path) -> Option<PathBuf> {
     let out = run(dir, &["rev-parse", "--git-common-dir"]).ok()?;
     let common = PathBuf::from(out.trim());
     // Relative output is relative to `dir` (`git -C dir`).
-    let common = if common.is_absolute() { common } else { dir.join(common) };
+    let common = if common.is_absolute() {
+        common
+    } else {
+        dir.join(common)
+    };
     let common = common.canonicalize().ok()?;
     if common.file_name().is_some_and(|n| n == ".git") {
         return common.parent().map(Path::to_path_buf);
@@ -316,7 +326,10 @@ pub fn is_reachable(repo: &Path, sha: &str) -> Result<bool> {
     }
 
     // `for-each-ref --contains` covers every ref — branches, tags, remotes.
-    let refs = run_status(repo, &["for-each-ref", "--format=%(refname)", "--contains", sha])?;
+    let refs = run_status(
+        repo,
+        &["for-each-ref", "--format=%(refname)", "--contains", sha],
+    )?;
     if refs.success {
         return Ok(!refs.stdout.trim().is_empty());
     }
@@ -347,7 +360,12 @@ pub fn commits_between(repo: &Path, from: Option<&str>, to: &str) -> Result<Vec<
         None => to.to_string(),
     };
     let out = run(repo, &["rev-list", "--first-parent", "--reverse", &range])?;
-    Ok(out.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect())
+    Ok(out
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect())
 }
 
 /// The most recent `limit` commits from HEAD, oldest first.
@@ -360,9 +378,21 @@ pub fn commits_between(repo: &Path, from: Option<&str>, to: &str) -> Result<Vec<
 pub fn recent_commits(repo: &Path, limit: usize) -> Result<Vec<String>> {
     let out = run(
         repo,
-        &["rev-list", "--first-parent", "--reverse", "--max-count", &limit.to_string(), "HEAD"],
+        &[
+            "rev-list",
+            "--first-parent",
+            "--reverse",
+            "--max-count",
+            &limit.to_string(),
+            "HEAD",
+        ],
     )?;
-    Ok(out.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect())
+    Ok(out
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect())
 }
 
 /// The repository's root commit — the identity that survives forks, folder
@@ -377,7 +407,11 @@ pub fn root_commit(repo: &Path) -> Option<String> {
     let out = run(repo, &["rev-list", "--max-parents=0", "HEAD"]).ok()?;
     // A repository with several root commits (a merged-in unrelated history)
     // has no single fingerprint. The last is the oldest.
-    out.lines().last().map(str::trim).map(str::to_string).filter(|s| !s.is_empty())
+    out.lines()
+        .last()
+        .map(str::trim)
+        .map(str::to_string)
+        .filter(|s| !s.is_empty())
 }
 
 /// Is this a shallow clone?
@@ -441,7 +475,12 @@ pub fn normalize_git_url(raw: &str) -> String {
 /// for them costs two `stat`s and turns "tolerate firing mid-rebase" from a hope
 /// into a guarantee.
 pub fn rewrite_in_progress(repo: &Path) -> bool {
-    const MARKERS: [&str; 4] = ["rebase-merge", "rebase-apply", "CHERRY_PICK_HEAD", "MERGE_HEAD"];
+    const MARKERS: [&str; 4] = [
+        "rebase-merge",
+        "rebase-apply",
+        "CHERRY_PICK_HEAD",
+        "MERGE_HEAD",
+    ];
 
     // Resolved through `rev-parse --git-path` rather than assuming `.git/<marker>`:
     // in a linked worktree the markers live under the worktree's private gitdir
@@ -452,10 +491,14 @@ pub fn rewrite_in_progress(repo: &Path) -> bool {
         repo,
         &[
             "rev-parse",
-            "--git-path", MARKERS[0],
-            "--git-path", MARKERS[1],
-            "--git-path", MARKERS[2],
-            "--git-path", MARKERS[3],
+            "--git-path",
+            MARKERS[0],
+            "--git-path",
+            MARKERS[1],
+            "--git-path",
+            MARKERS[2],
+            "--git-path",
+            MARKERS[3],
         ],
     ) {
         return out
@@ -488,8 +531,16 @@ pub fn rewrite_in_progress(repo: &Path) -> bool {
 /// would make that collision invisible and the re-match would confidently pick
 /// the one candidate it happened to see.
 pub fn recent_commits_all_refs(repo: &Path, limit: usize) -> Result<Vec<String>> {
-    let out = run(repo, &["rev-list", "--all", "--max-count", &limit.to_string()])?;
-    Ok(out.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect())
+    let out = run(
+        repo,
+        &["rev-list", "--all", "--max-count", &limit.to_string()],
+    )?;
+    Ok(out
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect())
 }
 
 /// Every reachable commit's patch-id, as `patch_id -> [commit, …]`.
@@ -502,7 +553,10 @@ pub fn recent_commits_all_refs(repo: &Path, limit: usize) -> Result<Vec<String>>
 /// Fallible on purpose. A failed scan must not be readable as an *empty* map —
 /// "no candidates" is what reconciliation turns into "no match, orphan", and a
 /// transient git failure must never orphan anything.
-pub fn patch_id_map(repo: &Path, limit: usize) -> Result<std::collections::HashMap<String, Vec<String>>> {
+pub fn patch_id_map(
+    repo: &Path,
+    limit: usize,
+) -> Result<std::collections::HashMap<String, Vec<String>>> {
     let mut map: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
     for commit in recent_commits_all_refs(repo, limit)? {
         // `None` for an empty diff, which is exactly right: the patch-id of an
@@ -531,9 +585,21 @@ pub fn merge_side_commits(
     let range = format!("{first_parent}..{side_parent}");
     let out = run(
         repo,
-        &["rev-list", "--no-merges", "--reverse", "--max-count", &limit.to_string(), &range],
+        &[
+            "rev-list",
+            "--no-merges",
+            "--reverse",
+            "--max-count",
+            &limit.to_string(),
+            &range,
+        ],
     )?;
-    Ok(out.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect())
+    Ok(out
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect())
 }
 
 /// The branches a commit is on.
@@ -541,7 +607,10 @@ pub fn merge_side_commits(
 /// Used to break a patch-id tie: the classic ambiguity is a cherry-pick, where
 /// the same diff is reachable at two commits on two branches.
 pub fn branches_containing(repo: &Path, sha: &str) -> Vec<String> {
-    let Ok(out) = run(repo, &["branch", "--format=%(refname:short)", "--contains", sha]) else {
+    let Ok(out) = run(
+        repo,
+        &["branch", "--format=%(refname:short)", "--contains", sha],
+    ) else {
         return Vec::new();
     };
     out.lines()
@@ -554,7 +623,15 @@ pub fn branches_containing(repo: &Path, sha: &str) -> Vec<String> {
 pub fn commit_info(repo: &Path, sha: &str) -> Result<CommitInfo> {
     // Unit-separator delimited so an author name containing the delimiter is
     // not a parsing hazard.
-    let out = run(repo, &["show", "--no-patch", "--format=%H%x1f%an%x1f%ae%x1f%P%x1f%ct%x1f%s", sha])?;
+    let out = run(
+        repo,
+        &[
+            "show",
+            "--no-patch",
+            "--format=%H%x1f%an%x1f%ae%x1f%P%x1f%ct%x1f%s",
+            sha,
+        ],
+    )?;
     let line = out.lines().next().unwrap_or_default();
     let mut fields = line.split('\x1f');
 
@@ -572,7 +649,10 @@ pub fn commit_info(repo: &Path, sha: &str) -> Result<CommitInfo> {
         // bound then refuses to link this commit to any Session rather than
         // linking it to all of them — a missing link is recoverable, a wrong
         // one corrupts a shared timeline.
-        commit_time: fields.next().and_then(|f| f.trim().parse().ok()).unwrap_or(0),
+        commit_time: fields
+            .next()
+            .and_then(|f| f.trim().parse().ok())
+            .unwrap_or(0),
         subject: fields.next().unwrap_or_default().to_string(),
     })
 }
@@ -713,7 +793,9 @@ fn head_tracked_set(repo: &Path) -> Option<std::sync::Arc<std::collections::Hash
     let head_mtime = mtime(git_dir.join("HEAD"))?;
     let index_mtime = mtime(git_dir.join("index"))?;
 
-    let mut cache = CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut cache = CACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if let Some(entry) = cache.get(repo) {
         if entry.head_mtime == head_mtime && entry.index_mtime == index_mtime {
             return Some(entry.paths.clone());
@@ -893,7 +975,10 @@ mod tests {
         assert_eq!(changed.len(), 1);
         assert_eq!(changed[0].path, "index.html");
         assert!(!changed[0].kind.existed_in_parent());
-        assert_eq!(commits_between(repo.path(), None, &root).unwrap(), vec![root]);
+        assert_eq!(
+            commits_between(repo.path(), None, &root).unwrap(),
+            vec![root]
+        );
     }
 
     #[test]
@@ -936,7 +1021,12 @@ mod tests {
         repo.commit_all("initial");
         let holder = tempfile::tempdir().unwrap();
         let bare = holder.path().join("repo.git");
-        repo.git(&["clone", "--bare", repo.path().to_str().unwrap(), bare.to_str().unwrap()]);
+        repo.git(&[
+            "clone",
+            "--bare",
+            repo.path().to_str().unwrap(),
+            bare.to_str().unwrap(),
+        ]);
         let one = holder.path().join("one");
         let two = holder.path().join("two");
         for (wt, branch) in [(&one, "b1"), (&two, "b2")] {
@@ -946,7 +1036,11 @@ mod tests {
                 .args(["worktree", "add", "-b", branch, wt.to_str().unwrap()])
                 .output()
                 .unwrap();
-            assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
         }
         let expected = bare.canonicalize().unwrap();
         assert_eq!(scope_root(&one), expected);
@@ -1025,7 +1119,9 @@ mod tests {
         repo.commit_all("initial");
         repo.write("my notes.txt", "hello");
 
-        assert!(worktree_changes(repo.path()).unwrap().contains("my notes.txt"));
+        assert!(worktree_changes(repo.path())
+            .unwrap()
+            .contains("my notes.txt"));
     }
 
     /// Not a repository is not an error — it is "no answer", and the caller
@@ -1074,8 +1170,12 @@ mod tests {
         let repo = TestRepo::new();
         repo.write("a.txt", "x");
         let head = repo.commit_all("seed");
-        assert!(changed_between(repo.path(), "0000000000000000000000000000000000000000", &head)
-            .is_none());
+        assert!(changed_between(
+            repo.path(),
+            "0000000000000000000000000000000000000000",
+            &head
+        )
+        .is_none());
     }
 
     #[test]
@@ -1373,8 +1473,14 @@ mod tests {
         };
         std::fs::create_dir_all(&marker_path).unwrap();
 
-        assert!(rewrite_in_progress(&wt), "the worktree's own markers must count");
-        assert!(!rewrite_in_progress(repo.path()), "the main worktree is not rebasing");
+        assert!(
+            rewrite_in_progress(&wt),
+            "the worktree's own markers must count"
+        );
+        assert!(
+            !rewrite_in_progress(repo.path()),
+            "the main worktree is not rebasing"
+        );
     }
 
     #[test]
@@ -1463,7 +1569,9 @@ mod tests {
             "the first-parent scan follows only the current branch"
         );
         assert!(
-            recent_commits_all_refs(repo.path(), 50).unwrap().contains(&side),
+            recent_commits_all_refs(repo.path(), 50)
+                .unwrap()
+                .contains(&side),
             "the all-refs scan must see it"
         );
     }
@@ -1533,7 +1641,12 @@ mod tests {
         let repo = TestRepo::new();
         repo.write("a", "1");
         repo.commit_all("initial");
-        repo.git(&["remote", "add", "origin", "git@github.com:tryatlas/atlas.git"]);
+        repo.git(&[
+            "remote",
+            "add",
+            "origin",
+            "git@github.com:tryatlas/atlas.git",
+        ]);
         assert_eq!(
             origin_url(repo.path()).as_deref(),
             Some("github.com/tryatlas/atlas")

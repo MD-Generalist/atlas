@@ -22,7 +22,10 @@ const BUILD_AUTH_BASE: Option<&str> = option_env!("ATLAS_AUTH_URL");
 
 /// The auth API base, with no trailing slash.
 pub fn auth_base() -> String {
-    resolve_auth_base(std::env::var("ATLAS_AUTH_URL").ok().as_deref(), BUILD_AUTH_BASE)
+    resolve_auth_base(
+        std::env::var("ATLAS_AUTH_URL").ok().as_deref(),
+        BUILD_AUTH_BASE,
+    )
 }
 
 /// The resolution ladder with its inputs passed in, so tests can exercise it

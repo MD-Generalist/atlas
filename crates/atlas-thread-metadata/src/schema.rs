@@ -303,7 +303,10 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(retired, 0, "rows under the retired id are dropped, not aliased");
+        assert_eq!(
+            retired, 0,
+            "rows under the retired id are dropped, not aliased"
+        );
         let kept: i64 = conn
             .query_row("SELECT COUNT(*) FROM threads", [], |r| r.get(0))
             .unwrap();
@@ -311,7 +314,10 @@ mod tests {
         let marker: i64 = conn
             .query_row("SELECT COUNT(*) FROM backfilled_agents", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(marker, 0, "the retired id's backfill marker goes with its rows");
+        assert_eq!(
+            marker, 0,
+            "the retired id's backfill marker goes with its rows"
+        );
     }
 
     #[test]

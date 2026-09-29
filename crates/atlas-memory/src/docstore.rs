@@ -53,7 +53,8 @@ impl DocStore {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let json = serde_json::to_vec_pretty(self).map_err(|e| anyhow!("serialize docstore: {e}"))?;
+        let json =
+            serde_json::to_vec_pretty(self).map_err(|e| anyhow!("serialize docstore: {e}"))?;
         let mut tmp = path.as_os_str().to_owned();
         tmp.push(".tmp");
         let tmp = std::path::PathBuf::from(tmp);

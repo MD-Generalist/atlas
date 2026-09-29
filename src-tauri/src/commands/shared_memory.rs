@@ -33,7 +33,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use atlas_memory::record::{self, Embedder, Entry, EntryKind, NewEntry, NewEvent, Origin, RecordStore, Remembered};
+use atlas_memory::record::{
+    self, Embedder, Entry, EntryKind, NewEntry, NewEvent, Origin, RecordStore, Remembered,
+};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -236,8 +238,14 @@ fn read_state(store: &RecordStore) -> anyhow::Result<SharedState> {
                 summary: e.content,
             })
             .collect(),
-        facts: list(EntryKind::Fact, record::CAP_FACTS)?.into_iter().map(fact_view).collect(),
-        failures: list(EntryKind::Failure, record::CAP_FAILURES)?.into_iter().map(fact_view).collect(),
+        facts: list(EntryKind::Fact, record::CAP_FACTS)?
+            .into_iter()
+            .map(fact_view)
+            .collect(),
+        failures: list(EntryKind::Failure, record::CAP_FAILURES)?
+            .into_iter()
+            .map(fact_view)
+            .collect(),
         architecture: list(EntryKind::Architecture, record::CAP_ARCHITECTURE)?
             .into_iter()
             .map(fact_view)
@@ -608,7 +616,10 @@ impl SharedMemoryStore {
     /// Substring/keyword search over the event log (newest-first, capped).
     pub fn query(&self, project_path: &str, query: &str, limit: usize) -> Vec<MemoryEvent> {
         store_for(project_path)
-            .and_then(|s| s.search_events(query, limit.max(1)).map_err(|e| format!("{e:#}")))
+            .and_then(|s| {
+                s.search_events(query, limit.max(1))
+                    .map_err(|e| format!("{e:#}"))
+            })
             .map(|rows| rows.into_iter().map(MemoryEvent::from).collect())
             .unwrap_or_default()
     }
@@ -713,7 +724,10 @@ impl SharedMemoryStore {
         confidence: f64,
     ) -> Result<Remembered, String> {
         if !kind.is_durable() {
-            return Err(format!("the extractor records only durable kinds, not `{}`", kind.as_str()));
+            return Err(format!(
+                "the extractor records only durable kinds, not `{}`",
+                kind.as_str()
+            ));
         }
         if content.trim().is_empty() {
             return Err("nothing to record: content is empty".into());
@@ -760,14 +774,25 @@ impl SharedMemoryStore {
     /// is no such entry.
     pub fn get_entry(&self, project_path: &str, id: i64) -> Result<Option<Entry>, String> {
         let store = store_for(project_path)?;
-        store.get(id, (self.inner.clock)()).map_err(|e| format!("{e:#}"))
+        store
+            .get(id, (self.inner.clock)())
+            .map_err(|e| format!("{e:#}"))
     }
 
     /// Entries relevant to `query` (`memory_search`), best first. Degrades to
     /// empty when the record can't be read.
-    pub fn search_entries(&self, project_path: &str, query: &str, kinds: &[EntryKind], limit: usize) -> Vec<Entry> {
+    pub fn search_entries(
+        &self,
+        project_path: &str,
+        query: &str,
+        kinds: &[EntryKind],
+        limit: usize,
+    ) -> Vec<Entry> {
         store_for(project_path)
-            .and_then(|s| s.search(query, kinds, limit.max(1), (self.inner.clock)()).map_err(|e| format!("{e:#}")))
+            .and_then(|s| {
+                s.search(query, kinds, limit.max(1), (self.inner.clock)())
+                    .map_err(|e| format!("{e:#}"))
+            })
             .unwrap_or_else(|e| {
                 tracing::warn!(target: "atlas::shared_memory", "search failed: {e}");
                 Vec::new()
@@ -813,7 +838,11 @@ impl SharedMemoryStore {
     /// Every entry with its provenance and confidence, each kind capped at its
     /// display limit, newest write first.
     pub fn entries(&self, project_path: &str) -> Vec<MemoryEntry> {
-        let mut out: Vec<MemoryEntry> = self.list_entries(project_path, None).into_iter().map(MemoryEntry::from).collect();
+        let mut out: Vec<MemoryEntry> = self
+            .list_entries(project_path, None)
+            .into_iter()
+            .map(MemoryEntry::from)
+            .collect();
         out.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then(b.id.cmp(&a.id)));
         out
     }
@@ -821,7 +850,12 @@ impl SharedMemoryStore {
     /// The user's edit of entry `id` from the Memory panel: new content,
     /// source `user`, confidence 1.0, logged and announced (see
     /// [`RecordStore::edit`]). An error when there is no such entry.
-    pub fn edit_entry(&self, project_path: &str, id: i64, content: &str) -> Result<MemoryEntry, String> {
+    pub fn edit_entry(
+        &self,
+        project_path: &str,
+        id: i64,
+        content: &str,
+    ) -> Result<MemoryEntry, String> {
         let store = store_for(project_path)?;
         let edited = store
             .edit(id, content, USER_SOURCE, (self.inner.clock)())
@@ -1001,12 +1035,19 @@ mod tests {
     use super::*;
 
     fn temp_project(label: &str) -> String {
-        let dir = std::env::temp_dir().join(format!("atlas-shared-{label}-{}", uuid::Uuid::new_v4()));
+        let dir =
+            std::env::temp_dir().join(format!("atlas-shared-{label}-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         dir.to_string_lossy().to_string()
     }
 
-    fn append(store: &SharedMemoryStore, p: &str, kind: EventKind, key: &str, payload: serde_json::Value) {
+    fn append(
+        store: &SharedMemoryStore,
+        p: &str,
+        kind: EventKind,
+        key: &str,
+        payload: serde_json::Value,
+    ) {
         store
             .append_event(
                 p,
@@ -1022,8 +1063,17 @@ mod tests {
     }
 
     fn git(dir: &Path, args: &[&str]) {
-        let out = atlas_process::command("git").arg("-C").arg(dir).args(args).output().unwrap();
-        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        let out = atlas_process::command("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
     }
 
     /// Scope is the repository: a decision recorded from one worktree is in
@@ -1033,9 +1083,26 @@ mod tests {
     fn two_worktrees_share_one_memory() {
         let main = PathBuf::from(temp_project("wt-main"));
         git(&main, &["init", "--initial-branch=main"]);
-        git(&main, &["-c", "user.name=t", "-c", "user.email=t@e", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "init"]);
+        git(
+            &main,
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@e",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "init",
+            ],
+        );
         let linked = PathBuf::from(temp_project("wt-linked-parent")).join("feature");
-        git(&main, &["worktree", "add", "-b", "feature", linked.to_str().unwrap()]);
+        git(
+            &main,
+            &["worktree", "add", "-b", "feature", linked.to_str().unwrap()],
+        );
         // The linked worktree had its own JSONL store before the record store.
         std::fs::create_dir_all(linked.join(".atlas/shared-memory")).unwrap();
         std::fs::write(
@@ -1045,12 +1112,27 @@ mod tests {
         .unwrap();
 
         let store = SharedMemoryStore::new();
-        let (m, l) = (main.to_string_lossy().to_string(), linked.to_string_lossy().to_string());
-        append(&store, &l, EventKind::Decision, "db", serde_json::json!({"text": "Postgres"}));
-        assert!(Arc::ptr_eq(&store_for(&m).unwrap(), &store_for(&l).unwrap()));
+        let (m, l) = (
+            main.to_string_lossy().to_string(),
+            linked.to_string_lossy().to_string(),
+        );
+        append(
+            &store,
+            &l,
+            EventKind::Decision,
+            "db",
+            serde_json::json!({"text": "Postgres"}),
+        );
+        assert!(Arc::ptr_eq(
+            &store_for(&m).unwrap(),
+            &store_for(&l).unwrap()
+        ));
         let seen_from_main = store.get_state(&m);
         assert_eq!(seen_from_main.decisions.len(), 1);
-        assert_eq!(seen_from_main.facts[0].text, "legacy fact from the worktree");
+        assert_eq!(
+            seen_from_main.facts[0].text,
+            "legacy fact from the worktree"
+        );
         // The store lives in the main worktree.
         assert!(main.join(".atlas/memory").join(record::DB_FILE).exists());
         assert!(!linked.join(".atlas/memory").join(record::DB_FILE).exists());
@@ -1061,16 +1143,40 @@ mod tests {
     fn a_non_git_directory_is_its_own_scope() {
         let p = temp_project("non-git");
         let store = SharedMemoryStore::new();
-        append(&store, &p, EventKind::Fact, "", serde_json::json!({"text": "here"}));
-        assert!(Path::new(&p).join(".atlas/memory").join(record::DB_FILE).exists());
-        assert_eq!(store_for(&p).unwrap().root(), Path::new(&p).canonicalize().unwrap());
+        append(
+            &store,
+            &p,
+            EventKind::Fact,
+            "",
+            serde_json::json!({"text": "here"}),
+        );
+        assert!(Path::new(&p)
+            .join(".atlas/memory")
+            .join(record::DB_FILE)
+            .exists());
+        assert_eq!(
+            store_for(&p).unwrap().root(),
+            Path::new(&p).canonicalize().unwrap()
+        );
     }
 
     #[test]
     fn plan_set_supersedes() {
         let (store, p) = (SharedMemoryStore::new(), temp_project("plan"));
-        append(&store, &p, EventKind::PlanSet, "plan", serde_json::json!({"text": "Plan A"}));
-        append(&store, &p, EventKind::PlanSet, "plan", serde_json::json!({"text": "Plan B"}));
+        append(
+            &store,
+            &p,
+            EventKind::PlanSet,
+            "plan",
+            serde_json::json!({"text": "Plan A"}),
+        );
+        append(
+            &store,
+            &p,
+            EventKind::PlanSet,
+            "plan",
+            serde_json::json!({"text": "Plan B"}),
+        );
         let s = store.get_state(&p);
         assert_eq!(s.active_plan.unwrap().text, "Plan B");
         assert_eq!(s.last_seq, 2);
@@ -1079,40 +1185,110 @@ mod tests {
     #[test]
     fn plan_abandoned_clears() {
         let (store, p) = (SharedMemoryStore::new(), temp_project("plan-done"));
-        append(&store, &p, EventKind::PlanSet, "plan", serde_json::json!({"text": "Plan A"}));
-        append(&store, &p, EventKind::PlanSet, "plan", serde_json::json!({"text": "Plan A", "status": "done"}));
+        append(
+            &store,
+            &p,
+            EventKind::PlanSet,
+            "plan",
+            serde_json::json!({"text": "Plan A"}),
+        );
+        append(
+            &store,
+            &p,
+            EventKind::PlanSet,
+            "plan",
+            serde_json::json!({"text": "Plan A", "status": "done"}),
+        );
         assert!(store.get_state(&p).active_plan.is_none());
     }
 
     #[test]
     fn decision_supersedes_by_key() {
         let (store, p) = (SharedMemoryStore::new(), temp_project("decision-key"));
-        append(&store, &p, EventKind::Decision, "auth.alg", serde_json::json!({"text": "HS256"}));
-        append(&store, &p, EventKind::Decision, "auth.alg", serde_json::json!({"text": "RS256"}));
-        append(&store, &p, EventKind::Decision, "db", serde_json::json!({"text": "Postgres"}));
+        append(
+            &store,
+            &p,
+            EventKind::Decision,
+            "auth.alg",
+            serde_json::json!({"text": "HS256"}),
+        );
+        append(
+            &store,
+            &p,
+            EventKind::Decision,
+            "auth.alg",
+            serde_json::json!({"text": "RS256"}),
+        );
+        append(
+            &store,
+            &p,
+            EventKind::Decision,
+            "db",
+            serde_json::json!({"text": "Postgres"}),
+        );
         let s = store.get_state(&p);
         assert_eq!(s.decisions.len(), 2);
-        assert!(s.decisions.iter().any(|d| d.key == "auth.alg" && d.text == "RS256"));
+        assert!(s
+            .decisions
+            .iter()
+            .any(|d| d.key == "auth.alg" && d.text == "RS256"));
         assert!(!s.decisions.iter().any(|d| d.text == "HS256"));
     }
 
     #[test]
     fn decision_dedup_by_text_when_keyless() {
         let (store, p) = (SharedMemoryStore::new(), temp_project("decision-text"));
-        append(&store, &p, EventKind::Decision, "", serde_json::json!({"text": "Use   RS256"}));
-        append(&store, &p, EventKind::Decision, "", serde_json::json!({"text": "use rs256"}));
+        append(
+            &store,
+            &p,
+            EventKind::Decision,
+            "",
+            serde_json::json!({"text": "Use   RS256"}),
+        );
+        append(
+            &store,
+            &p,
+            EventKind::Decision,
+            "",
+            serde_json::json!({"text": "use rs256"}),
+        );
         assert_eq!(store.get_state(&p).decisions.len(), 1);
     }
 
     #[test]
     fn file_changed_dedups_by_path() {
         let (store, p) = (SharedMemoryStore::new(), temp_project("files"));
-        append(&store, &p, EventKind::FileChanged, "", serde_json::json!({"path": "a.ts", "summary": "x"}));
-        append(&store, &p, EventKind::FileChanged, "", serde_json::json!({"path": "a.ts", "summary": "y"}));
-        append(&store, &p, EventKind::FileChanged, "", serde_json::json!({"path": "b.ts", "summary": "z"}));
+        append(
+            &store,
+            &p,
+            EventKind::FileChanged,
+            "",
+            serde_json::json!({"path": "a.ts", "summary": "x"}),
+        );
+        append(
+            &store,
+            &p,
+            EventKind::FileChanged,
+            "",
+            serde_json::json!({"path": "a.ts", "summary": "y"}),
+        );
+        append(
+            &store,
+            &p,
+            EventKind::FileChanged,
+            "",
+            serde_json::json!({"path": "b.ts", "summary": "z"}),
+        );
         let s = store.get_state(&p);
         assert_eq!(s.recent_changes.len(), 2);
-        assert_eq!(s.recent_changes.iter().find(|c| c.path == "a.ts").unwrap().summary, "y");
+        assert_eq!(
+            s.recent_changes
+                .iter()
+                .find(|c| c.path == "a.ts")
+                .unwrap()
+                .summary,
+            "y"
+        );
     }
 
     #[test]
@@ -1129,11 +1305,20 @@ mod tests {
     fn decision_display_caps_length() {
         let (store, p) = (SharedMemoryStore::new(), temp_project("caps"));
         for i in 1..=record::CAP_DECISIONS + 10 {
-            append(&store, &p, EventKind::Decision, &format!("k{i}"), serde_json::json!({"text": format!("d{i}")}));
+            append(
+                &store,
+                &p,
+                EventKind::Decision,
+                &format!("k{i}"),
+                serde_json::json!({"text": format!("d{i}")}),
+            );
         }
         assert_eq!(store.get_state(&p).decisions.len(), record::CAP_DECISIONS);
         // Storage keeps every one of them.
-        assert_eq!(store_for(&p).unwrap().count(EntryKind::Decision).unwrap(), record::CAP_DECISIONS + 10);
+        assert_eq!(
+            store_for(&p).unwrap().count(EntryKind::Decision).unwrap(),
+            record::CAP_DECISIONS + 10
+        );
     }
 
     /// Every writer announces its write: a manual append, a session's start
@@ -1147,14 +1332,24 @@ mod tests {
             Arc::new(move |change: &MemoryChanged| heard.lock().push(change.clone()))
         });
 
-        append(&store, &p, EventKind::Decision, "db", serde_json::json!({"text": "Postgres"}));
+        append(
+            &store,
+            &p,
+            EventKind::Decision,
+            "db",
+            serde_json::json!({"text": "Postgres"}),
+        );
         store.session_started("s9", "codex", &p);
         store.session_started("s9", "codex", &p); // a rebind: already live, no second start
         store.session_ended("s9");
         store.session_ended("s9"); // already ended: no write, no announcement
         store.clear(&p).unwrap();
 
-        let root = Path::new(&p).canonicalize().unwrap().to_string_lossy().into_owned();
+        let root = Path::new(&p)
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
         let heard = heard.lock().clone();
         assert!(heard.iter().all(|c| c.root == root), "{heard:?}");
         let kinds: Vec<Vec<String>> = heard.into_iter().map(|c| c.kinds).collect();
@@ -1164,9 +1359,17 @@ mod tests {
                 vec!["decision".to_string()],
                 vec!["session".to_string()],
                 vec!["session".to_string()],
-                ["plan", "decision", "file_changed", "fact", "failure", "architecture", "session"]
-                    .map(String::from)
-                    .to_vec(),
+                [
+                    "plan",
+                    "decision",
+                    "file_changed",
+                    "fact",
+                    "failure",
+                    "architecture",
+                    "session"
+                ]
+                .map(String::from)
+                .to_vec(),
             ]
         );
     }
@@ -1179,7 +1382,10 @@ mod tests {
         assert!(store.session_ended("never-started").is_none());
         store.session_started("s1", "codex", &p);
         let ended = store.session_ended("s1").expect("a started session ends");
-        assert_eq!((ended.cwd.as_str(), ended.agent.as_str()), (p.as_str(), "codex"));
+        assert_eq!(
+            (ended.cwd.as_str(), ended.agent.as_str()),
+            (p.as_str(), "codex")
+        );
         assert!(store.session_ended("s1").is_none());
     }
 
@@ -1198,17 +1404,35 @@ mod tests {
     }
 
     fn writer(agent: &str) -> Writer {
-        Writer { agent: agent.into(), session_id: format!("{agent}-s") }
+        Writer {
+            agent: agent.into(),
+            session_id: format!("{agent}-s"),
+        }
     }
 
     /// Every entry on the Shared tab says who wrote it and how sure it is:
     /// an agent's capture, the extractor's model confidence, an import.
     #[test]
     fn entries_carry_provenance_and_confidence() {
-        let (store, p) = (SharedMemoryStore::with_clock(Arc::new(|| 7_000)), temp_project("provenance"));
-        append(&store, &p, EventKind::Decision, "db", serde_json::json!({"text": "Postgres"}));
+        let (store, p) = (
+            SharedMemoryStore::with_clock(Arc::new(|| 7_000)),
+            temp_project("provenance"),
+        );
+        append(
+            &store,
+            &p,
+            EventKind::Decision,
+            "db",
+            serde_json::json!({"text": "Postgres"}),
+        );
         store
-            .record_extracted(&p, &writer("codex"), EntryKind::Failure, "Mocking the DB hid a migration bug", 0.6)
+            .record_extracted(
+                &p,
+                &writer("codex"),
+                EntryKind::Failure,
+                "Mocking the DB hid a migration bug",
+                0.6,
+            )
             .unwrap();
         store_for(&p)
             .unwrap()
@@ -1225,21 +1449,53 @@ mod tests {
             .unwrap();
 
         let entries = store.entries(&p);
-        let by = |content: &str| entries.iter().find(|e| e.content == content).unwrap().clone();
+        let by = |content: &str| {
+            entries
+                .iter()
+                .find(|e| e.content == content)
+                .unwrap()
+                .clone()
+        };
         let decision = by("Postgres");
         assert_eq!(
-            (decision.source.as_str(), decision.agent.as_str(), decision.confidence),
+            (
+                decision.source.as_str(),
+                decision.agent.as_str(),
+                decision.confidence
+            ),
             ("claude-code", "claude-code", 1.0)
         );
         let failure = by("Mocking the DB hid a migration bug");
-        assert_eq!((failure.source.as_str(), failure.agent.as_str(), failure.confidence), ("extractor", "codex", 0.6));
+        assert_eq!(
+            (
+                failure.source.as_str(),
+                failure.agent.as_str(),
+                failure.confidence
+            ),
+            ("extractor", "codex", 0.6)
+        );
         let fact = by("Prefers small PRs");
-        assert_eq!((fact.source.as_str(), fact.agent.as_str(), fact.confidence), ("import:claude", "", 0.7));
+        assert_eq!(
+            (fact.source.as_str(), fact.agent.as_str(), fact.confidence),
+            ("import:claude", "", 0.7)
+        );
         // Newest write first.
         assert_eq!(entries[0].content, "Mocking the DB hid a migration bug");
 
         let json = serde_json::to_value(&failure).unwrap();
-        for field in ["id", "kind", "key", "content", "source", "agent", "sessionId", "confidence", "createdAt", "updatedAt", "uses"] {
+        for field in [
+            "id",
+            "kind",
+            "key",
+            "content",
+            "source",
+            "agent",
+            "sessionId",
+            "confidence",
+            "createdAt",
+            "updatedAt",
+            "uses",
+        ] {
             assert!(json.get(field).is_some(), "missing {field}: {json}");
         }
         assert_eq!(json["kind"], "failure");
@@ -1256,15 +1512,37 @@ mod tests {
             let heard = heard.clone();
             Arc::new(move |change: &MemoryChanged| heard.lock().push(change.clone()))
         });
-        append(&store, &p, EventKind::Decision, "auth.alg", serde_json::json!({"text": "HS256"}));
+        append(
+            &store,
+            &p,
+            EventKind::Decision,
+            "auth.alg",
+            serde_json::json!({"text": "HS256"}),
+        );
         let id = store.entries(&p)[0].id;
 
         let edited = store.edit_entry(&p, id, "RS256").unwrap();
-        assert_eq!((edited.content.as_str(), edited.source.as_str(), edited.confidence), ("RS256", "user", 1.0));
+        assert_eq!(
+            (
+                edited.content.as_str(),
+                edited.source.as_str(),
+                edited.confidence
+            ),
+            ("RS256", "user", 1.0)
+        );
         let state = store.get_state(&p);
         assert_eq!(state.decisions.len(), 1);
-        assert_eq!((state.decisions[0].text.as_str(), state.decisions[0].agent.as_str()), ("RS256", "user"));
-        assert_eq!(heard.lock().last().unwrap().kinds, vec!["decision".to_string()]);
+        assert_eq!(
+            (
+                state.decisions[0].text.as_str(),
+                state.decisions[0].agent.as_str()
+            ),
+            ("RS256", "user")
+        );
+        assert_eq!(
+            heard.lock().last().unwrap().kinds,
+            vec!["decision".to_string()]
+        );
 
         assert!(store.edit_entry(&p, 9_999, "x").is_err(), "no such entry");
     }
@@ -1274,18 +1552,47 @@ mod tests {
     #[test]
     fn forgetting_an_entry_removes_it_from_state_and_search() {
         let (store, p) = (SharedMemoryStore::new(), temp_project("user-forget"));
-        append(&store, &p, EventKind::Fact, "", serde_json::json!({"text": "The staging DB is on port 6543"}));
-        append(&store, &p, EventKind::Fact, "", serde_json::json!({"text": "Deploys go through Fly"}));
-        let id = store.entries(&p).iter().find(|e| e.content.contains("6543")).unwrap().id;
+        append(
+            &store,
+            &p,
+            EventKind::Fact,
+            "",
+            serde_json::json!({"text": "The staging DB is on port 6543"}),
+        );
+        append(
+            &store,
+            &p,
+            EventKind::Fact,
+            "",
+            serde_json::json!({"text": "Deploys go through Fly"}),
+        );
+        let id = store
+            .entries(&p)
+            .iter()
+            .find(|e| e.content.contains("6543"))
+            .unwrap()
+            .id;
 
         assert!(store.forget_entry(&p, id).unwrap());
         assert!(!store.forget_entry(&p, id).unwrap(), "already gone");
 
         let state = store.get_state(&p);
-        assert_eq!(state.facts.iter().map(|f| f.text.as_str()).collect::<Vec<_>>(), vec!["Deploys go through Fly"]);
+        assert_eq!(
+            state
+                .facts
+                .iter()
+                .map(|f| f.text.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Deploys go through Fly"]
+        );
         assert!(store.query(&p, "6543", 20).is_empty());
-        assert!(store.search_entries(&p, "staging port 6543", &[], 10).is_empty());
-        assert!(durable_entries(&p).1.iter().all(|e| !e.content.contains("6543")));
+        assert!(store
+            .search_entries(&p, "staging port 6543", &[], 10)
+            .is_empty());
+        assert!(durable_entries(&p)
+            .1
+            .iter()
+            .all(|e| !e.content.contains("6543")));
         assert!(store.entries(&p).iter().all(|e| e.id != id));
         // The rest of the tab is untouched.
         assert_eq!(store.query(&p, "fly", 20).len(), 1);
@@ -1307,6 +1614,9 @@ mod tests {
             )
             .unwrap();
         let s = store.get_state(&p);
-        assert_eq!(s.session_agents.get("abc").map(std::string::String::as_str), Some("codex"));
+        assert_eq!(
+            s.session_agents.get("abc").map(std::string::String::as_str),
+            Some("codex")
+        );
     }
 }

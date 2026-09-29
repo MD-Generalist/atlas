@@ -33,7 +33,6 @@ pub struct RetrievedDoc {
     pub text: String,
 }
 
-
 /// Retrieve up to `top_k` index docs relevant to `query`, via the fused
 /// `MemoryEngine`: HNSW (embedding, primary) + graph (down-weighted),
 /// RRF-fused and Jaccard-deduped behind the engine. The memory tool server's
@@ -110,7 +109,6 @@ async fn retrieve_engine(
         .collect()
 }
 
-
 /// How long `memory_forget` will wait for the index write lock before giving
 /// up on evicting the document itself.
 const EVICT_LOCK_TIMEOUT_SECS: u64 = 2;
@@ -130,11 +128,8 @@ const EVICT_LOCK_TIMEOUT_SECS: u64 = 2;
 pub async fn evict_doc(app: &AppHandle, project_path: &str, doc_id: &str) -> bool {
     let registry = app.state::<Arc<MemoryRegistry>>();
     let engine = registry.engine_for(project_path);
-    let Ok(mut guard) = tokio::time::timeout(
-        Duration::from_secs(EVICT_LOCK_TIMEOUT_SECS),
-        engine.write(),
-    )
-    .await
+    let Ok(mut guard) =
+        tokio::time::timeout(Duration::from_secs(EVICT_LOCK_TIMEOUT_SECS), engine.write()).await
     else {
         tracing::warn!(
             target: "atlas::shared_memory",

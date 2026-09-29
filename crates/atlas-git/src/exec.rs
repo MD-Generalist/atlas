@@ -151,7 +151,11 @@ impl GitCommand {
         let display = self.display();
         let mut cmd = self.command();
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
-        cmd.stdin(if self.stdin.is_some() { Stdio::piped() } else { Stdio::null() });
+        cmd.stdin(if self.stdin.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        });
 
         let mut child = cmd.spawn().map_err(|e| spawn_error(&display, &e))?;
 
@@ -176,7 +180,11 @@ impl GitCommand {
         let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
 
         if self.success_exit_codes.contains(&exit_code) {
-            Ok(GitOutput { exit_code, stdout, stderr })
+            Ok(GitOutput {
+                exit_code,
+                stdout,
+                stderr,
+            })
         } else {
             Err(error::payload(display, out.status.code(), &stderr, &stdout))
         }
@@ -189,7 +197,11 @@ impl GitCommand {
         let display = self.display();
         let mut cmd = self.command();
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
-        cmd.stdin(if self.stdin.is_some() { Stdio::piped() } else { Stdio::null() });
+        cmd.stdin(if self.stdin.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        });
 
         let mut child = cmd.spawn().map_err(|e| spawn_error(&display, &e))?;
 
@@ -238,7 +250,11 @@ impl GitCommand {
 
             let exit_code = status.code().unwrap_or(-1);
             if self.success_exit_codes.contains(&exit_code) {
-                Ok(GitOutput { exit_code, stdout, stderr })
+                Ok(GitOutput {
+                    exit_code,
+                    stdout,
+                    stderr,
+                })
             } else {
                 Err(error::payload(display, status.code(), &stderr, &stdout))
             }
@@ -271,7 +287,10 @@ mod tests {
         // concurrent `git init` calls race while copying template files.
         // TempDir reserves a unique directory atomically and removes it on
         // drop, covering both parallel tests and failed assertions.
-        let root = tempfile::Builder::new().prefix("atlas-git-exec-").tempdir().unwrap();
+        let root = tempfile::Builder::new()
+            .prefix("atlas-git-exec-")
+            .tempdir()
+            .unwrap();
         GitCommand::new(root.path(), &["init", "-q", "-b", "main"])
             .run()
             .unwrap();
@@ -311,7 +330,9 @@ mod tests {
     fn streaming_forwards_lines_and_stdin() {
         let repo = temp_repo();
         std::fs::write(repo.path().join("f.txt"), "hello\n").unwrap();
-        GitCommand::new(repo.path(), &["add", "f.txt"]).run().unwrap();
+        GitCommand::new(repo.path(), &["add", "f.txt"])
+            .run()
+            .unwrap();
 
         let sink = CollectSink(Mutex::new(Vec::new()));
         let out = GitCommand::new(repo.path(), &["commit", "-F", "-"])
@@ -325,7 +346,9 @@ mod tests {
         assert_eq!(out.exit_code, 0);
         let lines = sink.0.lock().unwrap();
         assert!(
-            lines.iter().any(|(_, l)| l.contains("streamed commit message")),
+            lines
+                .iter()
+                .any(|(_, l)| l.contains("streamed commit message")),
             "commit summary should stream through the sink: {lines:?}"
         );
     }

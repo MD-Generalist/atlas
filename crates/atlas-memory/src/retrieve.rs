@@ -197,8 +197,7 @@ fn rrf_fuse_weighted(lists: &[(&[Ranked], f32)]) -> Vec<(RetrievedDoc, f32)> {
         }
     }
 
-    let mut fused: Vec<(f32, RetrievedDoc, usize)> =
-        acc.into_values().collect();
+    let mut fused: Vec<(f32, RetrievedDoc, usize)> = acc.into_values().collect();
     // Highest fused score first; break ties by first-seen order (embedding first).
     fused.sort_by(|a, b| {
         b.0.partial_cmp(&a.0)
@@ -326,7 +325,11 @@ mod tests {
         let hits = vec![(1u64, 0.95), (2, 0.31), (3, 0.30), (4, 0.299), (5, 0.05)];
         let kept = apply_cosine_floor(hits, COSINE_FLOOR);
         let keys: Vec<u64> = kept.iter().map(|(k, _)| *k).collect();
-        assert_eq!(keys, vec![1, 2, 3], "only sims >= 0.30 survive, order preserved");
+        assert_eq!(
+            keys,
+            vec![1, 2, 3],
+            "only sims >= 0.30 survive, order preserved"
+        );
     }
 
     /// RRF orders by reciprocal rank: the top embedding hit fuses highest.
@@ -359,7 +362,10 @@ mod tests {
             .position(|(d, _)| d.id == "g0")
             .expect("global hit present");
         // Every embedding hit precedes the global hit.
-        assert_eq!(global_pos, 20, "global hit must sit below all 20 embedding hits");
+        assert_eq!(
+            global_pos, 20,
+            "global hit must sit below all 20 embedding hits"
+        );
     }
 
     /// Near-identical snippets collapse to one via Jaccard dedup.
@@ -370,17 +376,31 @@ mod tests {
             (doc("a", "Borrow checker", body), 0.9f32),
             // Same body, different id → near-duplicate, must be dropped.
             (doc("b", "Borrow checker", body), 0.8f32),
-            (doc("c", "Tokio runtime", "async tasks scheduled on a work stealing pool"), 0.7f32),
+            (
+                doc(
+                    "c",
+                    "Tokio runtime",
+                    "async tasks scheduled on a work stealing pool",
+                ),
+                0.7f32,
+            ),
         ];
         let kept = jaccard_dedup(fused, 10);
         let ids: Vec<&str> = kept.iter().map(|d| d.id.as_str()).collect();
-        assert_eq!(ids, vec!["a", "c"], "b is a near-duplicate of a and dropped");
+        assert_eq!(
+            ids,
+            vec!["a", "c"],
+            "b is a near-duplicate of a and dropped"
+        );
     }
 
     /// Embedding only → the fused result is exactly the embedding list.
     #[test]
     fn embedding_only_keeps_its_order() {
-        let embed = vec![ranked("a", "A", "alpha body text"), ranked("b", "B", "beta body text")];
+        let embed = vec![
+            ranked("a", "A", "alpha body text"),
+            ranked("b", "B", "beta body text"),
+        ];
         let fused = rrf_fuse_weighted(&[(&embed, W_EMBED)]);
         let kept = jaccard_dedup(fused, 10);
         let ids: Vec<&str> = kept.iter().map(|d| d.id.as_str()).collect();
@@ -391,12 +411,18 @@ mod tests {
     /// a doc present in only one.
     #[test]
     fn doc_in_both_lists_accumulates_score() {
-        let embed = vec![ranked("a", "A", "aaa"), ranked("shared", "S", "shared body")];
+        let embed = vec![
+            ranked("a", "A", "aaa"),
+            ranked("shared", "S", "shared body"),
+        ];
         let second = vec![ranked("shared", "S", "shared body")];
         let fused = rrf_fuse_weighted(&[(&embed, W_EMBED), (&second, 0.1)]);
         // "shared" gets embed(rank1) + second(rank0); "a" gets embed(rank0) only.
         // a: 1/61 = 0.01639; shared: 1/62 + 0.1/61 = 0.01613 + 0.00164 = 0.01777.
-        assert_eq!(fused[0].0.id, "shared", "doc in both lists is boosted above a single-list doc");
+        assert_eq!(
+            fused[0].0.id, "shared",
+            "doc in both lists is boosted above a single-list doc"
+        );
     }
 }
 
@@ -412,7 +438,10 @@ mod fixture_corpus {
     use std::path::PathBuf;
 
     fn tmp(name: &str) -> PathBuf {
-        let p = std::env::temp_dir().join(format!("atlas-memory-fixture-{}-{name}", std::process::id()));
+        let p = std::env::temp_dir().join(format!(
+            "atlas-memory-fixture-{}-{name}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&p);
         std::fs::create_dir_all(&p).unwrap();
         p
@@ -449,8 +478,20 @@ mod fixture_corpus {
 
         let mut engine = MemoryEngine::open(root.to_path_buf());
         let docs: [(&str, &str, &str, &str, usize); 5] = [
-            ("claude:auth.md", "Auth design", "claude", "Better Auth with DB-backed sessions", 0),
-            ("shared:decision:1", "Use RS256 for JWT signing", "shared", "[codex] Use RS256 for JWT signing", 1),
+            (
+                "claude:auth.md",
+                "Auth design",
+                "claude",
+                "Better Auth with DB-backed sessions",
+                0,
+            ),
+            (
+                "shared:decision:1",
+                "Use RS256 for JWT signing",
+                "shared",
+                "[codex] Use RS256 for JWT signing",
+                1,
+            ),
             (
                 "shared:fact:2",
                 "The build uses bun and vitest for tests",
@@ -465,7 +506,13 @@ mod fixture_corpus {
                 "[claude] cargo test hangs when the model dir is missing",
                 3,
             ),
-            ("codebase:src/lib.rs", "src/lib.rs", "codebase", "Tauri command registration", 4),
+            (
+                "codebase:src/lib.rs",
+                "src/lib.rs",
+                "codebase",
+                "Tauri command registration",
+                4,
+            ),
         ];
         for (id, title, source, text, axis) in docs {
             let key = engine.manifest.assign_key(id);
@@ -483,7 +530,13 @@ mod fixture_corpus {
         engine
     }
 
-    fn ids(engine: &MemoryEngine, query: &str, qvec: &[f32], limit: usize, global: &std::path::Path) -> Vec<String> {
+    fn ids(
+        engine: &MemoryEngine,
+        query: &str,
+        qvec: &[f32],
+        limit: usize,
+        global: &std::path::Path,
+    ) -> Vec<String> {
         engine
             .retrieve_with_vector(query, Some(qvec), limit, global)
             .into_iter()
@@ -533,7 +586,14 @@ mod fixture_corpus {
             ]
         );
         // Nothing clears the cosine floor.
-        assert!(ids(&engine, "unrelated question", &vec_of(&[(9, 1.0)]), 5, &global).is_empty());
+        assert!(ids(
+            &engine,
+            "unrelated question",
+            &vec_of(&[(9, 1.0)]),
+            5,
+            &global
+        )
+        .is_empty());
 
         std::fs::remove_dir_all(&root).ok();
         std::fs::remove_dir_all(&global).ok();
@@ -563,7 +623,14 @@ mod fixture_corpus {
             ]
         );
         assert_eq!(
-            ids(&engine, "JWT tokens", &vec_of(&[(0, 1.0), (1, 0.9), (2, 0.8), (3, 0.7)]), 5, &global).len(),
+            ids(
+                &engine,
+                "JWT tokens",
+                &vec_of(&[(0, 1.0), (1, 0.9), (2, 0.8), (3, 0.7)]),
+                5,
+                &global
+            )
+            .len(),
             4,
             "four local hits: global is not consulted"
         );

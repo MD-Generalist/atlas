@@ -36,7 +36,8 @@ pub(in crate::commands::org_server) const RECORDED_NOTE: &str = "Activity record
      performance: only sessions recorded in this Workspace are counted, and files_touched is summed per session.";
 
 /// What a caller who is not an organisation admin is told.
-const NOT_ADMIN_NOTE: &str = "Only an organisation admin can read a member's recorded activity; this account is not \
+const NOT_ADMIN_NOTE: &str =
+    "Only an organisation admin can read a member's recorded activity; this account is not \
      an admin in this organisation. Nothing was read.";
 
 /// What `org_member_activity` was asked.
@@ -96,14 +97,20 @@ impl OrgTools {
     /// `org_sessions` resolves an author (several matches come back as
     /// candidates); the board is then walked with no match limit, so the
     /// totals cover the whole window up to the scan cap.
-    pub(super) async fn member_activity(&self, scope: &OrgScope, args: ActivityArgs<'_>) -> CallToolResult {
+    pub(super) async fn member_activity(
+        &self,
+        scope: &OrgScope,
+        args: ActivityArgs<'_>,
+    ) -> CallToolResult {
         match self.cloud.caller(&scope.org_id).await {
             Ok(caller) if caller.role == Some(Role::Admin) => {}
             Ok(_) => return tool_error(NOT_ADMIN_NOTE),
             Err(e) => return tool_error(e.to_string()),
         }
         let Some(member) = args.member else {
-            return tool_error("name the member: `member` is their id, name or email (see org_members)");
+            return tool_error(
+                "name the member: `member` is their id, name or email (see org_members)",
+            );
         };
         let workspace_id = match workspace_of(args.workspace, scope) {
             Ok(id) => id,

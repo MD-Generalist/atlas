@@ -20,7 +20,10 @@ use atlas_agent_transcript::{
 fn cwd_encoding_collapses_every_non_alphanumeric() {
     // Claude Code's own slug rule. A mismatch here means zero history rows
     // for any project whose path has a space or a dot.
-    assert_eq!(encode_cwd("/Users/adib/Desktop/atlas"), "-Users-adib-Desktop-atlas");
+    assert_eq!(
+        encode_cwd("/Users/adib/Desktop/atlas"),
+        "-Users-adib-Desktop-atlas"
+    );
     assert_eq!(
         encode_cwd("/Users/adib/Codes/Test Atlas"),
         "-Users-adib-Codes-Test-Atlas"
@@ -32,7 +35,14 @@ fn cwd_encoding_collapses_every_non_alphanumeric() {
 
 #[test]
 fn injected_user_text_is_recognised() {
-    for t in ["", "   ", "<system-reminder>x</system-reminder>", "[Request interrupted by user]", "warmup", "WARMUP"] {
+    for t in [
+        "",
+        "   ",
+        "<system-reminder>x</system-reminder>",
+        "[Request interrupted by user]",
+        "warmup",
+        "WARMUP",
+    ] {
         assert!(is_injected_user_text(t), "{t:?} should read as injected");
     }
     assert!(!is_injected_user_text("fix the bug"));
@@ -87,7 +97,13 @@ fn the_whole_envelope_is_stripped_including_its_note() {
     let text = format!("{env}\n\nwhat changed?");
     let stripped = strip_injected_context(&text);
     assert_eq!(stripped, "what changed?");
-    for leaked in [MEMORY_ENVELOPE_OPEN, MEMORY_ENVELOPE_CLOSE, MEMORY_ENVELOPE_NOTE, "RS256", "never commit"] {
+    for leaked in [
+        MEMORY_ENVELOPE_OPEN,
+        MEMORY_ENVELOPE_CLOSE,
+        MEMORY_ENVELOPE_NOTE,
+        "RS256",
+        "never commit",
+    ] {
         assert!(!stripped.contains(leaked), "{leaked:?} survived the strip");
     }
 }

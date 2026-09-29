@@ -177,13 +177,13 @@ pub async fn git_snapshot(path: String) -> Result<GitSnapshot, GitErrorPayload> 
         }
     };
 
-    let result = cell
-        .get_or_init(|| compute(path.clone()))
-        .await
-        .clone();
+    let result = cell.get_or_init(|| compute(path.clone())).await.clone();
 
     if owner {
-        inflight().lock().expect("snapshot inflight lock").remove(&path);
+        inflight()
+            .lock()
+            .expect("snapshot inflight lock")
+            .remove(&path);
     }
     result
 }

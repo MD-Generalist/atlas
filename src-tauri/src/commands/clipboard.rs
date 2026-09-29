@@ -41,7 +41,9 @@ fn linux_write_text(text: &str) -> Result<(), String> {
     let is_wayland = std::env::var_os("WAYLAND_DISPLAY")
         .map(|s| !s.is_empty())
         .unwrap_or(false)
-        || std::env::var_os("XDG_SESSION_TYPE").map(|s| s == "wayland").unwrap_or(false);
+        || std::env::var_os("XDG_SESSION_TYPE")
+            .map(|s| s == "wayland")
+            .unwrap_or(false);
     linux_write_text_with_runner(text, is_wayland, default_command_runner)
 }
 
@@ -118,7 +120,11 @@ fn default_command_runner(program: &str, args: &[&str], input: &str) -> bool {
 }
 
 #[cfg(any(target_os = "linux", test))]
-fn linux_write_text_with_runner<F>(text: &str, is_wayland: bool, mut runner: F) -> Result<(), String>
+fn linux_write_text_with_runner<F>(
+    text: &str,
+    is_wayland: bool,
+    mut runner: F,
+) -> Result<(), String>
 where
     F: FnMut(&str, &[&str], &str) -> bool,
 {
@@ -147,9 +153,9 @@ where
 
 #[cfg(target_os = "macos")]
 fn macos_write_text(text: &str) -> Result<(), String> {
+    use objc2::msg_send;
     use objc2::rc::autoreleasepool;
     use objc2::runtime::{AnyClass, AnyObject, Bool};
-    use objc2::msg_send;
     use std::ffi::CString;
 
     autoreleasepool(|_| unsafe {
@@ -205,16 +211,15 @@ pub fn clipboard_file_paths() -> Vec<String> {
 
 #[cfg(target_os = "macos")]
 fn macos_file_paths() -> Vec<String> {
+    use objc2::msg_send;
     use objc2::rc::autoreleasepool;
     use objc2::runtime::{AnyClass, AnyObject};
-    use objc2::msg_send;
     use std::ffi::{CStr, CString};
 
     autoreleasepool(|_| unsafe {
-        let (Some(pb_class), Some(str_class)) = (
-            AnyClass::get(c"NSPasteboard"),
-            AnyClass::get(c"NSString"),
-        ) else {
+        let (Some(pb_class), Some(str_class)) =
+            (AnyClass::get(c"NSPasteboard"), AnyClass::get(c"NSString"))
+        else {
             return Vec::new();
         };
 
@@ -230,8 +235,7 @@ fn macos_file_paths() -> Vec<String> {
         let Ok(type_c) = CString::new("NSFilenamesPboardType") else {
             return Vec::new();
         };
-        let type_str: *mut AnyObject =
-            msg_send![str_class, stringWithUTF8String: type_c.as_ptr()];
+        let type_str: *mut AnyObject = msg_send![str_class, stringWithUTF8String: type_c.as_ptr()];
         if type_str.is_null() {
             return Vec::new();
         }
@@ -528,7 +532,11 @@ mod tests {
 
     #[test]
     fn test_default_command_runner_handles_missing_binary() {
-        assert!(!default_command_runner("non_existent_binary_xyz_123", &[], "test"));
+        assert!(!default_command_runner(
+            "non_existent_binary_xyz_123",
+            &[],
+            "test"
+        ));
     }
 
     #[test]
@@ -563,11 +571,8 @@ mod tests {
     #[cfg(unix)]
     fn test_default_command_runner_stdin_failure_does_not_block() {
         let start = std::time::Instant::now();
-        let ok = default_command_runner(
-            "sh",
-            &["-c", "exec 0<&-; sleep 10"],
-            &"a".repeat(1_000_000),
-        );
+        let ok =
+            default_command_runner("sh", &["-c", "exec 0<&-; sleep 10"], &"a".repeat(1_000_000));
         let elapsed = start.elapsed();
         assert!(!ok);
         assert!(elapsed < std::time::Duration::from_millis(2500));

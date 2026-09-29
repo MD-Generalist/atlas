@@ -278,7 +278,11 @@ impl TokenTotals {
     }
 
     /// The inverse of [`Self::split`], with the gauge supplied separately.
-    pub fn from_split(split: [u64; 5], context_used: Option<u64>, context_size: Option<u64>) -> Self {
+    pub fn from_split(
+        split: [u64; 5],
+        context_used: Option<u64>,
+        context_size: Option<u64>,
+    ) -> Self {
         Self {
             input_tokens: split[0],
             output_tokens: split[1],

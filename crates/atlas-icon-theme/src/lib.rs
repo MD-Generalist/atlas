@@ -238,10 +238,14 @@ impl ExtensionManifest {
 pub fn load_from_directory(id: &str, root: &Path) -> Result<LoadedIconTheme, IconThemeError> {
     let manifest = ExtensionManifest::read(root)?;
     let contribution =
-        manifest.contributes.icon_themes.first().ok_or_else(|| IconThemeError::Parse {
-            origin: root.join("package.json").display().to_string(),
-            message: "declares no `contributes.iconThemes`".to_string(),
-        })?;
+        manifest
+            .contributes
+            .icon_themes
+            .first()
+            .ok_or_else(|| IconThemeError::Parse {
+                origin: root.join("package.json").display().to_string(),
+                message: "declares no `contributes.iconThemes`".to_string(),
+            })?;
     let document_path =
         resolve_relative(root, root, &contribution.path).ok_or_else(|| IconThemeError::Parse {
             origin: root.join("package.json").display().to_string(),
@@ -256,8 +260,14 @@ pub fn load_from_directory(id: &str, root: &Path) -> Result<LoadedIconTheme, Ico
             .clone()
             .or_else(|| manifest.display_name.clone())
             .unwrap_or_else(|| manifest.name.clone()),
-        author: manifest.publisher.clone().unwrap_or_else(|| "Unknown".to_string()),
-        license: manifest.license.clone().unwrap_or_else(|| "Unspecified".to_string()),
+        author: manifest
+            .publisher
+            .clone()
+            .unwrap_or_else(|| "Unknown".to_string()),
+        license: manifest
+            .license
+            .clone()
+            .unwrap_or_else(|| "Unspecified".to_string()),
         built_in: false,
         hides_explorer_arrows: document.hides_explorer_arrows,
         uses_fallback_icons: false,
@@ -266,7 +276,10 @@ pub fn load_from_directory(id: &str, root: &Path) -> Result<LoadedIconTheme, Ico
     Ok(LoadedIconTheme {
         summary,
         document: Some(document),
-        source: Source::Directory { root: root.to_path_buf(), document: document_path },
+        source: Source::Directory {
+            root: root.to_path_buf(),
+            document: document_path,
+        },
     })
 }
 
@@ -335,7 +348,10 @@ fn resolve_relative(root: &Path, base: &Path, relative: &str) -> Option<PathBuf>
 /// second half, for a symlink that points out of it and for a device node or
 /// FIFO that would never finish reading.
 fn read_within(root: &Path, path: &Path, cap: u64) -> Result<Vec<u8>, IconThemeError> {
-    let io_error = |source| IconThemeError::Io { path: path.to_path_buf(), source };
+    let io_error = |source| IconThemeError::Io {
+        path: path.to_path_buf(),
+        source,
+    };
     let canonical_root = root.canonicalize().map_err(io_error)?;
     let canonical = path.canonicalize().map_err(io_error)?;
     if !canonical.starts_with(&canonical_root) {
@@ -360,7 +376,9 @@ fn read_within(root: &Path, path: &Path, cap: u64) -> Result<Vec<u8>, IconThemeE
     let file = std::fs::File::open(&canonical).map_err(io_error)?;
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
     // `take` as well as the metadata check: a file can grow between the two.
-    file.take(cap + 1).read_to_end(&mut bytes).map_err(io_error)?;
+    file.take(cap + 1)
+        .read_to_end(&mut bytes)
+        .map_err(io_error)?;
     if bytes.len() as u64 > cap {
         return Err(IconThemeError::Parse {
             origin: path.display().to_string(),
@@ -379,8 +397,11 @@ fn read_text_within(root: &Path, path: &Path, cap: u64) -> Result<String, IconTh
 
 /// The same, over the embedded tree's virtual paths.
 fn resolve_relative_virtual(dir: &str, relative: &str) -> String {
-    let mut out: Vec<String> =
-        dir.split('/').filter(|s| !s.is_empty() && *s != ".").map(str::to_string).collect();
+    let mut out: Vec<String> = dir
+        .split('/')
+        .filter(|s| !s.is_empty() && *s != ".")
+        .map(str::to_string)
+        .collect();
     for segment in relative.replace('\\', "/").split('/') {
         match segment {
             "" | "." => {}
@@ -395,7 +416,9 @@ fn resolve_relative_virtual(dir: &str, relative: &str) -> String {
 
 fn embedded_asset(virtual_path: &str) -> Option<&'static str> {
     let name = virtual_path.strip_prefix("icons/")?;
-    let at = MATERIAL_ICON_INDEX.binary_search_by(|(key, _, _)| (*key).cmp(name)).ok()?;
+    let at = MATERIAL_ICON_INDEX
+        .binary_search_by(|(key, _, _)| (*key).cmp(name))
+        .ok()?;
     let (_, start, end) = MATERIAL_ICON_INDEX[at];
     Some(&MATERIAL_BLOB[start..end])
 }
@@ -441,8 +464,9 @@ fn load_uncached(id: &str) -> Result<LoadedIconTheme, IconThemeError> {
         }),
         MATERIAL_ICON_THEME_ID => load_material(),
         other => {
-            let root = user_icon_theme_dir()
-                .ok_or_else(|| IconThemeError::NotFound { id: other.to_string() })?;
+            let root = user_icon_theme_dir().ok_or_else(|| IconThemeError::NotFound {
+                id: other.to_string(),
+            })?;
             let dir = installed_dir_in(&root, other)?;
             load_from_directory(other, &dir)
         }
@@ -505,7 +529,10 @@ pub fn list() -> Vec<IconThemeSummary> {
         .map(|entry| entry.path())
         .filter(|path| {
             path.is_dir()
-                && path.file_name().and_then(|name| name.to_str()).is_some_and(is_valid_id)
+                && path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(is_valid_id)
         })
         .collect();
     installed.sort();
@@ -597,9 +624,9 @@ pub fn resolve_icons(
             let id = resolve::resolve(document, request, appearance)?;
             let definition = document.icon_definitions.get(id)?;
             match definition.resolved() {
-                DefinitionKind::Image { .. } => {
-                    Some(ResolvedIcon::Image { definition: id.to_string() })
-                }
+                DefinitionKind::Image { .. } => Some(ResolvedIcon::Image {
+                    definition: id.to_string(),
+                }),
                 DefinitionKind::Glyph { character } => Some(ResolvedIcon::Glyph {
                     definition: id.to_string(),
                     character: decode_font_character(character),
@@ -658,8 +685,9 @@ fn read_asset(theme: &LoadedIconTheme, relative: &str) -> Option<IconAsset> {
             let virtual_path = resolve_relative_virtual(doc_dir, relative);
             // The bundled theme is SVG-only, which the build script enforces by
             // packing nothing else.
-            embedded_asset(&virtual_path)
-                .map(|source| IconAsset::Svg { source: source.to_string() })
+            embedded_asset(&virtual_path).map(|source| IconAsset::Svg {
+                source: source.to_string(),
+            })
         }
         Source::Directory { root, document } => {
             let path = resolve_relative(root, document.parent()?, relative)?;
@@ -670,8 +698,11 @@ fn read_asset(theme: &LoadedIconTheme, relative: &str) -> Option<IconAsset> {
 }
 
 fn asset_from_bytes(path: &Path, bytes: Vec<u8>) -> IconAsset {
-    let extension =
-        path.extension().and_then(|ext| ext.to_str()).unwrap_or_default().to_lowercase();
+    let extension = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or_default()
+        .to_lowercase();
     if extension == "svg" {
         if let Ok(source) = String::from_utf8(bytes.clone()) {
             return IconAsset::Svg { source };
@@ -685,7 +716,9 @@ fn asset_from_bytes(path: &Path, bytes: Vec<u8>) -> IconAsset {
         "svg" => "image/svg+xml",
         _ => "application/octet-stream",
     };
-    IconAsset::DataUrl { url: format!("data:{media_type};base64,{}", base64_encode(&bytes)) }
+    IconAsset::DataUrl {
+        url: format!("data:{media_type};base64,{}", base64_encode(&bytes)),
+    }
 }
 
 /// A web font a glyph theme needs, with its files inlined.
@@ -767,12 +800,24 @@ fn base64_encode(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
-        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
         let packed = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
         out.push(ALPHABET[(packed >> 18) as usize & 63] as char);
         out.push(ALPHABET[(packed >> 12) as usize & 63] as char);
-        out.push(if chunk.len() > 1 { ALPHABET[(packed >> 6) as usize & 63] as char } else { '=' });
-        out.push(if chunk.len() > 2 { ALPHABET[packed as usize & 63] as char } else { '=' });
+        out.push(if chunk.len() > 1 {
+            ALPHABET[(packed >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            ALPHABET[packed as usize & 63] as char
+        } else {
+            '='
+        });
     }
     out
 }
@@ -785,7 +830,9 @@ fn base64_encode(bytes: &[u8]) -> String {
 /// id. The bytes are whatever the caller downloaded; this does the unpacking.
 pub fn install_vsix(id: &str, archive_bytes: &[u8]) -> Result<IconThemeSummary, IconThemeError> {
     if !is_valid_id(id) {
-        return Err(IconThemeError::Install { message: format!("\"{id}\" is not a usable id") });
+        return Err(IconThemeError::Install {
+            message: format!("\"{id}\" is not a usable id"),
+        });
     }
     if is_built_in(id) {
         return Err(IconThemeError::Install {
@@ -813,8 +860,10 @@ pub fn install_vsix(id: &str, archive_bytes: &[u8]) -> Result<IconThemeSummary, 
         }
     };
     let _ = std::fs::remove_dir_all(&target);
-    std::fs::rename(&staging, &target)
-        .map_err(|source| IconThemeError::Io { path: target.clone(), source })?;
+    std::fs::rename(&staging, &target).map_err(|source| IconThemeError::Io {
+        path: target.clone(),
+        source,
+    })?;
     invalidate_cache();
     Ok(summary)
 }
@@ -826,10 +875,13 @@ pub fn remove(id: &str) -> Result<(), IconThemeError> {
             message: format!("\"{id}\" is built in and cannot be removed"),
         });
     }
-    let root = user_icon_theme_dir().ok_or_else(|| IconThemeError::NotFound { id: id.to_string() })?;
+    let root =
+        user_icon_theme_dir().ok_or_else(|| IconThemeError::NotFound { id: id.to_string() })?;
     let dir = installed_dir_in(&root, id)?;
-    std::fs::remove_dir_all(&dir)
-        .map_err(|source| IconThemeError::Io { path: dir.clone(), source })?;
+    std::fs::remove_dir_all(&dir).map_err(|source| IconThemeError::Io {
+        path: dir.clone(),
+        source,
+    })?;
     invalidate_cache();
     Ok(())
 }
@@ -846,7 +898,9 @@ pub fn is_valid_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 128
         && !id.starts_with('.')
-        && id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
 }
 
 #[cfg(test)]
@@ -888,7 +942,11 @@ mod tests {
             .iter()
             .filter(|(_, d)| matches!(d.resolved(), DefinitionKind::Image { .. }))
             .count();
-        assert_eq!(assets.len(), images, "every image definition resolves to bytes");
+        assert_eq!(
+            assets.len(),
+            images,
+            "every image definition resolves to bytes"
+        );
         assert!(images > 1000);
     }
 
@@ -896,9 +954,21 @@ mod tests {
     fn a_typescript_file_gets_the_typescript_icon_from_the_bundled_theme() {
         let theme = load_material().expect("parses");
         let requests = vec![
-            IconRequest { path: "/p/src/main.ts".into(), kind: IconKind::File, language_id: None },
-            IconRequest { path: "/p/src".into(), kind: IconKind::Folder, language_id: None },
-            IconRequest { path: "/p/README.md".into(), kind: IconKind::File, language_id: None },
+            IconRequest {
+                path: "/p/src/main.ts".into(),
+                kind: IconKind::File,
+                language_id: None,
+            },
+            IconRequest {
+                path: "/p/src".into(),
+                kind: IconKind::Folder,
+                language_id: None,
+            },
+            IconRequest {
+                path: "/p/README.md".into(),
+                kind: IconKind::File,
+                language_id: None,
+            },
         ];
         let resolved = resolve_icons(&theme, &requests, Appearance::Dark);
         let names: Vec<String> = resolved
@@ -915,9 +985,15 @@ mod tests {
     fn minimal_resolves_nothing_and_says_so() {
         let theme = load(MINIMAL_ICON_THEME_ID).expect("always available");
         assert!(theme.summary.uses_fallback_icons);
-        let requests =
-            vec![IconRequest { path: "a.ts".into(), kind: IconKind::File, language_id: None }];
-        assert_eq!(resolve_icons(&theme, &requests, Appearance::Dark), vec![None]);
+        let requests = vec![IconRequest {
+            path: "a.ts".into(),
+            kind: IconKind::File,
+            language_id: None,
+        }];
+        assert_eq!(
+            resolve_icons(&theme, &requests, Appearance::Dark),
+            vec![None]
+        );
         assert!(icon_fonts(&theme).is_empty());
     }
 
@@ -949,16 +1025,31 @@ mod tests {
     fn font_characters_are_decoded_to_the_codepoint() {
         assert_eq!(decode_font_character("\\E001"), "\u{E001}");
         assert_eq!(decode_font_character("\\f101"), "\u{f101}");
-        assert_eq!(decode_font_character("x"), "x", "not an escape: passed through");
-        assert_eq!(decode_font_character("\\zzzz"), "\\zzzz", "invalid hex: passed through");
+        assert_eq!(
+            decode_font_character("x"),
+            "x",
+            "not an escape: passed through"
+        );
+        assert_eq!(
+            decode_font_character("\\zzzz"),
+            "\\zzzz",
+            "invalid hex: passed through"
+        );
     }
 
     #[test]
     fn relative_icon_paths_fold_dot_and_dotdot() {
-        assert_eq!(resolve_relative_virtual("dist", "./../icons/git.svg"), "icons/git.svg");
+        assert_eq!(
+            resolve_relative_virtual("dist", "./../icons/git.svg"),
+            "icons/git.svg"
+        );
         assert_eq!(resolve_relative_virtual("", "./icons/a.svg"), "icons/a.svg");
         assert_eq!(
-            resolve_relative(Path::new("/root"), Path::new("/root/dist"), "./../icons/a.svg"),
+            resolve_relative(
+                Path::new("/root"),
+                Path::new("/root/dist"),
+                "./../icons/a.svg"
+            ),
             Some(PathBuf::from("/root/icons/a.svg"))
         );
     }
@@ -989,8 +1080,11 @@ mod tests {
         std::fs::create_dir_all(root.join("icons")).expect("mkdir");
         std::fs::write(dir.path().join("secret.svg"), "<svg>secret</svg>").expect("write");
         std::fs::write(root.join("icons/ok.svg"), "<svg/>").expect("write");
-        std::fs::write(root.join("icons/big.svg"), vec![b' '; MAX_ASSET_BYTES as usize + 1])
-            .expect("write");
+        std::fs::write(
+            root.join("icons/big.svg"),
+            vec![b' '; MAX_ASSET_BYTES as usize + 1],
+        )
+        .expect("write");
         #[cfg(unix)]
         std::os::unix::fs::symlink(dir.path().join("secret.svg"), root.join("icons/link.svg"))
             .expect("symlink");
@@ -1011,10 +1105,15 @@ mod tests {
         )
         .expect("write");
         let theme = load_from_directory("t", &root).expect("loads");
-        let ids: Vec<String> =
-            ["ok", "escape", "link", "big", "dir"].iter().map(|id| id.to_string()).collect();
+        let ids: Vec<String> = ["ok", "escape", "link", "big", "dir"]
+            .iter()
+            .map(|id| id.to_string())
+            .collect();
         let assets = icon_assets(&theme, &ids);
-        assert_eq!(assets.keys().cloned().collect::<Vec<_>>(), vec!["ok".to_string()]);
+        assert_eq!(
+            assets.keys().cloned().collect::<Vec<_>>(),
+            vec!["ok".to_string()]
+        );
     }
 
     #[test]
@@ -1028,7 +1127,10 @@ mod tests {
         )
         .expect("write");
         let error = load_from_directory("t", &root).unwrap_err();
-        assert!(error.to_string().contains("outside the extension"), "{error}");
+        assert!(
+            error.to_string().contains("outside the extension"),
+            "{error}"
+        );
     }
 
     /// `remove_icon_theme("..")` used to be `remove_dir_all(~/.config/atlas)`.
@@ -1040,16 +1142,30 @@ mod tests {
         std::fs::create_dir_all(root.join(".pub.theme.installing")).expect("mkdir");
         std::fs::create_dir_all(dir.path().join("elsewhere")).expect("mkdir");
         assert!(installed_dir_in(&root, "pub.theme").is_ok());
-        for bad in ["..", ".", "", "../elsewhere", "/etc", "a/b", ".pub.theme.installing"] {
+        for bad in [
+            "..",
+            ".",
+            "",
+            "../elsewhere",
+            "/etc",
+            "a/b",
+            ".pub.theme.installing",
+        ] {
             assert!(installed_dir_in(&root, bad).is_err(), "accepted {bad:?}");
         }
         let absolute = dir.path().join("elsewhere").display().to_string();
-        assert!(installed_dir_in(&root, &absolute).is_err(), "accepted an absolute path");
+        assert!(
+            installed_dir_in(&root, &absolute).is_err(),
+            "accepted an absolute path"
+        );
         #[cfg(unix)]
         {
             std::os::unix::fs::symlink(dir.path().join("elsewhere"), root.join("sneaky"))
                 .expect("symlink");
-            assert!(installed_dir_in(&root, "sneaky").is_err(), "followed a symlink out");
+            assert!(
+                installed_dir_in(&root, "sneaky").is_err(),
+                "followed a symlink out"
+            );
         }
         // And the public entry points refuse before touching anything.
         assert!(remove("..").is_err());
@@ -1086,8 +1202,13 @@ mod tests {
         let root = config_root_from(None, Some(&home)).expect("a home resolves a root");
         let icon_themes = root.join("icon-themes");
 
-        assert_eq!(icon_themes, PathBuf::from("/Users/someone/.config/atlas/icon-themes"));
-        assert!(!icon_themes.to_string_lossy().contains("Application Support"));
+        assert_eq!(
+            icon_themes,
+            PathBuf::from("/Users/someone/.config/atlas/icon-themes")
+        );
+        assert!(!icon_themes
+            .to_string_lossy()
+            .contains("Application Support"));
         assert!(!icon_themes.to_string_lossy().contains("Library"));
     }
 

@@ -29,7 +29,11 @@ const MENTION_BODY_BUDGET_BYTES: usize = 32 * 1024;
 /// Rust side doesn't need (e.g. branch metadata, paper authors that
 /// only display) are still accepted but ignored where appropriate.
 #[derive(Debug, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
 #[allow(dead_code)]
 pub enum MentionSpec {
     File {
@@ -318,13 +322,22 @@ fn mention_path(m: &MentionSpec) -> Option<&str> {
 /// mention ([`OrgLink`], the one definition the org tools also parse).
 fn mention_org_link(m: &MentionSpec) -> Option<OrgLink> {
     match m {
-        MentionSpec::Member { id, .. } => Some(OrgLink::Member { user_id: id.clone() }),
+        MentionSpec::Member { id, .. } => Some(OrgLink::Member {
+            user_id: id.clone(),
+        }),
         MentionSpec::Conversation { id, .. } => Some(OrgLink::Conversation { id: id.clone() }),
-        MentionSpec::RecordedSession { id, workspace_id, .. } => Some(OrgLink::RecordedSession {
+        MentionSpec::RecordedSession {
+            id, workspace_id, ..
+        } => Some(OrgLink::RecordedSession {
             workspace_id: workspace_id.clone(),
             session_id: id.clone(),
         }),
-        MentionSpec::Comment { id, workspace_id, session_id, .. } => Some(OrgLink::Comment {
+        MentionSpec::Comment {
+            id,
+            workspace_id,
+            session_id,
+            ..
+        } => Some(OrgLink::Comment {
             workspace_id: workspace_id.clone(),
             session_id: session_id.clone(),
             comment_id: id.clone(),
@@ -595,8 +608,14 @@ fn render_comment_block(
     parent_id: Option<&str>,
     resolved: bool,
 ) -> String {
-    let author = author.filter(|a| !a.trim().is_empty()).unwrap_or("A teammate");
-    let kind = if parent_id.is_some() { "reply" } else { "comment" };
+    let author = author
+        .filter(|a| !a.trim().is_empty())
+        .unwrap_or("A teammate");
+    let kind = if parent_id.is_some() {
+        "reply"
+    } else {
+        "comment"
+    };
     let on = anchor
         .filter(|a| !a.trim().is_empty())
         .map(|a| format!(" on {a}"))
@@ -838,7 +857,11 @@ mod org_mention_tests {
     }
 
     fn links(composed: &ComposedPrompt) -> Vec<(String, String)> {
-        composed.resource_links.iter().map(|l| (l.uri.clone(), l.name.clone())).collect()
+        composed
+            .resource_links
+            .iter()
+            .map(|l| (l.uri.clone(), l.name.clone()))
+            .collect()
     }
 
     fn comment() -> serde_json::Value {
@@ -860,7 +883,9 @@ mod org_mention_tests {
     /// words, so the agent sees what the user pointed at without a tool call.
     #[tokio::test]
     async fn a_linked_comment_rides_as_a_link_and_quotes_what_it_says() {
-        let composed = compose_prompt("look at this".into(), vec![spec(comment())]).await.unwrap();
+        let composed = compose_prompt("look at this".into(), vec![spec(comment())])
+            .await
+            .unwrap();
         assert_eq!(
             links(&composed),
             [(
@@ -877,17 +902,38 @@ mod org_mention_tests {
             }),
         );
         let prose = &composed.prose;
-        assert!(prose.starts_with("look at this\n\n---\n# Atlas context"), "{prose}");
-        assert!(prose.contains("**Grace Hopper** wrote on a Bash call:"), "{prose}");
-        assert!(prose.contains("> this retry loop never backs off\n> see line 40"), "{prose}");
+        assert!(
+            prose.starts_with("look at this\n\n---\n# Atlas context"),
+            "{prose}"
+        );
+        assert!(
+            prose.contains("**Grace Hopper** wrote on a Bash call:"),
+            "{prose}"
+        );
+        assert!(
+            prose.contains("> this retry loop never backs off\n> see line 40"),
+            "{prose}"
+        );
         assert!(prose.contains("`cm-7`"), "{prose}");
     }
 
     #[test]
     fn a_linked_reply_says_so_and_a_resolved_thread_is_marked() {
-        let block = render_comment_block("@comment:x", "cm-8", "rs-1", None, None, None, Some("cm-7"), true);
+        let block = render_comment_block(
+            "@comment:x",
+            "cm-8",
+            "rs-1",
+            None,
+            None,
+            None,
+            Some("cm-7"),
+            true,
+        );
         assert!(block.contains("linked this reply"), "{block}");
-        assert!(block.contains("**A teammate** wrote (thread resolved):"), "{block}");
+        assert!(
+            block.contains("**A teammate** wrote (thread resolved):"),
+            "{block}"
+        );
         assert!(block.contains("> (comment text unavailable)"), "{block}");
     }
 
@@ -902,30 +948,53 @@ mod org_mention_tests {
         assert_eq!(
             links(&composed),
             [
-                ("atlas-org://member/u-grace".to_string(), "@member:\"Grace Hopper\"".to_string()),
-                ("atlas-org://conversation/c-general".to_string(), "@conversation:general".to_string()),
+                (
+                    "atlas-org://member/u-grace".to_string(),
+                    "@member:\"Grace Hopper\"".to_string()
+                ),
+                (
+                    "atlas-org://conversation/c-general".to_string(),
+                    "@conversation:general".to_string()
+                ),
                 (
                     "atlas-org://recorded-session/ws-atlas/rs-1".to_string(),
                     "@recorded-session:\"Fix the theme importer\"".to_string(),
                 ),
             ],
         );
-        assert_eq!(composed.prose, "send it to them", "ids only: nothing is inlined");
+        assert_eq!(
+            composed.prose, "send it to them",
+            "ids only: nothing is inlined"
+        );
     }
 
     /// The links compose_prompt writes are the links the org tools read.
     #[tokio::test]
     async fn every_link_it_writes_parses_back_to_the_id_it_carries() {
-        let composed = compose_prompt(String::new(), vec![spec(member()), spec(conversation()), spec(recorded())])
-            .await
-            .unwrap();
-        let parsed: Vec<Option<OrgLink>> = composed.resource_links.iter().map(|l| OrgLink::parse(&l.uri)).collect();
+        let composed = compose_prompt(
+            String::new(),
+            vec![spec(member()), spec(conversation()), spec(recorded())],
+        )
+        .await
+        .unwrap();
+        let parsed: Vec<Option<OrgLink>> = composed
+            .resource_links
+            .iter()
+            .map(|l| OrgLink::parse(&l.uri))
+            .collect();
         assert_eq!(
             parsed,
             [
-                Some(OrgLink::Member { user_id: "u-grace".into() }),
-                Some(OrgLink::Conversation { id: "c-general".into() }),
-                Some(OrgLink::RecordedSession { workspace_id: "ws-atlas".into(), session_id: "rs-1".into() }),
+                Some(OrgLink::Member {
+                    user_id: "u-grace".into()
+                }),
+                Some(OrgLink::Conversation {
+                    id: "c-general".into()
+                }),
+                Some(OrgLink::RecordedSession {
+                    workspace_id: "ws-atlas".into(),
+                    session_id: "rs-1".into()
+                }),
             ],
         );
     }
@@ -942,7 +1011,9 @@ mod org_mention_tests {
             "sessionTitle": "Fix the theme importer",
             "inlineBody": "### User\nfix it",
         }));
-        let composed = compose_prompt("compare".into(), vec![spec(recorded()), past]).await.unwrap();
+        let composed = compose_prompt("compare".into(), vec![spec(recorded()), past])
+            .await
+            .unwrap();
         assert_eq!(
             links(&composed),
             [(
@@ -951,14 +1022,28 @@ mod org_mention_tests {
             )],
             "only the recorded session is a link",
         );
-        assert!(composed.prose.contains("## @session:\"Fix the theme importer\""), "{}", composed.prose);
-        assert!(composed.prose.contains("fix it"), "the past session's transcript is still inlined");
-        assert!(!composed.prose.contains("@recorded-session"), "the recorded session inlines nothing");
+        assert!(
+            composed
+                .prose
+                .contains("## @session:\"Fix the theme importer\""),
+            "{}",
+            composed.prose
+        );
+        assert!(
+            composed.prose.contains("fix it"),
+            "the past session's transcript is still inlined"
+        );
+        assert!(
+            !composed.prose.contains("@recorded-session"),
+            "the recorded session inlines nothing"
+        );
     }
 
     #[tokio::test]
     async fn the_same_member_twice_is_one_link() {
-        let composed = compose_prompt(String::new(), vec![spec(member()), spec(member())]).await.unwrap();
+        let composed = compose_prompt(String::new(), vec![spec(member()), spec(member())])
+            .await
+            .unwrap();
         assert_eq!(composed.resource_links.len(), 1);
     }
 }

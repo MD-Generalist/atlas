@@ -779,7 +779,12 @@ mod fs_bound_tests {
         std::fs::create_dir_all(&dir).expect("create the directory");
         let roots = std::slice::from_ref(&root);
 
-        for (line, limit) in [(None, Some(0)), (Some(1), Some(0)), (None, None), (Some(1), None)] {
+        for (line, limit) in [
+            (None, Some(0)),
+            (Some(1), Some(0)),
+            (None, None),
+            (Some(1), None),
+        ] {
             assert!(
                 read_text_file(&dir, line, limit, roots).is_err(),
                 "reading a directory answered successfully for line={line:?} limit={limit:?}"
@@ -1237,13 +1242,15 @@ pub fn handle_wait_for_terminal_exit(
         // Display-only: the agent owns the process — it announced this
         // terminal through `terminal_info` meta and reports the exit the same
         // way. There is nothing on our side to await.
-        Ok(None) => return respond_err(
-            responder,
-            acp::Error::invalid_params().data(format!(
+        Ok(None) => {
+            return respond_err(
+                responder,
+                acp::Error::invalid_params().data(format!(
                 "terminal {} is agent-owned (display-only); its exit arrives as terminal_exit meta",
                 args.terminal_id
             )),
-        ),
+            )
+        }
         Err(err) => return respond_err(responder, err),
     };
 

@@ -256,8 +256,8 @@ mod tests {
         m.upsert("gone", "h_gone", "c", 1);
 
         let current = vec![
-            ("keep".to_string(), "h_keep".to_string()),   // unchanged
-            ("change".to_string(), "h_new".to_string()),  // updated
+            ("keep".to_string(), "h_keep".to_string()),  // unchanged
+            ("change".to_string(), "h_new".to_string()), // updated
             ("brand_new".to_string(), "h_new".to_string()), // added
         ];
         let d = m.diff(&current);

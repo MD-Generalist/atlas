@@ -694,15 +694,22 @@ mod tests {
         }
         // Simulate the withdrawn shape as closely as an in-memory store can:
         // drop the real V9 column and the V10 tables, then stamp 9.
-        conn.execute_batch("ALTER TABLE file_touch DROP COLUMN sketch_after").unwrap();
-        conn.execute_batch("DROP TABLE usage_delta; DROP TABLE usage_cursor;").unwrap();
+        conn.execute_batch("ALTER TABLE file_touch DROP COLUMN sketch_after")
+            .unwrap();
+        conn.execute_batch("DROP TABLE usage_delta; DROP TABLE usage_cursor;")
+            .unwrap();
         conn.pragma_update(None, "user_version", 9).unwrap();
         assert!(!has_column(&conn, "file_touch", "sketch_after"));
 
         migrate(&conn).expect("the withdrawn version must not read as too-new");
-        let v: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        let v: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(v, SCHEMA_VERSION);
-        assert!(has_column(&conn, "file_touch", "sketch_after"), "the real V9 ran");
+        assert!(
+            has_column(&conn, "file_touch", "sketch_after"),
+            "the real V9 ran"
+        );
         assert!(has_table(&conn, "usage_delta"), "V10 ran");
         assert!(has_table(&conn, "usage_cursor"), "V10 ran");
 
@@ -710,7 +717,8 @@ mod tests {
         migrate(&conn).unwrap();
 
         // A genuinely newer store still refuses.
-        conn.pragma_update(None, "user_version", SCHEMA_VERSION + 1).unwrap();
+        conn.pragma_update(None, "user_version", SCHEMA_VERSION + 1)
+            .unwrap();
         assert!(matches!(
             migrate(&conn),
             Err(Error::SchemaTooNew { found, .. }) if found == SCHEMA_VERSION + 1

@@ -19,7 +19,10 @@ use anyhow::Result;
 use atlas_acp_thread::{AgentConnection, AgentId};
 use futures::future::BoxFuture;
 
-use crate::connection::{AcpConnection, AcpConnectionDefaults, AgentServerCommand, ThreadEventSink, RequestElicitationSink};
+use crate::connection::{
+    AcpConnection, AcpConnectionDefaults, AgentServerCommand, RequestElicitationSink,
+    ThreadEventSink,
+};
 
 /// Resolves the command for one installed agent.
 ///
@@ -91,10 +94,7 @@ impl AgentServerDelegate {
         }
     }
 
-    pub fn with_version_channel(
-        mut self,
-        tx: tokio::sync::watch::Sender<Option<String>>,
-    ) -> Self {
+    pub fn with_version_channel(mut self, tx: tokio::sync::watch::Sender<Option<String>>) -> Self {
         self.new_version_available = Some(tx);
         self
     }
@@ -187,9 +187,10 @@ impl AgentServer for CustomAgentServer {
             let mut extra_env = load_proxy_env();
             extra_env.extend(env_quirks(&agent_id));
 
-            let server = delegate.server.clone().ok_or_else(|| {
-                anyhow::anyhow!("no command resolver for agent `{agent_id}`")
-            })?;
+            let server = delegate
+                .server
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("no command resolver for agent `{agent_id}`"))?;
             let command = server.get_command(Vec::new(), extra_env).await?;
 
             let connection = AcpConnection::stdio(

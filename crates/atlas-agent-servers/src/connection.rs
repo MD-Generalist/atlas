@@ -17,11 +17,10 @@ use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::{Agent, Client, ConnectionTo, Lines};
 use anyhow::{anyhow, Context as _, Result};
 use atlas_acp_thread::{
-    AcpThread, AcpThreadEvent, AcpThreadHandle, AgentConnection, AgentId, AgentModelId,
-    AgentModelInfo, AgentModelList, AgentModelSelector, AgentSessionConfigOptions,
-    AgentSessionModes, AuthRequired, ElicitationStore, ElicitationStoreEvent,
-    ElicitationStoreHandle, EventSink, LoadError,
-    TerminalAuthCommand, build_terminal_auth_command,
+    build_terminal_auth_command, AcpThread, AcpThreadEvent, AcpThreadHandle, AgentConnection,
+    AgentId, AgentModelId, AgentModelInfo, AgentModelList, AgentModelSelector,
+    AgentSessionConfigOptions, AgentSessionModes, AuthRequired, ElicitationStore,
+    ElicitationStoreEvent, ElicitationStoreHandle, EventSink, LoadError, TerminalAuthCommand,
 };
 use futures::future::BoxFuture;
 use futures::{AsyncBufReadExt, FutureExt, StreamExt};
@@ -109,8 +108,7 @@ impl Default for ConnectionDeadlines {
 /// Zed's threads are GPUI entities that the UI subscribes to directly. Here the
 /// host supplies a sink per session, so routing deltas onto the outbound
 /// pipeline stays the host's business and this crate stays leaf-level.
-pub type ThreadEventSink =
-    Arc<dyn Fn(&acp::SessionId) -> EventSink<AcpThreadEvent> + Send + Sync>;
+pub type ThreadEventSink = Arc<dyn Fn(&acp::SessionId) -> EventSink<AcpThreadEvent> + Send + Sync>;
 
 /// Where a connection's request-scoped elicitations are announced, supplied by
 /// the host the same way [`ThreadEventSink`] is. See `ConnectOptions`.
@@ -216,13 +214,15 @@ impl AcpConnection {
 
         // Both directions are tee'd into the debug log before they reach the
         // codec, so the log shows the bytes as they went over the wire.
-        let incoming = futures::io::BufReader::new(stdout.compat()).lines().inspect({
-            let debug_log = debug_log.clone();
-            move |result| match result {
-                Ok(line) => debug_log.record_line(AcpDebugMessageDirection::Incoming, line),
-                Err(err) => tracing::warn!("ACP transport read error: {err}"),
-            }
-        });
+        let incoming = futures::io::BufReader::new(stdout.compat())
+            .lines()
+            .inspect({
+                let debug_log = debug_log.clone();
+                move |result| match result {
+                    Ok(line) => debug_log.record_line(AcpDebugMessageDirection::Incoming, line),
+                    Err(err) => tracing::warn!("ACP transport read error: {err}"),
+                }
+            });
         let outgoing = futures::sink::unfold(
             (Box::pin(stdin.compat_write()), debug_log.clone()),
             async move |(mut writer, debug_log), line: String| {
@@ -273,11 +273,7 @@ impl AcpConnection {
         // the select, the select drops `status_fut`, and `status_fut` drops
         // the child, whose `Drop` kills the whole process group. Nothing else
         // needs to reach in.
-        let mut status_fut = Box::pin(wait_for_exit(
-            child,
-            debug_log.clone(),
-            stderr_drained_rx,
-        ));
+        let mut status_fut = Box::pin(wait_for_exit(child, debug_log.clone(), stderr_drained_rx));
         let connection_rx = Box::pin(async move {
             connection_rx
                 .await
@@ -297,7 +293,12 @@ impl AcpConnection {
                 return Err(load_error.into())
             }
             Err(_elapsed) => {
-                return Err(timed_out(&agent_id, "handshake", INITIALIZE_TIMEOUT, &debug_log));
+                return Err(timed_out(
+                    &agent_id,
+                    "handshake",
+                    INITIALIZE_TIMEOUT,
+                    &debug_log,
+                ));
             }
         };
 
@@ -334,7 +335,12 @@ impl AcpConnection {
                 return Err(load_error.into())
             }
             Err(_elapsed) => {
-                return Err(timed_out(&agent_id, "initialize", INITIALIZE_TIMEOUT, &debug_log));
+                return Err(timed_out(
+                    &agent_id,
+                    "initialize",
+                    INITIALIZE_TIMEOUT,
+                    &debug_log,
+                ));
             }
         };
 
@@ -481,7 +487,8 @@ impl AcpConnection {
                 session_id: session_id.cloned(),
             },
         );
-        let servers = session_mcp::admissible(offer.servers(), &self.agent_capabilities.mcp_capabilities);
+        let servers =
+            session_mcp::admissible(offer.servers(), &self.agent_capabilities.mcp_capabilities);
         (offer, servers)
     }
 
@@ -555,7 +562,13 @@ impl AcpConnection {
             },
         );
 
-        let response = match rpc_call(self.connection.clone(), session_id.clone(), directories, mcp_servers).await
+        let response = match rpc_call(
+            self.connection.clone(),
+            session_id.clone(),
+            directories,
+            mcp_servers,
+        )
+        .await
         {
             Ok(response) => response,
             Err(err) => {
@@ -799,13 +812,16 @@ fn connect_client_future(
             on_notification!(handlers::handle_complete_elicitation),
             agent_client_protocol::on_receive_notification!(),
         )
-        .connect_with(transport, move |connection: ConnectionTo<Agent>| async move {
-            if connection_tx.send(connection).is_err() {
-                tracing::error!("failed to send ACP connection handle — receiver was dropped");
-            }
-            // Hold the connection open until the transport closes.
-            futures::future::pending::<std::result::Result<(), acp::Error>>().await
-        })
+        .connect_with(
+            transport,
+            move |connection: ConnectionTo<Agent>| async move {
+                if connection_tx.send(connection).is_err() {
+                    tracing::error!("failed to send ACP connection handle — receiver was dropped");
+                }
+                // Hold the connection open until the transport closes.
+                futures::future::pending::<std::result::Result<(), acp::Error>>().await
+            },
+        )
 }
 
 /// Ported from `client_capabilities_for_agent` (`acp.rs:767-795`).
@@ -999,25 +1015,30 @@ impl AgentConnection for AcpConnection {
         async move {
             let this = self.clone();
             self.request_deadline("session/load", async move {
-                this.open_or_create_session(session_id, work_dirs, title, |conn, id, dirs, mcp_servers| {
-                    async move {
-                        let mut request = acp::LoadSessionRequest::new(id, dirs.cwd);
-                        request.mcp_servers = mcp_servers;
-                        if !dirs.additional_directories.is_empty() {
-                            request.additional_directories = dirs.additional_directories;
+                this.open_or_create_session(
+                    session_id,
+                    work_dirs,
+                    title,
+                    |conn, id, dirs, mcp_servers| {
+                        async move {
+                            let mut request = acp::LoadSessionRequest::new(id, dirs.cwd);
+                            request.mcp_servers = mcp_servers;
+                            if !dirs.additional_directories.is_empty() {
+                                request.additional_directories = dirs.additional_directories;
+                            }
+                            let response = conn
+                                .send_request(request)
+                                .block_task()
+                                .await
+                                .map_err(map_acp_error)?;
+                            Ok(SessionConfigResponse {
+                                modes: response.modes,
+                                config_options: response.config_options,
+                            })
                         }
-                        let response = conn
-                            .send_request(request)
-                            .block_task()
-                            .await
-                            .map_err(map_acp_error)?;
-                        Ok(SessionConfigResponse {
-                            modes: response.modes,
-                            config_options: response.config_options,
-                        })
-                    }
-                    .boxed()
-                })
+                        .boxed()
+                    },
+                )
                 .await
             })
             .await
@@ -1026,7 +1047,10 @@ impl AgentConnection for AcpConnection {
     }
 
     fn supports_resume_session(&self) -> bool {
-        self.agent_capabilities.session_capabilities.resume.is_some()
+        self.agent_capabilities
+            .session_capabilities
+            .resume
+            .is_some()
     }
 
     fn resume_session(
@@ -1038,25 +1062,30 @@ impl AgentConnection for AcpConnection {
         async move {
             let this = self.clone();
             self.request_deadline("session/resume", async move {
-                this.open_or_create_session(session_id, work_dirs, title, |conn, id, dirs, mcp_servers| {
-                    async move {
-                        let mut request = acp::ResumeSessionRequest::new(id, dirs.cwd);
-                        request.mcp_servers = mcp_servers;
-                        if !dirs.additional_directories.is_empty() {
-                            request.additional_directories = dirs.additional_directories;
+                this.open_or_create_session(
+                    session_id,
+                    work_dirs,
+                    title,
+                    |conn, id, dirs, mcp_servers| {
+                        async move {
+                            let mut request = acp::ResumeSessionRequest::new(id, dirs.cwd);
+                            request.mcp_servers = mcp_servers;
+                            if !dirs.additional_directories.is_empty() {
+                                request.additional_directories = dirs.additional_directories;
+                            }
+                            let response = conn
+                                .send_request(request)
+                                .block_task()
+                                .await
+                                .map_err(map_acp_error)?;
+                            Ok(SessionConfigResponse {
+                                modes: response.modes,
+                                config_options: response.config_options,
+                            })
                         }
-                        let response = conn
-                            .send_request(request)
-                            .block_task()
-                            .await
-                            .map_err(map_acp_error)?;
-                        Ok(SessionConfigResponse {
-                            modes: response.modes,
-                            config_options: response.config_options,
-                        })
-                    }
-                    .boxed()
-                })
+                        .boxed()
+                    },
+                )
                 .await
             })
             .await
@@ -1297,10 +1326,7 @@ impl AgentConnection for AcpConnection {
         Some(self.request_elicitations.clone())
     }
 
-    fn session_modes(
-        &self,
-        session_id: &acp::SessionId,
-    ) -> Option<Arc<dyn AgentSessionModes>> {
+    fn session_modes(&self, session_id: &acp::SessionId) -> Option<Arc<dyn AgentSessionModes>> {
         let modes = self
             .sessions
             .with_session(session_id, |session| session.session_modes.clone())??;
@@ -1366,7 +1392,9 @@ impl AcpConnection {
         };
 
         let initial = {
-            let mut modes = modes.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut modes = modes
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if !modes
                 .available_modes
                 .iter()
@@ -1382,10 +1410,12 @@ impl AcpConnection {
         // On the `session/new` path, so it gets the same deadline: a wedged
         // agent that answered `session/new` and then went quiet must not park
         // the bind here instead. Expiry is just "the mode did not take".
-        let set_mode = self.connection.send_request(acp::SetSessionModeRequest::new(
-            session_id.clone(),
-            default_mode,
-        ));
+        let set_mode = self
+            .connection
+            .send_request(acp::SetSessionModeRequest::new(
+                session_id.clone(),
+                default_mode,
+            ));
         if self
             .request_deadline("session/set_mode", async {
                 set_mode.block_task().await.map_err(map_acp_error)
@@ -1393,7 +1423,10 @@ impl AcpConnection {
             .await
             .is_err()
         {
-            modes.lock().unwrap_or_else(std::sync::PoisonError::into_inner).current_mode_id = initial;
+            modes
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .current_mode_id = initial;
         }
     }
 }
@@ -1491,9 +1524,10 @@ pub(crate) fn mode_select_of(
         };
         let choices: Vec<&acp::SessionConfigSelectOption> = match &select.options {
             acp::SessionConfigSelectOptions::Ungrouped(choices) => choices.iter().collect(),
-            acp::SessionConfigSelectOptions::Grouped(groups) => {
-                groups.iter().flat_map(|group| group.options.iter()).collect()
-            }
+            acp::SessionConfigSelectOptions::Grouped(groups) => groups
+                .iter()
+                .flat_map(|group| group.options.iter())
+                .collect(),
             _ => return None,
         };
         if choices.is_empty() {
@@ -1553,9 +1587,10 @@ fn model_select_of(options: &[acp::SessionConfigOption]) -> Option<ModelSelect> 
         // menu would be a new visual pattern.
         let choices: Vec<&acp::SessionConfigSelectOption> = match &select.options {
             acp::SessionConfigSelectOptions::Ungrouped(choices) => choices.iter().collect(),
-            acp::SessionConfigSelectOptions::Grouped(groups) => {
-                groups.iter().flat_map(|group| group.options.iter()).collect()
-            }
+            acp::SessionConfigSelectOptions::Grouped(groups) => groups
+                .iter()
+                .flat_map(|group| group.options.iter())
+                .collect(),
             // `#[non_exhaustive]`: a shape this build does not know is not a
             // list we can render.
             _ => return None,
@@ -1616,7 +1651,9 @@ impl AgentModelSelector for AcpModelSelector {
     fn list_models(&self) -> BoxFuture<'static, Result<AgentModelList>> {
         // Already in memory — the agent advertised the list up front and keeps
         // it current with `config_options_updated`, so this needs no round trip.
-        let models = self.select().map(|select| AgentModelList::Flat(select.models));
+        let models = self
+            .select()
+            .map(|select| AgentModelList::Flat(select.models));
         async move { models }.boxed()
     }
 
@@ -1703,7 +1740,8 @@ impl AgentSessionConfigOptions for AcpSessionConfigOptions {
             *options
                 .config_options
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = response.config_options.clone();
+                .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                response.config_options.clone();
             options.notify();
             Ok(response.config_options)
         }
@@ -1714,7 +1752,6 @@ impl AgentSessionConfigOptions for AcpSessionConfigOptions {
         Some(self.options.subscribe())
     }
 }
-
 
 /// The login command for an auth method, from whichever of the two shapes the
 /// agent used. Ported from Zed's `terminal_auth_task` (`acp.rs:1887-1921`).
@@ -2243,7 +2280,10 @@ mod deadline_tests {
     async fn an_expired_request_becomes_a_typed_timed_out_error() {
         let agent = AgentId::new("codex-acp");
         let debug_log = AcpDebugLog::new();
-        debug_log.record_line(AcpDebugMessageDirection::Stderr, "app-server: waiting on lock");
+        debug_log.record_line(
+            AcpDebugMessageDirection::Stderr,
+            "app-server: waiting on lock",
+        );
 
         let result: Result<()> =
             with_request_deadline(&agent, "session/new", &debug_log, std::future::pending()).await;
@@ -2263,7 +2303,9 @@ mod deadline_tests {
                 assert_eq!(phase.as_ref(), "session/new");
                 assert_eq!(*after, REQUEST_TIMEOUT);
                 assert!(
-                    stderr.as_deref().is_some_and(|s| s.contains("waiting on lock")),
+                    stderr
+                        .as_deref()
+                        .is_some_and(|s| s.contains("waiting on lock")),
                     "the trailing stderr rides along: {stderr:?}"
                 );
             }
@@ -2328,10 +2370,17 @@ mod mode_select_tests {
         ]));
         let modes = session_modes_of(None, Some(&opts)).expect("modes from the select");
         assert_eq!(modes.current_mode_id.0.as_ref(), "plan");
-        let ids: Vec<&str> = modes.available_modes.iter().map(|m| m.id.0.as_ref()).collect();
+        let ids: Vec<&str> = modes
+            .available_modes
+            .iter()
+            .map(|m| m.id.0.as_ref())
+            .collect();
         assert_eq!(ids, ["build", "plan"]);
         assert_eq!(modes.available_modes[0].name, "Build");
-        assert_eq!(modes.available_modes[0].description.as_deref(), Some("Edits files"));
+        assert_eq!(
+            modes.available_modes[0].description.as_deref(),
+            Some("Edits files")
+        );
         assert_eq!(modes.available_modes[1].description, None);
     }
 
@@ -2343,7 +2392,10 @@ mod mode_select_tests {
             { "id": "mode", "name": "Mode", "category": "mode", "type": "select",
               "currentValue": "b", "options": [ { "value": "b", "name": "B" } ] }
         ]));
-        let own = acp::SessionModeState::new("default", vec![acp::SessionMode::new("default", "Default")]);
+        let own = acp::SessionModeState::new(
+            "default",
+            vec![acp::SessionMode::new("default", "Default")],
+        );
         let modes = session_modes_of(Some(own), Some(&opts)).expect("the agent's own modes");
         assert_eq!(modes.current_mode_id.0.as_ref(), "default");
     }

@@ -34,8 +34,9 @@ impl SessionMcpServers for TokenOffering {
         asked.push(request.clone());
         let token = format!("token-{}", asked.len());
         let server = acp::McpServer::Http(
-            acp::McpServerHttp::new("atlas_memory", "http://127.0.0.1:4321/mcp")
-                .headers(vec![acp::HttpHeader::new("Authorization", format!("Bearer {token}"))]),
+            acp::McpServerHttp::new("atlas_memory", "http://127.0.0.1:4321/mcp").headers(vec![
+                acp::HttpHeader::new("Authorization", format!("Bearer {token}")),
+            ]),
         );
         let settled = self.settled.clone();
         SessionMcpOffer::new(vec![server], move |session| {
@@ -67,7 +68,8 @@ fn the_memory_entry(token: &str) -> serde_json::Value {
 #[tokio::test]
 async fn an_agent_advertising_http_mcp_gets_the_server_with_its_token_on_session_new() {
     let offering = Arc::new(TokenOffering::default());
-    let Some((manager, pid_file)) = manager_offering_mcp("mcp-new-http", http_capable(json!({})), offering.clone())
+    let Some((manager, pid_file)) =
+        manager_offering_mcp("mcp-new-http", http_capable(json!({})), offering.clone())
     else {
         eprintln!("skipping: no python3 on this machine");
         return;
@@ -84,7 +86,10 @@ async fn an_agent_advertising_http_mcp_gets_the_server_with_its_token_on_session
 
     let asked = offering.asked.lock().unwrap().clone();
     assert_eq!(asked.len(), 1);
-    assert!(asked[0].http_mcp, "the host is told the agent advertised HTTP MCP");
+    assert!(
+        asked[0].http_mcp,
+        "the host is told the agent advertised HTTP MCP"
+    );
     assert!(
         !asked[0].ui_control,
         "an ACP connection never carries UI control (ADR-0012), whatever the agent is",
@@ -94,7 +99,10 @@ async fn an_agent_advertising_http_mcp_gets_the_server_with_its_token_on_session
         "an ACP connection never carries organisation access (ADR-0014), whatever the agent is",
     );
     assert_eq!(asked[0].agent_id.as_str(), "fake-agent");
-    assert_eq!(asked[0].session_id, None, "a new session has no id until the agent answers");
+    assert_eq!(
+        asked[0].session_id, None,
+        "a new session has no id until the agent answers"
+    );
     assert_eq!(
         *offering.settled.lock().unwrap(),
         vec![("token-1".to_string(), Some("session-1".to_string()))],
@@ -108,7 +116,9 @@ async fn an_agent_advertising_http_mcp_gets_the_server_with_its_token_on_session
 #[tokio::test]
 async fn an_agent_without_http_mcp_gets_no_server_entry() {
     let offering = Arc::new(TokenOffering::default());
-    let Some((manager, pid_file)) = manager_offering_mcp("mcp-new-none", json!({}), offering.clone()) else {
+    let Some((manager, pid_file)) =
+        manager_offering_mcp("mcp-new-none", json!({}), offering.clone())
+    else {
         eprintln!("skipping: no python3 on this machine");
         return;
     };
@@ -125,7 +135,10 @@ async fn an_agent_without_http_mcp_gets_no_server_entry() {
         "an HTTP server never reaches an agent that did not advertise HTTP MCP",
     );
     let asked = offering.asked.lock().unwrap().clone();
-    assert!(!asked[0].http_mcp, "the host is told the agent did not advertise HTTP MCP");
+    assert!(
+        !asked[0].http_mcp,
+        "the host is told the agent did not advertise HTTP MCP"
+    );
 
     manager.shutdown();
     drop(thread);
@@ -134,9 +147,11 @@ async fn an_agent_without_http_mcp_gets_no_server_entry() {
 #[tokio::test]
 async fn a_loaded_session_gets_the_server_and_its_token_is_bound_to_that_session() {
     let offering = Arc::new(TokenOffering::default());
-    let Some((manager, pid_file)) =
-        manager_offering_mcp("mcp-load", http_capable(json!({ "loadSession": true })), offering.clone())
-    else {
+    let Some((manager, pid_file)) = manager_offering_mcp(
+        "mcp-load",
+        http_capable(json!({ "loadSession": true })),
+        offering.clone(),
+    ) else {
         eprintln!("skipping: no python3 on this machine");
         return;
     };
@@ -202,9 +217,11 @@ async fn a_resumed_session_gets_the_server() {
 #[tokio::test]
 async fn a_session_that_fails_to_open_releases_its_token() {
     let offering = Arc::new(TokenOffering::default());
-    let Some((manager, _pid_file)) =
-        manager_offering_mcp("mcp-load-fail", http_capable(json!({ "loadSession": true })), offering.clone())
-    else {
+    let Some((manager, _pid_file)) = manager_offering_mcp(
+        "mcp-load-fail",
+        http_capable(json!({ "loadSession": true })),
+        offering.clone(),
+    ) else {
         eprintln!("skipping: no python3 on this machine");
         return;
     };

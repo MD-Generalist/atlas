@@ -44,7 +44,11 @@ fn transcript(dir: &Path, session_id: &str, lines: &[String]) {
 fn a_conversation() -> Vec<String> {
     vec![
         line("user", "u1", "Add rate limiting to the upload endpoint"),
-        line("assistant", "a1", "I've added a token bucket keyed on org_id."),
+        line(
+            "assistant",
+            "a1",
+            "I've added a token bucket keyed on org_id.",
+        ),
         line("user", "u2", "Now cover the burst case"),
         line("assistant", "a2", "Added a burst allowance."),
     ]
@@ -87,7 +91,10 @@ fn existing_transcripts_import_as_sessions_and_messages() {
     assert_eq!(messages.len(), 4);
     assert_eq!(messages.iter().filter(|m| m.role == Role::User).count(), 2);
     assert_eq!(
-        messages.iter().filter(|m| m.role == Role::Assistant).count(),
+        messages
+            .iter()
+            .filter(|m| m.role == Role::Assistant)
+            .count(),
         2
     );
 }
@@ -99,8 +106,13 @@ fn imported_sessions_are_attributable_as_imported() {
     transcript(&transcripts, "sess-abc", &a_conversation());
 
     let mut store = store_in(dir.path());
-    import_all(&mut store, WORKSPACE, &TranscriptSource::new(&transcripts), ProjectMode::Local)
-        .unwrap();
+    import_all(
+        &mut store,
+        WORKSPACE,
+        &TranscriptSource::new(&transcripts),
+        ProjectMode::Local,
+    )
+    .unwrap();
 
     let sessions = store.sessions_for_project(WORKSPACE).unwrap();
     assert_eq!(sessions[0].source, Source::ExternalJsonl);
@@ -116,9 +128,13 @@ fn several_transcripts_import_as_several_sessions() {
     }
 
     let mut store = store_in(dir.path());
-    let outcome =
-        import_all(&mut store, WORKSPACE, &TranscriptSource::new(&transcripts), ProjectMode::Local)
-            .unwrap();
+    let outcome = import_all(
+        &mut store,
+        WORKSPACE,
+        &TranscriptSource::new(&transcripts),
+        ProjectMode::Local,
+    )
+    .unwrap();
 
     assert_eq!(outcome.files_seen, 3);
     assert_eq!(outcome.sessions_imported, 3);
@@ -139,13 +155,23 @@ fn imported_history_keeps_its_real_dates_not_the_import_date() {
         "sess-old",
         &[
             line_at("user", "u1", "An old question", "2025-02-03T09:15:00.000Z"),
-            line_at("assistant", "a1", "An old answer", "2025-02-03T09:16:30.000Z"),
+            line_at(
+                "assistant",
+                "a1",
+                "An old answer",
+                "2025-02-03T09:16:30.000Z",
+            ),
         ],
     );
 
     let mut store = store_in(dir.path());
-    import_all(&mut store, WORKSPACE, &TranscriptSource::new(&transcripts), ProjectMode::Local)
-        .unwrap();
+    import_all(
+        &mut store,
+        WORKSPACE,
+        &TranscriptSource::new(&transcripts),
+        ProjectMode::Local,
+    )
+    .unwrap();
 
     let session = &store.sessions_for_project(WORKSPACE).unwrap()[0];
     assert_eq!(
@@ -155,8 +181,14 @@ fn imported_history_keeps_its_real_dates_not_the_import_date() {
     );
 
     let messages = store.messages_for_session(&session.id).unwrap();
-    assert_eq!(messages[0].created_at.to_rfc3339(), "2025-02-03T09:15:00+00:00");
-    assert_eq!(messages[1].created_at.to_rfc3339(), "2025-02-03T09:16:30+00:00");
+    assert_eq!(
+        messages[0].created_at.to_rfc3339(),
+        "2025-02-03T09:15:00+00:00"
+    );
+    assert_eq!(
+        messages[1].created_at.to_rfc3339(),
+        "2025-02-03T09:16:30+00:00"
+    );
 }
 
 // ── Redaction ───────────────────────────────────────────────────────────────
@@ -171,17 +203,34 @@ fn imported_content_is_redacted_before_storage_including_the_title() {
         &transcripts,
         "sess-secret",
         &[
-            line("user", "u1", "here's my key sk-ABCDEF0123456789ABCDEF, why does it fail"),
-            line("assistant", "a1", "The value API_KEY=supersecretvalue123 is wrong."),
+            line(
+                "user",
+                "u1",
+                "here's my key sk-ABCDEF0123456789ABCDEF, why does it fail",
+            ),
+            line(
+                "assistant",
+                "a1",
+                "The value API_KEY=supersecretvalue123 is wrong.",
+            ),
         ],
     );
 
     let mut store = store_in(dir.path());
-    import_all(&mut store, WORKSPACE, &TranscriptSource::new(&transcripts), ProjectMode::Local)
-        .unwrap();
+    import_all(
+        &mut store,
+        WORKSPACE,
+        &TranscriptSource::new(&transcripts),
+        ProjectMode::Local,
+    )
+    .unwrap();
 
     let session = &store.sessions_for_project(WORKSPACE).unwrap()[0];
-    assert!(!session.title.as_deref().unwrap().contains("sk-ABCDEF0123456789ABCDEF"));
+    assert!(!session
+        .title
+        .as_deref()
+        .unwrap()
+        .contains("sk-ABCDEF0123456789ABCDEF"));
 
     for message in store.messages_for_session(&session.id).unwrap() {
         let body = store.message_body(&message).unwrap();
@@ -219,9 +268,13 @@ fn a_session_already_captured_via_acp_is_not_imported_again() {
             .unwrap();
     }
 
-    let outcome =
-        import_all(&mut store, WORKSPACE, &TranscriptSource::new(&transcripts), ProjectMode::Local)
-            .unwrap();
+    let outcome = import_all(
+        &mut store,
+        WORKSPACE,
+        &TranscriptSource::new(&transcripts),
+        ProjectMode::Local,
+    )
+    .unwrap();
 
     assert_eq!(outcome.skipped_already_captured, 1);
     assert_eq!(outcome.sessions_imported, 0);
@@ -240,11 +293,10 @@ fn re_running_the_import_is_a_no_op() {
 
     let mut store = store_in(dir.path());
     import_all(&mut store, WORKSPACE, &source, ProjectMode::Local).unwrap();
-    let after_first = store.messages_for_session(
-        &store.sessions_for_project(WORKSPACE).unwrap()[0].id,
-    )
-    .unwrap()
-    .len();
+    let after_first = store
+        .messages_for_session(&store.sessions_for_project(WORKSPACE).unwrap()[0].id)
+        .unwrap()
+        .len();
 
     let second = import_all(&mut store, WORKSPACE, &source, ProjectMode::Local).unwrap();
     assert_eq!(second.sessions_imported, 0);
@@ -399,21 +451,32 @@ fn tool_use_and_tool_result_blocks_import_as_tool_call_rows() {
     .unwrap();
 
     let mut store = store_in(dir.path());
-    import_all(&mut store, WORKSPACE, &TranscriptSource::new(&transcripts), ProjectMode::Local)
-        .unwrap();
+    import_all(
+        &mut store,
+        WORKSPACE,
+        &TranscriptSource::new(&transcripts),
+        ProjectMode::Local,
+    )
+    .unwrap();
 
     let session = &store.sessions_for_project(WORKSPACE).unwrap()[0];
     let calls = store.tool_calls_for_session(&session.id).unwrap();
     assert_eq!(calls.len(), 2);
 
-    let ok = calls.iter().find(|c| c.tool_name == ToolName::Bash).expect("the Bash call");
+    let ok = calls
+        .iter()
+        .find(|c| c.tool_name == ToolName::Bash)
+        .expect("the Bash call");
     assert_eq!(ok.status, ToolStatus::Completed);
     assert_eq!(
         String::from_utf8(store.tool_call_result(ok).unwrap().unwrap()).unwrap(),
         "test result: ok"
     );
 
-    let bad = calls.iter().find(|c| c.tool_name == ToolName::Read).expect("the Read call");
+    let bad = calls
+        .iter()
+        .find(|c| c.tool_name == ToolName::Read)
+        .expect("the Read call");
     assert_eq!(bad.status, ToolStatus::Failed, "is_error maps to Failed");
 
     // The facet counts are what the sidebar renders; they must not be empty for
@@ -472,9 +535,13 @@ fn malformed_lines_are_skipped_and_counted_and_the_file_still_imports() {
     .unwrap();
 
     let mut store = store_in(dir.path());
-    let outcome =
-        import_all(&mut store, WORKSPACE, &TranscriptSource::new(&transcripts), ProjectMode::Local)
-            .unwrap();
+    let outcome = import_all(
+        &mut store,
+        WORKSPACE,
+        &TranscriptSource::new(&transcripts),
+        ProjectMode::Local,
+    )
+    .unwrap();
 
     assert_eq!(outcome.malformed_lines, 2);
     assert_eq!(outcome.sessions_imported, 1);
@@ -513,7 +580,10 @@ fn a_uuid_less_transcript_imported_twice_does_not_duplicate() {
     // The file grows; the whole file is re-read.
     std::fs::write(
         transcripts.join("sess-bare.jsonl"),
-        format!("{first}\n{}\n", bare("assistant", "a reply, also without a uuid")),
+        format!(
+            "{first}\n{}\n",
+            bare("assistant", "a reply, also without a uuid")
+        ),
     )
     .unwrap();
     import_all(&mut store, WORKSPACE, &source, ProjectMode::Local).unwrap();
@@ -547,7 +617,10 @@ fn an_io_error_mid_file_does_not_claim_the_unread_tail() {
     // The file was not marked done, so the next pass re-examines it rather
     // than treating it as unchanged — and the re-read duplicates nothing.
     let second = import_all(&mut store, WORKSPACE, &source, ProjectMode::Local).unwrap();
-    assert_eq!(second.skipped_unchanged, 0, "an unfinished file is not 'done'");
+    assert_eq!(
+        second.skipped_unchanged, 0,
+        "an unfinished file is not 'done'"
+    );
     assert_eq!(store.messages_for_session(&session.id).unwrap().len(), 1);
 
     // Once the file is repaired, the tail imports.
@@ -586,12 +659,20 @@ fn sidechain_lines_are_excluded() {
     .unwrap();
 
     let mut store = store_in(dir.path());
-    import_all(&mut store, WORKSPACE, &TranscriptSource::new(&transcripts), ProjectMode::Local)
-        .unwrap();
+    import_all(
+        &mut store,
+        WORKSPACE,
+        &TranscriptSource::new(&transcripts),
+        ProjectMode::Local,
+    )
+    .unwrap();
 
     let session = &store.sessions_for_project(WORKSPACE).unwrap()[0];
     for message in store.messages_for_session(&session.id).unwrap() {
-        assert!(!store.message_body(&message).unwrap().contains("subagent chatter"));
+        assert!(!store
+            .message_body(&message)
+            .unwrap()
+            .contains("subagent chatter"));
     }
 }
 
@@ -607,9 +688,13 @@ fn a_transcript_with_no_usable_turns_leaves_no_empty_session() {
     .unwrap();
 
     let mut store = store_in(dir.path());
-    let outcome =
-        import_all(&mut store, WORKSPACE, &TranscriptSource::new(&transcripts), ProjectMode::Local)
-            .unwrap();
+    let outcome = import_all(
+        &mut store,
+        WORKSPACE,
+        &TranscriptSource::new(&transcripts),
+        ProjectMode::Local,
+    )
+    .unwrap();
 
     assert_eq!(outcome.sessions_imported, 0);
     assert!(store.sessions_for_project(WORKSPACE).unwrap().is_empty());
@@ -641,13 +726,24 @@ fn imported_sessions_produce_no_checkpoints() {
     transcript(&transcripts, "sess-abc", &a_conversation());
 
     let mut store = store_in(dir.path());
-    import_all(&mut store, WORKSPACE, &TranscriptSource::new(&transcripts), ProjectMode::Local)
-        .unwrap();
+    import_all(
+        &mut store,
+        WORKSPACE,
+        &TranscriptSource::new(&transcripts),
+        ProjectMode::Local,
+    )
+    .unwrap();
 
     let session = &store.sessions_for_project(WORKSPACE).unwrap()[0];
-    assert!(store.checkpoints_for_session(&session.id).unwrap().is_empty());
+    assert!(store
+        .checkpoints_for_session(&session.id)
+        .unwrap()
+        .is_empty());
     assert!(
-        store.file_touches_for_session(&session.id).unwrap().is_empty(),
+        store
+            .file_touches_for_session(&session.id)
+            .unwrap()
+            .is_empty(),
         "no write-time file records exist to invent"
     );
 }
@@ -661,8 +757,13 @@ fn imported_rows_are_local_in_a_local_project() {
     transcript(&transcripts, "sess-abc", &a_conversation());
 
     let mut store = store_in(dir.path());
-    import_all(&mut store, WORKSPACE, &TranscriptSource::new(&transcripts), ProjectMode::Local)
-        .unwrap();
+    import_all(
+        &mut store,
+        WORKSPACE,
+        &TranscriptSource::new(&transcripts),
+        ProjectMode::Local,
+    )
+    .unwrap();
 
     assert_eq!(
         store.sessions_for_project(WORKSPACE).unwrap()[0].sync_state,
@@ -677,8 +778,13 @@ fn imported_rows_are_pending_in_a_cloud_project() {
     transcript(&transcripts, "sess-abc", &a_conversation());
 
     let mut store = store_in(dir.path());
-    import_all(&mut store, WORKSPACE, &TranscriptSource::new(&transcripts), ProjectMode::Cloud)
-        .unwrap();
+    import_all(
+        &mut store,
+        WORKSPACE,
+        &TranscriptSource::new(&transcripts),
+        ProjectMode::Cloud,
+    )
+    .unwrap();
 
     assert_eq!(
         store.sessions_for_project(WORKSPACE).unwrap()[0].sync_state,
@@ -700,7 +806,10 @@ fn the_preview_reports_real_numbers_for_the_confirmation() {
     let preview = import_preview(&TranscriptSource::new(&transcripts), ProjectMode::Cloud);
     assert_eq!(preview.session_count, 2);
     assert!(preview.total_bytes > 0);
-    assert_eq!(preview.earliest.as_deref(), Some("2026-07-01T10:00:00.000Z"));
+    assert_eq!(
+        preview.earliest.as_deref(),
+        Some("2026-07-01T10:00:00.000Z")
+    );
     assert!(
         preview.is_bulk_disclosure,
         "importing into a Cloud Project publishes months of terminal conversations"
@@ -819,8 +928,16 @@ fn a_large_corpus_imports_in_reasonable_time() {
     let long: Vec<String> = (0..200)
         .flat_map(|i| {
             vec![
-                line("user", &format!("u{i}"), "a question about the rate limiter"),
-                line("assistant", &format!("a{i}"), "a reasonably long answer about it"),
+                line(
+                    "user",
+                    &format!("u{i}"),
+                    "a question about the rate limiter",
+                ),
+                line(
+                    "assistant",
+                    &format!("a{i}"),
+                    "a reasonably long answer about it",
+                ),
             ]
         })
         .collect();
@@ -830,9 +947,13 @@ fn a_large_corpus_imports_in_reasonable_time() {
 
     let mut store = store_in(dir.path());
     let started = std::time::Instant::now();
-    let outcome =
-        import_all(&mut store, WORKSPACE, &TranscriptSource::new(&transcripts), ProjectMode::Local)
-            .unwrap();
+    let outcome = import_all(
+        &mut store,
+        WORKSPACE,
+        &TranscriptSource::new(&transcripts),
+        ProjectMode::Local,
+    )
+    .unwrap();
 
     assert_eq!(outcome.sessions_imported, 20);
     // Every line is recorded through the same path, so the count is exact.
@@ -877,8 +998,13 @@ fn import_once(root: &Path, lines: &[String]) -> Store {
     let transcripts = root.join("transcripts");
     transcript(&transcripts, "sess-usage", lines);
     let mut store = store_in(root);
-    import_all(&mut store, WORKSPACE, &TranscriptSource::new(&transcripts), ProjectMode::Local)
-        .expect("imports");
+    import_all(
+        &mut store,
+        WORKSPACE,
+        &TranscriptSource::new(&transcripts),
+        ProjectMode::Local,
+    )
+    .expect("imports");
     store
 }
 
@@ -897,7 +1023,10 @@ fn usage_is_read_off_the_transcript_and_reaches_the_session() {
     let totals = sessions[0].token_totals;
     assert_eq!(totals.input_tokens, 2);
     assert_eq!(totals.output_tokens, 1_009);
-    assert_eq!(totals.cache_creation_tokens, 29_002, "cache writes are spend too");
+    assert_eq!(
+        totals.cache_creation_tokens, 29_002,
+        "cache writes are spend too"
+    );
     assert_eq!(totals.cache_read_tokens, 15_565);
     assert_eq!(
         sessions[0].model.as_deref(),
@@ -935,7 +1064,10 @@ fn repeated_lines_for_one_request_are_counted_once() {
 fn re_importing_a_grown_transcript_does_not_double_the_totals() {
     let dir = tempfile::tempdir().unwrap();
     let transcripts = dir.path().join("transcripts");
-    let mut lines = vec![line("user", "u1", "Go"), usage_line("a1", "req_1", "Done.", 2, 1_000)];
+    let mut lines = vec![
+        line("user", "u1", "Go"),
+        usage_line("a1", "req_1", "Done.", 2, 1_000),
+    ];
     transcript(&transcripts, "sess-usage", &lines);
 
     let mut store = store_in(dir.path());
@@ -972,9 +1104,14 @@ fn usage_on_a_tool_only_assistant_line_is_not_dropped() {
 
     let store = import_once(dir.path(), &[line("user", "u1", "List them"), tool_only]);
     let totals = store.sessions_for_project(WORKSPACE).unwrap()[0].token_totals;
-    assert_eq!(totals.output_tokens, 88, "a line with no text still spent tokens");
     assert_eq!(
-        store.sessions_for_project(WORKSPACE).unwrap()[0].model.as_deref(),
+        totals.output_tokens, 88,
+        "a line with no text still spent tokens"
+    );
+    assert_eq!(
+        store.sessions_for_project(WORKSPACE).unwrap()[0]
+            .model
+            .as_deref(),
         Some("claude-opus-5"),
         "and still names its model"
     );
@@ -985,5 +1122,9 @@ fn a_transcript_with_no_usage_reports_none_rather_than_zeros() {
     let dir = tempfile::tempdir().unwrap();
     let store = import_once(dir.path(), &a_conversation());
     let totals = store.sessions_for_project(WORKSPACE).unwrap()[0].token_totals;
-    assert_eq!(totals, Default::default(), "nothing recorded stays nothing recorded");
+    assert_eq!(
+        totals,
+        Default::default(),
+        "nothing recorded stays nothing recorded"
+    );
 }

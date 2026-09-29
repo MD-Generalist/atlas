@@ -136,7 +136,10 @@ async fn fetch_remote(app: &AppHandle) -> Option<RemoteUpdateConfig> {
 }
 
 fn emit_checking(app: &AppHandle, checking: bool) {
-    let _ = app.emit("atlas:update-checking", serde_json::json!({ "checking": checking }));
+    let _ = app.emit(
+        "atlas:update-checking",
+        serde_json::json!({ "checking": checking }),
+    );
 }
 
 // ── Check ────────────────────────────────────────────────────────────────────
@@ -177,7 +180,10 @@ async fn maybe_start_update(app: &AppHandle, cfg: RemoteUpdateConfig, _force: bo
             if let Some(p) = &m.staged_app {
                 if Path::new(p).exists() {
                     *app.state::<UpdaterState>().ready.lock() = Some(cfg.version.clone());
-                    let _ = app.emit("atlas:update-ready", serde_json::json!({ "version": cfg.version }));
+                    let _ = app.emit(
+                        "atlas:update-ready",
+                        serde_json::json!({ "version": cfg.version }),
+                    );
                     return;
                 }
             }
@@ -254,11 +260,17 @@ pub(super) async fn update_ignore(version: String, app: AppHandle) -> Result<(),
     };
     // Off the async runtime thread — this touches the filesystem.
     let app_for_write = app.clone();
-    let snapshot = tokio::task::spawn_blocking(move || crate::state::atlas_config::update(&app_for_write, patch))
-        .await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())?;
-    crate::commands::atlas_config::notify_settings_changed(&app, &snapshot.settings, snapshot.generation);
+    let snapshot = tokio::task::spawn_blocking(move || {
+        crate::state::atlas_config::update(&app_for_write, patch)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+    crate::commands::atlas_config::notify_settings_changed(
+        &app,
+        &snapshot.settings,
+        snapshot.generation,
+    );
     Ok(())
 }
 
@@ -282,7 +294,10 @@ async fn download_and_stage(app: AppHandle, cfg: RemoteUpdateConfig) {
     match result {
         Ok(_) => {
             *app.state::<UpdaterState>().ready.lock() = Some(cfg.version.clone());
-            let _ = app.emit("atlas:update-ready", serde_json::json!({ "version": cfg.version }));
+            let _ = app.emit(
+                "atlas:update-ready",
+                serde_json::json!({ "version": cfg.version }),
+            );
         }
         Err(e) => {
             tracing::warn!(target: "atlas::updater", "download/stage failed: {e}");
@@ -291,7 +306,10 @@ async fn download_and_stage(app: AppHandle, cfg: RemoteUpdateConfig) {
     }
 }
 
-async fn do_download_and_stage(app: &AppHandle, cfg: &RemoteUpdateConfig) -> Result<PathBuf, String> {
+async fn do_download_and_stage(
+    app: &AppHandle,
+    cfg: &RemoteUpdateConfig,
+) -> Result<PathBuf, String> {
     let dir = updates_dir(app)?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("updates dir: {e}"))?;
     let dmg = dir.join(format!("Atlas-{}.dmg", cfg.version));
@@ -317,9 +335,10 @@ async fn do_download_and_stage(app: &AppHandle, cfg: &RemoteUpdateConfig) -> Res
     let dmgc = dmg.clone();
     let dirc = dir.clone();
     let ver = cfg.version.clone();
-    let staged = tauri::async_runtime::spawn_blocking(move || stage_from_dmg(&appc, &dmgc, &dirc, &ver))
-        .await
-        .map_err(|e| format!("stage join: {e}"))??;
+    let staged =
+        tauri::async_runtime::spawn_blocking(move || stage_from_dmg(&appc, &dmgc, &dirc, &ver))
+            .await
+            .map_err(|e| format!("stage join: {e}"))??;
 
     save_manifest(
         app,
@@ -337,7 +356,12 @@ async fn do_download_and_stage(app: &AppHandle, cfg: &RemoteUpdateConfig) -> Res
 
 /// Mount the DMG, verify its Apple signature, and unpack the `.app` into
 /// `<updates>/staged/Atlas.app`. Returns the staged `.app` path.
-fn stage_from_dmg(app: &AppHandle, dmg: &Path, dir: &Path, version: &str) -> Result<PathBuf, String> {
+fn stage_from_dmg(
+    app: &AppHandle,
+    dmg: &Path,
+    dir: &Path,
+    version: &str,
+) -> Result<PathBuf, String> {
     emit_progress(app, version, 0, 0, "verifying");
     let mount_point = dir.join("mnt");
     let _ = std::fs::remove_dir_all(&mount_point);
@@ -453,12 +477,16 @@ pub fn apply_on_exit(app: &AppHandle) {
     if ignored.as_deref() == Some(m.version.as_str()) {
         return;
     }
-    let Some(staged) = m.staged_app.clone() else { return };
+    let Some(staged) = m.staged_app.clone() else {
+        return;
+    };
     let staged_path = PathBuf::from(staged);
     if !staged_path.exists() {
         return;
     }
-    let Ok(dest) = current_app_bundle() else { return };
+    let Ok(dest) = current_app_bundle() else {
+        return;
+    };
     if swap_app(&staged_path, &dest).is_ok() {
         let _ = save_manifest(
             app,
@@ -487,7 +515,10 @@ pub fn init_on_startup(app: &AppHandle) {
             let _ = std::fs::remove_dir_all(&dir);
         }
         if m.applied {
-            let _ = app.emit("atlas:update-applied", serde_json::json!({ "version": CURRENT_VERSION }));
+            let _ = app.emit(
+                "atlas:update-applied",
+                serde_json::json!({ "version": CURRENT_VERSION }),
+            );
         }
     }
 }

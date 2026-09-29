@@ -81,7 +81,6 @@ pub struct CodexMemory {
     threads: Vec<CodexThread>,
 }
 
-
 /// History-list row for a Codex session, shaped to match `ClaudeSessionMeta`
 /// so the chat sidebar can merge both agents' sessions uniformly. `id` is the
 // The Codex SESSION-HISTORY surface used to live here: `list_codex_sessions`
@@ -159,7 +158,11 @@ pub async fn collect_corpus(project_path: &str) -> Vec<MemoryDoc> {
     }
     for e in &claude.entries {
         let stem = e.name.trim_end_matches(".md").to_string();
-        let title = if e.title.is_empty() { stem.clone() } else { e.title.clone() };
+        let title = if e.title.is_empty() {
+            stem.clone()
+        } else {
+            e.title.clone()
+        };
         let body = if e.description.is_empty() {
             e.body.clone()
         } else {
@@ -174,7 +177,11 @@ pub async fn collect_corpus(project_path: &str) -> Vec<MemoryDoc> {
             id: format!("claude:{}", e.name),
             title,
             summary,
-            kind: if e.kind.is_empty() { "memory".into() } else { e.kind.clone() },
+            kind: if e.kind.is_empty() {
+                "memory".into()
+            } else {
+                e.kind.clone()
+            },
             source: "claude".into(),
             file_path: Some(mem_dir.join(&e.name).to_string_lossy().to_string()),
             timestamp_ms: e.modified_ms as i64,
@@ -209,7 +216,12 @@ pub async fn collect_corpus(project_path: &str) -> Vec<MemoryDoc> {
             summary: "Global agent instructions".into(),
             kind: "instruction".into(),
             source: "claude".into(),
-            file_path: Some(home.join(".claude").join("CLAUDE.md").to_string_lossy().to_string()),
+            file_path: Some(
+                home.join(".claude")
+                    .join("CLAUDE.md")
+                    .to_string_lossy()
+                    .to_string(),
+            ),
             timestamp_ms: file_mtime_ms(&home.join(".claude").join("CLAUDE.md")),
             text: md.clone(),
             aliases: vec![],
@@ -245,7 +257,11 @@ pub async fn collect_corpus(project_path: &str) -> Vec<MemoryDoc> {
         if text.trim().is_empty() {
             continue;
         }
-        let raw_title = if t.title.trim().is_empty() { &t.first_user_message } else { &t.title };
+        let raw_title = if t.title.trim().is_empty() {
+            &t.first_user_message
+        } else {
+            &t.title
+        };
         docs.push(MemoryDoc {
             id: format!("codex:{}", t.id),
             title: short_title(raw_title),
@@ -351,19 +367,31 @@ fn read_capture_docs(project_path: &str) -> Vec<MemoryDoc> {
             .map(strip_injected_context)
             .unwrap_or_default();
         let title_raw = title_raw.trim().to_string();
-        let title_src = if title_raw.is_empty() { &first_user } else { &title_raw };
+        let title_src = if title_raw.is_empty() {
+            &first_user
+        } else {
+            &title_raw
+        };
         if title_src.trim().is_empty() && text.trim().is_empty() {
             continue; // nothing indexable (e.g. a bound-but-never-messaged session)
         }
         out.push(MemoryDoc {
             id: format!("{agent}:{}", s.native_session_id),
             title: short_title(title_src),
-            summary: short_title(if first_user.is_empty() { title_src } else { &first_user }),
+            summary: short_title(if first_user.is_empty() {
+                title_src
+            } else {
+                &first_user
+            }),
             kind: "thread".into(),
             source: agent.to_string(),
             file_path: None, // capture rows live in SQLite, not an editable file
             timestamp_ms: s.updated_at.timestamp_millis(),
-            text: if text.trim().is_empty() { title_src.clone() } else { text },
+            text: if text.trim().is_empty() {
+                title_src.clone()
+            } else {
+                text
+            },
             aliases: vec![],
             links: vec![],
         });
@@ -768,10 +796,8 @@ async fn query_codex_threads(db: &Path, project_path: &str) -> Vec<CodexThread> 
     // Bound parameter (no SQL string interpolation). rusqlite is blocking, so
     // it runs on the blocking pool.
     let result = tokio::task::spawn_blocking(move || -> rusqlite::Result<Vec<CodexThread>> {
-        let conn = rusqlite::Connection::open_with_flags(
-            &db,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-        )?;
+        let conn =
+            rusqlite::Connection::open_with_flags(&db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         // Safety net for a brief WAL-checkpoint lock; WAL reads normally don't block.
         conn.busy_timeout(std::time::Duration::from_millis(3000))?;
         let mut stmt = conn.prepare(
@@ -826,7 +852,8 @@ mod tests {
     /// envelope in front of the user's words. Readers must still strip it
     /// from files written back then.
     fn legacy_wire_prompt(block: &str, user_text: &str) -> String {
-        let envelope = atlas_agent_transcript::wrap_memory_envelope(&[block]).expect("a present block");
+        let envelope =
+            atlas_agent_transcript::wrap_memory_envelope(&[block]).expect("a present block");
         format!("{envelope}\n\n{user_text}")
     }
     use super::*;
@@ -853,8 +880,16 @@ mod tests {
 
         let body = read_without_injected_context(&path).expect("the file exists");
         assert!(body.contains("The team prefers bun over npm."));
-        for leaked in ["<atlas-memory>", "SHARED MEMORY", "Use RS256", "Do not save any of it"] {
-            assert!(!body.contains(leaked), "{leaked:?} was re-absorbed into the corpus");
+        for leaked in [
+            "<atlas-memory>",
+            "SHARED MEMORY",
+            "Use RS256",
+            "Do not save any of it",
+        ] {
+            assert!(
+                !body.contains(leaked),
+                "{leaked:?} was re-absorbed into the corpus"
+            );
         }
         // Frontmatter still parses: the strip is line-based and leaves the fence.
         let (meta, _) = parse_frontmatter(&body);
@@ -912,9 +947,17 @@ mod tests {
         let docs = read_capture_docs(&project);
         let doc = docs.first().expect("one captured session in the corpus");
         assert!(doc.text.contains("why is auth failing?"));
-        for leaked in ["<atlas-memory>", "SHARED MEMORY", "Use RS256", "Do not save any of it"] {
+        for leaked in [
+            "<atlas-memory>",
+            "SHARED MEMORY",
+            "Use RS256",
+            "Do not save any of it",
+        ] {
             for field in [&doc.text, &doc.title, &doc.summary] {
-                assert!(!field.contains(leaked), "{leaked:?} survived into the corpus");
+                assert!(
+                    !field.contains(leaked),
+                    "{leaked:?} survived into the corpus"
+                );
             }
         }
 
@@ -955,7 +998,9 @@ mod tests {
             .find(|d| d.id == "atlas-agent:native-1")
             .expect("the native session is in the corpus");
         assert_eq!(doc.source, "atlas-agent");
-        assert!(doc.text.contains("refactor the retry loop in the gateway client"));
+        assert!(doc
+            .text
+            .contains("refactor the retry loop in the gateway client"));
 
         std::fs::remove_dir_all(&dir).ok();
     }

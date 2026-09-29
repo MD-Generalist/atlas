@@ -110,21 +110,30 @@ impl Extractor {
             self.turns.lock().remove(&writer.session_id);
             return 0;
         };
-        self.turns.lock().insert(writer.session_id.clone(), turns.clone());
-        self.run(route, cwd, writer, &turns, Trigger::TurnFinished).await
+        self.turns
+            .lock()
+            .insert(writer.session_id.clone(), turns.clone());
+        self.run(route, cwd, writer, &turns, Trigger::TurnFinished)
+            .await
     }
 
     /// `writer`'s session in `cwd` ended: one last pass over whatever arrived
     /// since the previous one. At most once per session. Returns how many
     /// entries were recorded.
-    pub async fn session_ended(&self, sharing: &MemorySharingState, cwd: &str, writer: &Writer) -> usize {
+    pub async fn session_ended(
+        &self,
+        sharing: &MemorySharingState,
+        cwd: &str,
+        writer: &Writer,
+    ) -> usize {
         let Some(turns) = self.turns.lock().remove(&writer.session_id) else {
             return 0;
         };
         let Some(route) = self.route(sharing, cwd) else {
             return 0;
         };
-        self.run(route, cwd, writer, &turns, Trigger::SessionEnd).await
+        self.run(route, cwd, writer, &turns, Trigger::SessionEnd)
+            .await
     }
 
     /// The model a pass in `cwd` would ask, or `None` when no pass runs there
@@ -136,7 +145,14 @@ impl Extractor {
         route_for(&sharing.summarizer_pref(cwd), self.model.signed_in())
     }
 
-    async fn run(&self, route: Route, cwd: &str, writer: &Writer, turns: &[TranscriptTurn], trigger: Trigger) -> usize {
+    async fn run(
+        &self,
+        route: Route,
+        cwd: &str,
+        writer: &Writer,
+        turns: &[TranscriptTurn],
+        trigger: Trigger,
+    ) -> usize {
         // The gate counters, from the scope's memory directory (git lookup
         // and file reads: off the async runtime).
         let loaded = {
@@ -162,7 +178,10 @@ impl Extractor {
         let found = extract::extract(turns, &mut state, trigger, |prompt| async move {
             match tokio::time::timeout(EXTRACT_TIMEOUT, model.complete(route, prompt)).await {
                 Ok(result) => result.map_err(|e| anyhow::anyhow!(e)),
-                Err(_) => Err(anyhow::anyhow!("timed out after {}s", EXTRACT_TIMEOUT.as_secs())),
+                Err(_) => Err(anyhow::anyhow!(
+                    "timed out after {}s",
+                    EXTRACT_TIMEOUT.as_secs()
+                )),
             }
         })
         .await;
@@ -237,14 +256,20 @@ impl ExtractionModel for AppExtractionModel {
     fn signed_in(&self) -> bool {
         self.app
             .try_state::<super::auth::AuthState>()
-            .is_some_and(|auth| matches!(auth.core().snapshot(), crate::auth::AuthSnapshot::SignedIn { .. }))
+            .is_some_and(|auth| {
+                matches!(
+                    auth.core().snapshot(),
+                    crate::auth::AuthSnapshot::SignedIn { .. }
+                )
+            })
     }
 
     fn complete(&self, route: Route, prompt: String) -> Completion<'_> {
         Box::pin(async move {
             match route {
                 Route::Byok { provider, model } => {
-                    super::memory_summarize::run_completion(&self.app, prompt, &provider, &model).await
+                    super::memory_summarize::run_completion(&self.app, prompt, &provider, &model)
+                        .await
                 }
                 Route::Gateway => gateway_completion(&self.app, prompt).await,
             }
@@ -282,7 +307,10 @@ async fn gateway_completion(app: &AppHandle, prompt: String) -> Result<String, S
         .ok_or("the gateway lists no model this account may use")?
         .default_model;
 
-    let url = format!("{}/chat/completions", GATEWAY_BASE_URL.trim_end_matches('/'));
+    let url = format!(
+        "{}/chat/completions",
+        GATEWAY_BASE_URL.trim_end_matches('/')
+    );
     let mut request = reqwest::Client::new()
         .post(&url)
         .bearer_auth(&token)
@@ -368,7 +396,8 @@ mod tests {
     }
 
     fn harness(label: &str, signed_in: bool) -> Harness {
-        let dir = std::env::temp_dir().join(format!("atlas-extract-{label}-{}", uuid::Uuid::new_v4()));
+        let dir =
+            std::env::temp_dir().join(format!("atlas-extract-{label}-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let memory = SharedMemoryStore::new();
         let heard = Arc::new(Mutex::new(Vec::new()));
@@ -436,17 +465,29 @@ mod tests {
         assert_eq!(state.architecture.len(), 1);
         // And each write was announced.
         let kinds: Vec<Vec<String>> = h.heard.lock().iter().map(|c| c.kinds.clone()).collect();
-        assert_eq!(kinds, [vec!["decision"], vec!["fact"], vec!["failure"], vec!["architecture"]]);
+        assert_eq!(
+            kinds,
+            [
+                vec!["decision"],
+                vec!["fact"],
+                vec!["failure"],
+                vec!["architecture"]
+            ]
+        );
     }
 
     #[tokio::test]
     async fn extracted_entries_carry_the_models_confidence_and_extractor_provenance() {
         let h = harness("provenance", true);
-        h.extractor.turn_finished(&h.sharing, &h.project, &writer(), session(26)).await;
+        h.extractor
+            .turn_finished(&h.sharing, &h.project, &writer(), session(26))
+            .await;
 
         let entries = h.memory.list_entries(&h.project, None);
         let by_kind = |k: EntryKind| entries.iter().find(|e| e.kind == k).unwrap();
-        assert!(entries.iter().all(|e| e.source == "extractor" && e.agent == "claude-code" && e.session_id == "sess-1"));
+        assert!(entries.iter().all(|e| e.source == "extractor"
+            && e.agent == "claude-code"
+            && e.session_id == "sess-1"));
         assert_eq!(by_kind(EntryKind::Decision).confidence, 0.9);
         assert_eq!(by_kind(EntryKind::Fact).confidence, 0.85);
         assert_eq!(by_kind(EntryKind::Failure).confidence, 0.7);
@@ -459,7 +500,9 @@ mod tests {
     async fn the_summariser_set_to_provider_uses_the_byok_path() {
         let h = harness("byok", true);
         set_pref(&h.project, "provider", "anthropic", "claude-haiku");
-        h.extractor.turn_finished(&h.sharing, &h.project, &writer(), session(26)).await;
+        h.extractor
+            .turn_finished(&h.sharing, &h.project, &writer(), session(26))
+            .await;
 
         assert_eq!(
             h.model.calls(),
@@ -475,34 +518,54 @@ mod tests {
     async fn extraction_waits_for_the_gates_then_runs_once_at_session_end() {
         let h = harness("gates", true);
         for n in [2, 6, 10, 14] {
-            h.extractor.turn_finished(&h.sharing, &h.project, &writer(), session(n)).await;
+            h.extractor
+                .turn_finished(&h.sharing, &h.project, &writer(), session(n))
+                .await;
         }
         assert!(h.model.calls().is_empty(), "no pass before twenty turns");
         assert!(h.memory.get_state(&h.project).decisions.is_empty());
 
-        assert_eq!(h.extractor.session_ended(&h.sharing, &h.project, &writer()).await, 4);
+        assert_eq!(
+            h.extractor
+                .session_ended(&h.sharing, &h.project, &writer())
+                .await,
+            4
+        );
         assert_eq!(h.model.calls().len(), 1, "one pass at session end");
         assert_eq!(h.memory.get_state(&h.project).decisions.len(), 1);
 
-        assert_eq!(h.extractor.session_ended(&h.sharing, &h.project, &writer()).await, 0);
+        assert_eq!(
+            h.extractor
+                .session_ended(&h.sharing, &h.project, &writer())
+                .await,
+            0
+        );
         assert_eq!(h.model.calls().len(), 1, "a session ends once");
     }
 
     #[tokio::test]
     async fn after_a_gated_pass_the_end_pass_only_runs_on_new_turns() {
         let h = harness("end-after", true);
-        h.extractor.turn_finished(&h.sharing, &h.project, &writer(), session(26)).await;
+        h.extractor
+            .turn_finished(&h.sharing, &h.project, &writer(), session(26))
+            .await;
         assert_eq!(h.model.calls().len(), 1);
         // Nothing new since that pass: the end has nothing to ask about.
-        h.extractor.session_ended(&h.sharing, &h.project, &writer()).await;
+        h.extractor
+            .session_ended(&h.sharing, &h.project, &writer())
+            .await;
         assert_eq!(h.model.calls().len(), 1);
     }
 
     #[tokio::test]
     async fn not_signed_in_without_byok_extraction_does_not_run() {
         let h = harness("signed-out", false);
-        h.extractor.turn_finished(&h.sharing, &h.project, &writer(), session(26)).await;
-        h.extractor.session_ended(&h.sharing, &h.project, &writer()).await;
+        h.extractor
+            .turn_finished(&h.sharing, &h.project, &writer(), session(26))
+            .await;
+        h.extractor
+            .session_ended(&h.sharing, &h.project, &writer())
+            .await;
         assert!(h.model.calls().is_empty());
         assert!(h.heard.lock().is_empty());
     }
@@ -511,14 +574,18 @@ mod tests {
     async fn sharing_off_or_the_reserved_local_mode_runs_nothing() {
         let h = harness("local", true);
         set_pref(&h.project, "local", "", "");
-        h.extractor.turn_finished(&h.sharing, &h.project, &writer(), session(26)).await;
+        h.extractor
+            .turn_finished(&h.sharing, &h.project, &writer(), session(26))
+            .await;
         assert!(h.model.calls().is_empty());
 
         let h = harness("off", true);
         let atlas = std::path::Path::new(&h.project).join(".atlas");
         std::fs::create_dir_all(&atlas).unwrap();
         std::fs::write(atlas.join("memory-sharing.json"), r#"{"enabled":false}"#).unwrap();
-        h.extractor.turn_finished(&h.sharing, &h.project, &writer(), session(26)).await;
+        h.extractor
+            .turn_finished(&h.sharing, &h.project, &writer(), session(26))
+            .await;
         assert!(h.model.calls().is_empty());
     }
 
@@ -529,14 +596,27 @@ mod tests {
             provider: provider.into(),
             model: model.into(),
         };
-        assert_eq!(route_for(&SummarizerPref::default(), true), Some(Route::Gateway));
-        assert_eq!(route_for(&pref("gateway", "", ""), true), Some(Route::Gateway));
+        assert_eq!(
+            route_for(&SummarizerPref::default(), true),
+            Some(Route::Gateway)
+        );
+        assert_eq!(
+            route_for(&pref("gateway", "", ""), true),
+            Some(Route::Gateway)
+        );
         assert_eq!(route_for(&SummarizerPref::default(), false), None);
         assert_eq!(
             route_for(&pref("provider", "openai", "gpt"), false),
-            Some(Route::Byok { provider: "openai".into(), model: "gpt".into() })
+            Some(Route::Byok {
+                provider: "openai".into(),
+                model: "gpt".into()
+            })
         );
-        assert_eq!(route_for(&pref("provider", "", ""), true), None, "provider chosen but not configured");
+        assert_eq!(
+            route_for(&pref("provider", "", ""), true),
+            None,
+            "provider chosen but not configured"
+        );
         assert_eq!(route_for(&pref("local", "", ""), true), None);
     }
 

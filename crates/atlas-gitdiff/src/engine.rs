@@ -141,8 +141,7 @@ pub fn build_file_diff(diff: &str, path: &str, language: &str) -> FileDiff {
                     // lines then all `+` lines, but we tolerate any interleave).
                     let mut minus: Vec<&str> = Vec::new();
                     let mut plus: Vec<&str> = Vec::new();
-                    while i < lines.len()
-                        && matches!(lines[i].kind, RawKind::Minus | RawKind::Plus)
+                    while i < lines.len() && matches!(lines[i].kind, RawKind::Minus | RawKind::Plus)
                     {
                         match lines[i].kind {
                             RawKind::Minus => minus.push(lines[i].text.as_str()),
@@ -189,7 +188,10 @@ fn line_endings_for_display(minus: &[&str], plus: &[&str]) -> (Vec<String>, Vec<
         Some(body) => body.to_string(),
         None => (*l).to_string(),
     };
-    (minus.iter().map(show).collect(), plus.iter().map(show).collect())
+    (
+        minus.iter().map(show).collect(),
+        plus.iter().map(show).collect(),
+    )
 }
 
 fn one_segment(text: &str) -> Vec<Segment> {
@@ -342,7 +344,10 @@ index 111..222 100644
         assert_eq!(right.line_no, 2);
         // The "1" -> "2" word should be emphasized on each side.
         assert!(left.segments.iter().any(|s| s.emph && s.text.contains('1')));
-        assert!(right.segments.iter().any(|s| s.emph && s.text.contains('2')));
+        assert!(right
+            .segments
+            .iter()
+            .any(|s| s.emph && s.text.contains('2')));
         assert_eq!(fd.change_blocks, vec![1]);
     }
 
@@ -396,6 +401,9 @@ new file mode 100644
             .flatten()
             .flat_map(|side| side.segments.iter().map(|s| s.text.as_str()))
             .collect();
-        assert!(texts.iter().all(|t| !t.contains('\r') && !t.contains('␍')), "{texts:?}");
+        assert!(
+            texts.iter().all(|t| !t.contains('\r') && !t.contains('␍')),
+            "{texts:?}"
+        );
     }
 }

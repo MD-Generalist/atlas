@@ -151,10 +151,7 @@ impl<'a> Capture<'a> {
         // synthesised deterministically from the turn and the content. Without
         // it a re-submitted send — a frontend retry, a re-processed delta —
         // would insert the same user message twice.
-        let native_message_id = format!(
-            "prompt-{turn_seq}-{}",
-            blobs::key_for(prompt.as_bytes())
-        );
+        let native_message_id = format!("prompt-{turn_seq}-{}", blobs::key_for(prompt.as_bytes()));
         self.record_content(
             &session_id,
             TurnContent {
@@ -250,7 +247,11 @@ impl<'a> Capture<'a> {
     /// Finalized, not streaming: live token chunks are a UI concern and never
     /// become a stored artifact. Coalescing to whole turns is what keeps capture
     /// off the streaming hot path entirely.
-    pub fn record_turn(&mut self, session_id: &str, content: TurnContent) -> Result<Option<String>> {
+    pub fn record_turn(
+        &mut self,
+        session_id: &str,
+        content: TurnContent,
+    ) -> Result<Option<String>> {
         self.record_content(session_id, content)
     }
 
@@ -280,7 +281,11 @@ impl<'a> Capture<'a> {
     /// string redaction. Lossily decoding it to scan would corrupt the payload on
     /// the way back out, and there is no secret to be found in bytes that cannot
     /// be read as text.
-    pub fn record_tool_call(&mut self, session_id: &str, call: ToolCallContent<'_>) -> Result<String> {
+    pub fn record_tool_call(
+        &mut self,
+        session_id: &str,
+        call: ToolCallContent<'_>,
+    ) -> Result<String> {
         let arguments = match call.arguments {
             Some(raw) => Some(self.scrub_or_flag(session_id, raw)?),
             None => None,
@@ -399,7 +404,9 @@ impl<'a> Capture<'a> {
     fn scrub_or_flag(&mut self, session_id: &str, raw: &str) -> Result<String> {
         match scrub_auto(raw) {
             Ok(scrubbed) => {
-                let _ = self.store.add_redaction_counts(session_id, &scrubbed.counts);
+                let _ = self
+                    .store
+                    .add_redaction_counts(session_id, &scrubbed.counts);
                 Ok(scrubbed.text)
             }
             Err(err) => {
@@ -450,7 +457,9 @@ impl<'a> Capture<'a> {
             Ok(id) => {
                 // Best-effort: the tally drives a disclosure figure, and losing
                 // it is not worth losing the turn over.
-                let _ = self.store.add_redaction_counts(session_id, &scrubbed.counts);
+                let _ = self
+                    .store
+                    .add_redaction_counts(session_id, &scrubbed.counts);
                 Ok(id)
             }
             Err(Error::AlreadyLocked) => Err(Error::AlreadyLocked),

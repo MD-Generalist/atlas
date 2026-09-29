@@ -50,7 +50,9 @@ async fn session_start_lines(
         .new_session(custom("fake-agent"), vec![std::env::temp_dir()])
         .await
         .expect("a session opens on the real agent");
-    let lines = log.lines_mentioning("agent session started").split_off(before);
+    let lines = log
+        .lines_mentioning("agent session started")
+        .split_off(before);
     manager.shutdown();
     drop(thread);
     let _ = std::fs::remove_file(&pid_file);
@@ -87,16 +89,30 @@ async fn each_session_start_logs_the_agent_and_its_http_mcp_support() {
         eprintln!("skipping: no python3 on this machine");
         return;
     };
-    assert_eq!(advertised.len(), 1, "exactly one line per session start: {advertised:?}");
+    assert_eq!(
+        advertised.len(),
+        1,
+        "exactly one line per session start: {advertised:?}"
+    );
     let line = &advertised[0];
     assert!(line.contains("agent=fake-agent"), "names the agent: {line}");
-    assert!(line.contains("http_mcp=true"), "states its HTTP MCP support: {line}");
+    assert!(
+        line.contains("http_mcp=true"),
+        "states its HTTP MCP support: {line}"
+    );
 
     let omitted = session_start_lines(&log, "http-mcp-log-off", serde_json::json!({}))
         .await
         .expect("python3 was there a moment ago");
-    assert_eq!(omitted.len(), 1, "exactly one line per session start: {omitted:?}");
+    assert_eq!(
+        omitted.len(),
+        1,
+        "exactly one line per session start: {omitted:?}"
+    );
     let line = &omitted[0];
     assert!(line.contains("agent=fake-agent"), "names the agent: {line}");
-    assert!(line.contains("http_mcp=false"), "states its HTTP MCP support: {line}");
+    assert!(
+        line.contains("http_mcp=false"),
+        "states its HTTP MCP support: {line}"
+    );
 }

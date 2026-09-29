@@ -187,7 +187,11 @@ fn otlp_http_exporter_sends_metrics_to_collector() -> Result<()> {
     ))?;
 
     metrics.counter("atlas_agent.turns", /*inc*/ 1, &[("source", "test")])?;
-    metrics.counter("atlas_agent.api_request", /*inc*/ 1, &[("status", "200")])?;
+    metrics.counter(
+        "atlas_agent.api_request",
+        /*inc*/ 1,
+        &[("status", "200")],
+    )?;
     metrics.record_duration(
         "atlas_agent.api_request.duration_ms",
         Duration::from_millis(100),

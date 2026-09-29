@@ -205,7 +205,11 @@ pub async fn git_branch_delete(
 }
 
 #[tauri::command]
-pub async fn git_merge_branch(path: String, branch: String, app: AppHandle) -> Result<String, GitErrorPayload> {
+pub async fn git_merge_branch(
+    path: String,
+    branch: String,
+    app: AppHandle,
+) -> Result<String, GitErrorPayload> {
     tokio::task::spawn_blocking(move || git_mut(&app, &path, &["merge", "--no-edit", &branch]))
         .await
         .map_err(join_err)?
@@ -234,10 +238,13 @@ pub struct MergePreview {
 
 fn merge_preview(path: &str, branch: &str) -> Result<MergePreview, GitErrorPayload> {
     let head = git_out(path, &["rev-parse", "HEAD"])?.trim().to_string();
-    let theirs = git_out(path, &["rev-parse", "--verify", &format!("{branch}^{{commit}}")])
-        .map_err(|_| GitErrorPayload::internal(format!("branch '{branch}' not found")))?
-        .trim()
-        .to_string();
+    let theirs = git_out(
+        path,
+        &["rev-parse", "--verify", &format!("{branch}^{{commit}}")],
+    )
+    .map_err(|_| GitErrorPayload::internal(format!("branch '{branch}' not found")))?
+    .trim()
+    .to_string();
 
     // Unrelated histories → no common ancestor → merge would refuse.
     // `merge-base` exits 1 on no ancestor — an accepted outcome, not an error.
@@ -246,7 +253,11 @@ fn merge_preview(path: &str, branch: &str) -> Result<MergePreview, GitErrorPaylo
         .success_codes(&[0, 1])
         .run()?;
     if base.exit_code != 0 {
-        return Ok(MergePreview { kind: "invalid".into(), commit_count: 0, conflicted_files: 0 });
+        return Ok(MergePreview {
+            kind: "invalid".into(),
+            commit_count: 0,
+            conflicted_files: 0,
+        });
     }
 
     // Commits that merging would bring in: on `branch` but not on HEAD.
@@ -255,7 +266,11 @@ fn merge_preview(path: &str, branch: &str) -> Result<MergePreview, GitErrorPaylo
         .parse::<u32>()
         .unwrap_or(0);
     if commit_count == 0 {
-        return Ok(MergePreview { kind: "uptodate".into(), commit_count: 0, conflicted_files: 0 });
+        return Ok(MergePreview {
+            kind: "uptodate".into(),
+            commit_count: 0,
+            conflicted_files: 0,
+        });
     }
 
     // Conflict detection via `git merge-tree --write-tree` (git 2.38+, with
@@ -278,14 +293,25 @@ fn merge_preview(path: &str, branch: &str) -> Result<MergePreview, GitErrorPaylo
     .run()?;
 
     if mt.exit_code == 0 {
-        return Ok(MergePreview { kind: "clean".into(), commit_count, conflicted_files: 0 });
+        return Ok(MergePreview {
+            kind: "clean".into(),
+            commit_count,
+            conflicted_files: 0,
+        });
     }
 
     // Non-zero: conflicts (exit 1) OR the flags are unsupported on an older git
     // (usage error / exit 129). Degrade gracefully so the merge stays available.
     let stderr = &mt.stderr;
-    if stderr.contains("usage:") || stderr.contains("unknown option") || stderr.contains("not a valid option") {
-        return Ok(MergePreview { kind: "unsupported".into(), commit_count, conflicted_files: 0 });
+    if stderr.contains("usage:")
+        || stderr.contains("unknown option")
+        || stderr.contains("not a valid option")
+    {
+        return Ok(MergePreview {
+            kind: "unsupported".into(),
+            commit_count,
+            conflicted_files: 0,
+        });
     }
 
     // Conflict output (`-z`, `--name-only`): `<tree-oid>\0` then each conflicted
@@ -294,11 +320,18 @@ fn merge_preview(path: &str, branch: &str) -> Result<MergePreview, GitErrorPaylo
     let mut fields = mt.stdout.split('\0').filter(|s| !s.is_empty());
     let _oid = fields.next();
     let conflicted_files = fields.count() as u32;
-    Ok(MergePreview { kind: "conflicts".into(), commit_count, conflicted_files })
+    Ok(MergePreview {
+        kind: "conflicts".into(),
+        commit_count,
+        conflicted_files,
+    })
 }
 
 #[tauri::command]
-pub async fn git_merge_preview(path: String, branch: String) -> Result<MergePreview, GitErrorPayload> {
+pub async fn git_merge_preview(
+    path: String,
+    branch: String,
+) -> Result<MergePreview, GitErrorPayload> {
     tokio::task::spawn_blocking(move || merge_preview(&path, &branch))
         .await
         .map_err(join_err)?
@@ -350,7 +383,13 @@ pub async fn git_fetch(
     app: AppHandle,
 ) -> Result<String, GitErrorPayload> {
     tokio::task::spawn_blocking(move || {
-        run_remote_op(&app, &path, "fetch", op_id, &["fetch", "--all", "--prune", "--progress"])
+        run_remote_op(
+            &app,
+            &path,
+            "fetch",
+            op_id,
+            &["fetch", "--all", "--prune", "--progress"],
+        )
     })
     .await
     .map_err(join_err)?
@@ -422,7 +461,13 @@ pub async fn git_publish_branch(
 ) -> Result<String, GitErrorPayload> {
     tokio::task::spawn_blocking(move || {
         let r = remote.unwrap_or_else(|| "origin".into());
-        run_remote_op(&app, &path, "push", op_id, &["push", "--progress", "-u", &r, "HEAD"])
+        run_remote_op(
+            &app,
+            &path,
+            "push",
+            op_id,
+            &["push", "--progress", "-u", &r, "HEAD"],
+        )
     })
     .await
     .map_err(join_err)?
@@ -457,7 +502,9 @@ pub async fn git_undo_commit(path: String, app: AppHandle) -> Result<(), GitErro
         GitCommand::new(&path, &["rev-parse", "--verify", "HEAD~1"])
             .read_only()
             .run()
-            .map_err(|_| GitErrorPayload::internal("The first commit of a repository can't be undone."))?;
+            .map_err(|_| {
+                GitErrorPayload::internal("The first commit of a repository can't be undone.")
+            })?;
         // Not already pushed: with an upstream, ahead must be ≥ 1.
         let ahead = GitCommand::new(&path, &["rev-list", "--count", "@{upstream}..HEAD"])
             .read_only()
@@ -488,7 +535,9 @@ pub async fn git_squash_last(
     app: AppHandle,
 ) -> Result<(), GitErrorPayload> {
     if count < 2 {
-        return Err(GitErrorPayload::internal("Squash needs at least 2 commits."));
+        return Err(GitErrorPayload::internal(
+            "Squash needs at least 2 commits.",
+        ));
     }
     tokio::task::spawn_blocking(move || {
         GitCommand::new(&path, &["rev-parse", "--verify", &format!("HEAD~{count}")])
@@ -564,7 +613,11 @@ pub async fn git_remote_add(
 }
 
 #[tauri::command]
-pub async fn git_remote_remove(path: String, name: String, app: AppHandle) -> Result<(), GitErrorPayload> {
+pub async fn git_remote_remove(
+    path: String,
+    name: String,
+    app: AppHandle,
+) -> Result<(), GitErrorPayload> {
     tokio::task::spawn_blocking(move || {
         git_mut(&app, &path, &["remote", "remove", &name])?;
         Ok(())
@@ -578,10 +631,7 @@ pub async fn git_remote_remove(path: String, name: String, app: AppHandle) -> Re
 #[tauri::command]
 pub async fn git_stash_list(path: String) -> Result<Vec<StashEntry>, GitErrorPayload> {
     tokio::task::spawn_blocking(move || {
-        let out = git_out(
-            &path,
-            &["stash", "list", &format!("--format=%gd{US}%gs")],
-        )?;
+        let out = git_out(&path, &["stash", "list", &format!("--format=%gd{US}%gs")])?;
         let stashes = out
             .lines()
             .filter(|l| !l.is_empty())
@@ -630,9 +680,17 @@ pub async fn git_stash_push(
 }
 
 #[tauri::command]
-pub async fn git_stash_apply(path: String, index: u32, app: AppHandle) -> Result<(), GitErrorPayload> {
+pub async fn git_stash_apply(
+    path: String,
+    index: u32,
+    app: AppHandle,
+) -> Result<(), GitErrorPayload> {
     tokio::task::spawn_blocking(move || {
-        git_mut(&app, &path, &["stash", "apply", &format!("stash@{{{index}}}")])?;
+        git_mut(
+            &app,
+            &path,
+            &["stash", "apply", &format!("stash@{{{index}}}")],
+        )?;
         Ok(())
     })
     .await
@@ -640,9 +698,17 @@ pub async fn git_stash_apply(path: String, index: u32, app: AppHandle) -> Result
 }
 
 #[tauri::command]
-pub async fn git_stash_pop(path: String, index: u32, app: AppHandle) -> Result<(), GitErrorPayload> {
+pub async fn git_stash_pop(
+    path: String,
+    index: u32,
+    app: AppHandle,
+) -> Result<(), GitErrorPayload> {
     tokio::task::spawn_blocking(move || {
-        git_mut(&app, &path, &["stash", "pop", &format!("stash@{{{index}}}")])?;
+        git_mut(
+            &app,
+            &path,
+            &["stash", "pop", &format!("stash@{{{index}}}")],
+        )?;
         Ok(())
     })
     .await
@@ -650,9 +716,17 @@ pub async fn git_stash_pop(path: String, index: u32, app: AppHandle) -> Result<(
 }
 
 #[tauri::command]
-pub async fn git_stash_drop(path: String, index: u32, app: AppHandle) -> Result<(), GitErrorPayload> {
+pub async fn git_stash_drop(
+    path: String,
+    index: u32,
+    app: AppHandle,
+) -> Result<(), GitErrorPayload> {
     tokio::task::spawn_blocking(move || {
-        git_mut(&app, &path, &["stash", "drop", &format!("stash@{{{index}}}")])?;
+        git_mut(
+            &app,
+            &path,
+            &["stash", "drop", &format!("stash@{{{index}}}")],
+        )?;
         Ok(())
     })
     .await
@@ -664,7 +738,11 @@ pub async fn git_stash_drop(path: String, index: u32, app: AppHandle) -> Result<
 /// Discard tracked changes (staged + worktree) for `files`, back to HEAD.
 /// Untracked files are left alone (deleting them is destructive).
 #[tauri::command]
-pub async fn git_discard(path: String, files: Vec<String>, app: AppHandle) -> Result<(), GitErrorPayload> {
+pub async fn git_discard(
+    path: String,
+    files: Vec<String>,
+    app: AppHandle,
+) -> Result<(), GitErrorPayload> {
     tokio::task::spawn_blocking(move || {
         let mut args = vec![
             "restore".to_string(),
@@ -709,7 +787,8 @@ pub async fn git_delete_added(
         for f in &files {
             let abs = Path::new(&path).join(f);
             if abs.exists() {
-                std::fs::remove_file(&abs).map_err(|e| GitErrorPayload::internal(format!("Failed to delete {f}: {e}")))?;
+                std::fs::remove_file(&abs)
+                    .map_err(|e| GitErrorPayload::internal(format!("Failed to delete {f}: {e}")))?;
             }
         }
         Ok(())
@@ -747,7 +826,11 @@ fn reset(git: Git, path: &str, target: &str, mode: &str) -> Result<(), GitErrorP
 }
 
 #[tauri::command]
-pub async fn git_revert(path: String, sha: String, app: AppHandle) -> Result<String, GitErrorPayload> {
+pub async fn git_revert(
+    path: String,
+    sha: String,
+    app: AppHandle,
+) -> Result<String, GitErrorPayload> {
     tokio::task::spawn_blocking(move || {
         let out = revert(&git_out, &path, &sha)?;
         emit_synthetic_change(&app, Path::new(&path));
@@ -770,7 +853,11 @@ fn revert(git: Git, path: &str, sha: &str) -> Result<String, GitErrorPayload> {
 }
 
 #[tauri::command]
-pub async fn git_cherry_pick(path: String, sha: String, app: AppHandle) -> Result<String, GitErrorPayload> {
+pub async fn git_cherry_pick(
+    path: String,
+    sha: String,
+    app: AppHandle,
+) -> Result<String, GitErrorPayload> {
     tokio::task::spawn_blocking(move || {
         let out = cherry_pick(&git_out, &path, &sha)?;
         emit_synthetic_change(&app, Path::new(&path));
@@ -790,7 +877,11 @@ fn cherry_pick(git: Git, path: &str, sha: &str) -> Result<String, GitErrorPayloa
 pub async fn git_tags(path: String) -> Result<Vec<String>, GitErrorPayload> {
     tokio::task::spawn_blocking(move || {
         let out = git_out(&path, &["tag", "--sort=-creatordate"])?;
-        Ok(out.lines().filter(|l| !l.is_empty()).map(String::from).collect())
+        Ok(out
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(String::from)
+            .collect())
     })
     .await
     .map_err(join_err)?
@@ -820,7 +911,11 @@ pub async fn git_create_tag(
 }
 
 #[tauri::command]
-pub async fn git_delete_tag(path: String, name: String, app: AppHandle) -> Result<(), GitErrorPayload> {
+pub async fn git_delete_tag(
+    path: String,
+    name: String,
+    app: AppHandle,
+) -> Result<(), GitErrorPayload> {
     tokio::task::spawn_blocking(move || {
         git_mut(&app, &path, &["tag", "-d", &name])?;
         Ok(())
@@ -837,7 +932,13 @@ pub async fn git_show(path: String, sha: String) -> Result<CommitDetail, GitErro
         let fmt = format!("%H{US}%h{US}%an{US}%ae{US}%ad{US}%s{US}%b");
         let meta = git_out(
             &path,
-            &["log", "-1", "--date=format:%Y-%m-%d %H:%M", &format!("--format={fmt}"), &sha],
+            &[
+                "log",
+                "-1",
+                "--date=format:%Y-%m-%d %H:%M",
+                &format!("--format={fmt}"),
+                &sha,
+            ],
         )?;
         let p: Vec<&str> = meta.trim_end().split(US).collect();
         // Diff only (empty --format suppresses the header).
@@ -917,7 +1018,12 @@ pub(crate) struct OpEmitter {
 
 impl OpEmitter {
     pub(crate) fn new(app: AppHandle, op_id: String, repo: String, kind: &'static str) -> Self {
-        OpEmitter { app, op_id, repo, kind }
+        OpEmitter {
+            app,
+            op_id,
+            repo,
+            kind,
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -957,7 +1063,15 @@ impl OpEmitter {
     }
 
     pub(crate) fn progress(&self, fraction: f32, title: &str) {
-        self.emit("progress", None, None, None, None, Some(fraction * 100.0), Some(title));
+        self.emit(
+            "progress",
+            None,
+            None,
+            None,
+            None,
+            Some(fraction * 100.0),
+            Some(title),
+        );
     }
 }
 
@@ -992,7 +1106,9 @@ impl atlas_git::OpSink for OpEmitter {
 #[cfg(unix)]
 fn is_executable(p: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
-    std::fs::metadata(p).map(|m| m.permissions().mode() & 0o111 != 0).unwrap_or(false)
+    std::fs::metadata(p)
+        .map(|m| m.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
 }
 #[cfg(not(unix))]
 fn is_executable(_p: &Path) -> bool {
@@ -1013,7 +1129,10 @@ fn commit_hooks_present(path: &str) -> bool {
         .map(|o| o.stdout.trim().to_string());
     let hooks_dir = match configured {
         Some(d) => d,
-        None => match GitCommand::new(path, &["rev-parse", "--git-path", "hooks"]).read_only().run() {
+        None => match GitCommand::new(path, &["rev-parse", "--git-path", "hooks"])
+            .read_only()
+            .run()
+        {
             Ok(o) => o.stdout.trim().to_string(),
             Err(_) => return false,
         },
@@ -1027,12 +1146,17 @@ fn commit_hooks_present(path: &str) -> bool {
     } else {
         Path::new(path).join(base)
     };
-    ["pre-commit", "prepare-commit-msg", "commit-msg", "post-commit"]
-        .iter()
-        .any(|h| {
-            let hp = base.join(h);
-            hp.is_file() && is_executable(&hp)
-        })
+    [
+        "pre-commit",
+        "prepare-commit-msg",
+        "commit-msg",
+        "post-commit",
+    ]
+    .iter()
+    .any(|h| {
+        let hp = base.join(h);
+        hp.is_file() && is_executable(&hp)
+    })
 }
 
 /// Streaming commit (v2): message via `commit -F -` stdin (multiline-safe),
@@ -1065,7 +1189,11 @@ pub async fn git_commit_v2(
             GitCommand::new(&path, &["commit", "--amend", "--no-edit"]).run_streaming(&emitter)
         } else {
             let mut message = summary.trim().to_string();
-            if let Some(d) = description.as_deref().map(str::trim).filter(|d| !d.is_empty()) {
+            if let Some(d) = description
+                .as_deref()
+                .map(str::trim)
+                .filter(|d| !d.is_empty())
+            {
                 message.push_str("\n\n");
                 message.push_str(d);
             }
@@ -1113,7 +1241,8 @@ pub async fn git_commit_v2(
             Err(mut e) => {
                 if e.code == GitErrorCode::Generic && commit_hooks_present(&path) {
                     e.code = GitErrorCode::HookFailed;
-                    e.message = atlas_git::error::friendly_message(GitErrorCode::HookFailed, &[], None);
+                    e.message =
+                        atlas_git::error::friendly_message(GitErrorCode::HookFailed, &[], None);
                 }
                 emitter.done(Some(&e));
                 Err(e)

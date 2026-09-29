@@ -158,8 +158,8 @@ impl Embedder {
         let config: Config = serde_json::from_str(&config_str).context("parse config.json")?;
         let dim = config.hidden_size;
 
-        let mut tokenizer = Tokenizer::from_file(&tokenizer_path)
-            .map_err(|e| anyhow!("load tokenizer: {e}"))?;
+        let mut tokenizer =
+            Tokenizer::from_file(&tokenizer_path).map_err(|e| anyhow!("load tokenizer: {e}"))?;
         // Cap sequence length so long memory bodies don't blow past the model's
         // position-embedding range.
         tokenizer

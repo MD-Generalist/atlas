@@ -42,8 +42,12 @@ const HALF_LIFE_MS: f64 = 14.0 * 24.0 * 60.0 * 60.0 * 1000.0;
 /// How many entries of one kind are read before ranking or filtering.
 const RANK_POOL: usize = 5_000;
 /// The durable kinds, in the order the index groups them.
-pub(super) const DURABLE_KINDS: [EntryKind; 4] =
-    [EntryKind::Decision, EntryKind::Fact, EntryKind::Failure, EntryKind::Architecture];
+pub(super) const DURABLE_KINDS: [EntryKind; 4] = [
+    EntryKind::Decision,
+    EntryKind::Fact,
+    EntryKind::Failure,
+    EntryKind::Architecture,
+];
 
 // ── Clocks ───────────────────────────────────────────────────────────────────
 
@@ -129,8 +133,11 @@ pub(super) fn score(e: &Entry, now: i64) -> f64 {
 pub(super) fn rank_index(entries: &[Entry], now: i64) -> Vec<Entry> {
     let mut pool: Vec<(f64, &Entry)> = Vec::new();
     for kind in DURABLE_KINDS {
-        let mut of_kind: Vec<(f64, &Entry)> =
-            entries.iter().filter(|e| e.kind == kind).map(|e| (score(e, now), e)).collect();
+        let mut of_kind: Vec<(f64, &Entry)> = entries
+            .iter()
+            .filter(|e| e.kind == kind)
+            .map(|e| (score(e, now), e))
+            .collect();
         of_kind.sort_by(|a, b| b.0.total_cmp(&a.0));
         of_kind.truncate(kind.cap());
         pool.extend(of_kind);
@@ -140,7 +147,9 @@ pub(super) fn rank_index(entries: &[Entry], now: i64) -> Vec<Entry> {
     let mut admitted: Vec<Vec<&Entry>> = vec![Vec::new(); DURABLE_KINDS.len()];
     let mut count = 0usize;
     for (_, e) in pool {
-        let Some(slot) = DURABLE_KINDS.iter().position(|k| *k == e.kind) else { continue };
+        let Some(slot) = DURABLE_KINDS.iter().position(|k| *k == e.kind) else {
+            continue;
+        };
         let cost = one_line(&e.content, INDEX_ENTRY_MAX_CHARS).chars().count();
         if count + 1 > INDEX_MAX_ENTRIES || chars + cost > INDEX_MAX_CHARS {
             continue;
@@ -169,7 +178,11 @@ pub(super) struct Briefing {
 /// The briefing, from the record. Blocking (SQLite).
 pub(super) fn read_briefing(store: &RecordStore, now: i64) -> anyhow::Result<Briefing> {
     let plan = store.list(EntryKind::Plan, 1, Origin::Any)?.pop();
-    let mut files_changed = store.list(EntryKind::FileChanged, EntryKind::FileChanged.cap(), Origin::Any)?;
+    let mut files_changed = store.list(
+        EntryKind::FileChanged,
+        EntryKind::FileChanged.cap(),
+        Origin::Any,
+    )?;
     files_changed.reverse();
     let mut durable = Vec::new();
     for kind in DURABLE_KINDS {
@@ -182,7 +195,12 @@ pub(super) fn read_briefing(store: &RecordStore, now: i64) -> anyhow::Result<Bri
         .map(|e| e.updated_at)
         .max()
         .unwrap_or(0);
-    Ok(Briefing { plan, files_changed, index: rank_index(&durable, now), synced_to })
+    Ok(Briefing {
+        plan,
+        files_changed,
+        index: rank_index(&durable, now),
+        synced_to,
+    })
 }
 
 /// What other sessions recorded since a session last looked.
@@ -196,13 +214,24 @@ pub(super) struct Changes {
 
 /// Entries written or edited after `since` by sessions other than
 /// `own_session`. Blocking (SQLite).
-pub(super) fn read_changes(store: &RecordStore, since: i64, own_session: &str) -> anyhow::Result<Changes> {
+pub(super) fn read_changes(
+    store: &RecordStore,
+    since: i64,
+    own_session: &str,
+) -> anyhow::Result<Changes> {
     let mut synced_to = since;
     let mut entries: Vec<Entry> = Vec::new();
     for kind in EntryKind::ALL {
-        let limit = if kind == EntryKind::Plan { 1 } else { RANK_POOL };
+        let limit = if kind == EntryKind::Plan {
+            1
+        } else {
+            RANK_POOL
+        };
         let of_kind = store.list(kind, limit, Origin::Any)?;
-        synced_to = of_kind.iter().map(|e| e.updated_at).fold(synced_to, i64::max);
+        synced_to = of_kind
+            .iter()
+            .map(|e| e.updated_at)
+            .fold(synced_to, i64::max);
         entries.extend(
             of_kind
                 .into_iter()
@@ -212,7 +241,11 @@ pub(super) fn read_changes(store: &RecordStore, since: i64, own_session: &str) -
         );
     }
     entries.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then(b.id.cmp(&a.id)));
-    Ok(Changes { since, synced_to, entries })
+    Ok(Changes {
+        since,
+        synced_to,
+        entries,
+    })
 }
 
 // ── Wire shapes ──────────────────────────────────────────────────────────────
@@ -296,8 +329,12 @@ pub(super) fn briefing_json(b: &Briefing) -> Value {
         .collect();
     let mut index = serde_json::Map::new();
     for kind in DURABLE_KINDS {
-        let of_kind: Vec<Value> =
-            b.index.iter().filter(|e| e.kind == kind).map(|e| capped_json(e, INDEX_ENTRY_MAX_CHARS)).collect();
+        let of_kind: Vec<Value> = b
+            .index
+            .iter()
+            .filter(|e| e.kind == kind)
+            .map(|e| capped_json(e, INDEX_ENTRY_MAX_CHARS))
+            .collect();
         if !of_kind.is_empty() {
             index.insert(kind.as_str().to_string(), Value::Array(of_kind));
         }

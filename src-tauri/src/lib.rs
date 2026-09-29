@@ -132,11 +132,14 @@ pub fn run() {
             // the command replaced the whole struct) — so one machine became a
             // new PostHog person on every save. An install upgrading from that
             // era ADOPTS its existing id here rather than forking a new person.
-            let (device, is_new_device) =
-                telemetry::device::load_or_create(app.handle(), loaded.telemetry_anon_id.as_deref());
+            let (device, is_new_device) = telemetry::device::load_or_create(
+                app.handle(),
+                loaded.telemetry_anon_id.as_deref(),
+            );
             let device_id = device.device_id.clone();
             let device_id_source = device.source;
-            let telemetry_id_changed = loaded.telemetry_anon_id.as_deref() != Some(device_id.as_str());
+            let telemetry_id_changed =
+                loaded.telemetry_anon_id.as_deref() != Some(device_id.as_str());
             if telemetry_id_changed {
                 loaded.telemetry_anon_id = Some(device_id.clone());
             }
@@ -147,9 +150,12 @@ pub fn run() {
             // guarded by `settings_config_migrated` so a user who later
             // deletes `config.toml` on purpose never gets it silently
             // resurrected from stale `state.json` data.
-            let migration =
-                state::atlas_config::bootstrap(loaded.settings_config_migrated, legacy_settings_raw);
-            let migration_marker_changed = migration.mark_migrated && !loaded.settings_config_migrated;
+            let migration = state::atlas_config::bootstrap(
+                loaded.settings_config_migrated,
+                legacy_settings_raw,
+            );
+            let migration_marker_changed =
+                migration.mark_migrated && !loaded.settings_config_migrated;
             if migration_marker_changed {
                 loaded.settings_config_migrated = true;
             }
@@ -237,7 +243,11 @@ pub fn run() {
                         .payload()
                         .downcast_ref::<&str>()
                         .copied()
-                        .or_else(|| info.payload().downcast_ref::<String>().map(std::string::String::as_str))
+                        .or_else(|| {
+                            info.payload()
+                                .downcast_ref::<String>()
+                                .map(std::string::String::as_str)
+                        })
                         .unwrap_or("panic");
                     tclient.capture_panic_blocking(serde_json::json!({
                         "location": location,
@@ -297,7 +307,10 @@ pub fn run() {
                         .clone();
                     handle
                         .state::<Arc<telemetry::TelemetryClient>>()
-                        .set_active_org(commands::telemetry::resolve_org(handle, active.as_deref()));
+                        .set_active_org(commands::telemetry::resolve_org(
+                            handle,
+                            active.as_deref(),
+                        ));
                 }
 
                 // Session capture's drain needs a credential, and the auth core
@@ -330,8 +343,7 @@ pub fn run() {
             let (job_tx, job_rx) = tokio::sync::mpsc::channel::<commands::memory_indexer::Job>(
                 commands::memory_indexer::QUEUE_CAPACITY,
             );
-            let registry =
-                Arc::new(commands::memory_indexer::MemoryRegistry::new(job_tx));
+            let registry = Arc::new(commands::memory_indexer::MemoryRegistry::new(job_tx));
             app.manage(registry.clone());
             let indexer_app = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -810,8 +822,8 @@ pub fn run() {
                     // child's stdin; the SDK reaps it). `process::exit` skips
                     // Drop impls, so this must happen before the exit — with a
                     // short bounded grace for the async teardown to run.
-                    if let Some(host) = app_handle
-                        .try_state::<Arc<commands::agent_host::AgentHost>>()
+                    if let Some(host) =
+                        app_handle.try_state::<Arc<commands::agent_host::AgentHost>>()
                     {
                         host.shutdown();
                         std::thread::sleep(std::time::Duration::from_millis(500));
