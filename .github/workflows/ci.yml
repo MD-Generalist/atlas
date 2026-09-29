@@ -60,10 +60,22 @@ env:
   SCCACHE_GHA_ENABLED: 'true'
   SCCACHE_GHA_RW_MODE: ${{ github.event_name == 'push' && 'READ_WRITE' || 'READ_ONLY' }}
 
+# Every job runs on aarch64: the Linux jobs on `ubuntu-24.04-arm`, the app
+# job on `macos-latest` (Apple Silicon). The team develops on Apple Silicon, so
+# a red job reproduces on the same architecture it failed on, and Linux and
+# Windows releases are moving to ARM too. Until they do, `release-linux.yml`
+# still builds x86-64 on `ubuntu-latest`, and no CI job compiles or tests x86-64.
+#
+# `ubuntu-24.04-arm` is the ARM twin of what `ubuntu-latest` points at today.
+# There is no `ubuntu-latest-arm` label, and a job naming a label no runner
+# has queues forever instead of failing, so bump this by hand when
+# `ubuntu-latest` moves. Runner architecture is part of every cache key
+# (rust-cache and sccache alike), so changing it starts every Rust job cold
+# once.
 jobs:
   frontend:
     name: frontend
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v5
         with:
@@ -166,7 +178,7 @@ jobs:
     # them would buy a much longer job for no new evidence. When Atlas edits
     # another vendored crate, add its `-p` here.
     name: engine dialect (atlas-engine-api)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     env:
       RUSTC_WRAPPER: sccache # see the app job
     steps:
@@ -213,7 +225,7 @@ jobs:
     # `release-build: true` additionally builds the crate with its release
     # profile (see the step).
     name: ${{ matrix.crate }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     env:
       RUSTC_WRAPPER: sccache # see the app job
     strategy:
