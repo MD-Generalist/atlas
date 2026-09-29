@@ -201,6 +201,7 @@ pub fn run() {
             app.manage(atlas_config.clone());
             commands::atlas_config::start_watcher(app.handle(), atlas_config);
             commands::themes::start_watcher(app.handle());
+            commands::git_autofetch::start(app.handle());
 
             // Mirror the (possibly updated) telemetry id + migration marker
             // back into `state.json` so both agree and a downgrade still
@@ -360,6 +361,7 @@ pub fn run() {
         .manage(commands::modelchat::ModelChatState::new())
         .manage(FileIndexState::new())
         .manage(GitWatcherState::new())
+        .manage(commands::git_autofetch::GitAutoFetchState::new())
         .manage(RecentFilesState::new())
         .manage(MentionCacheState::new())
         .manage(Arc::new(KnowledgeMetaState::new()))
@@ -376,10 +378,20 @@ pub fn run() {
         // its file watcher stops and memory is freed (these states are keyed by
         // webview label for multi-window project scoping).
         .on_window_event(|window, event| {
-            if matches!(event, tauri::WindowEvent::Destroyed) {
-                let label = window.label();
-                window.state::<FileIndexState>().drop_window(label);
-                window.state::<MentionCacheState>().drop_window(label);
+            match event {
+                tauri::WindowEvent::Destroyed => {
+                    let label = window.label();
+                    window.state::<FileIndexState>().drop_window(label);
+                    window.state::<MentionCacheState>().drop_window(label);
+                    window
+                        .state::<commands::git_autofetch::GitAutoFetchState>()
+                        .drop_window(label);
+                }
+                // Coming back to Atlas is when a stale Pull badge misleads.
+                tauri::WindowEvent::Focused(true) => {
+                    commands::git_autofetch::on_window_focused(window.app_handle(), window.label());
+                }
+                _ => {}
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -516,6 +528,7 @@ pub fn run() {
             commands::git_ops::git_merge_branch,
             commands::git_ops::git_merge_preview,
             commands::git_ops::git_fetch,
+            commands::git_autofetch::git_autofetch_set_active,
             commands::git_ops::git_pull,
             commands::git_ops::git_push,
             commands::git_ops::git_publish_branch,

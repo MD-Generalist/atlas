@@ -24,6 +24,7 @@ pub mod feedback;
 pub mod fileindex;
 pub mod fs;
 pub mod git;
+pub mod git_autofetch;
 pub mod git_conflicts;
 pub mod git_graph;
 pub mod git_ops;

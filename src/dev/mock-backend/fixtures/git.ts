@@ -26,6 +26,7 @@ import type { CommitFile, DiffLineStatus, FileDiff } from "@/features/git/lib/gi
 import type { GitErrorCode, GitErrorPayload } from "@/features/git/lib/git-errors";
 import type { BuiltGraph, CommitRow, LaneSegment } from "@/features/git/lib/git-graph";
 import type {
+  AutoFetchStatus,
   BranchInfo,
   CommitDetail,
   GitBranch,
@@ -1009,6 +1010,7 @@ const FETCH_STEPS: OpStep[] = [
 export interface GitResponses {
   git_watch_start: Unread;
   git_watch_stop: Unread;
+  git_autofetch_set_active: AutoFetchStatus | null;
   git_workspace_summary: GitSummary;
   git_snapshot: GitSnapshotWire;
   git_status_fresh: RawGitStatus;
@@ -1074,6 +1076,12 @@ export const gitHandlers: TypedHandlers<GitResponses> = {
   // Fired on every project close. Nothing reads the result, but leaving it
   // unmocked puts a warning on the badge for an action that did work.
   git_watch_stop: () => null,
+  // As if the project was auto-fetched a few minutes ago, so the Fetch
+  // button's hint has something to say in `bun run dev`.
+  git_autofetch_set_active: ({ projectPath }): AutoFetchStatus | null =>
+    projectPath
+      ? { project: String(projectPath), lastFetchedAt: Date.now() - 3 * 60_000, lastError: null }
+      : null,
 
   // ── status ──────────────────────────────────────────────────────────────
   git_workspace_summary: ({ path }): GitSummary => {
@@ -1438,8 +1446,15 @@ export const gitHandlers: TypedHandlers<GitResponses> = {
    * re-opening the merge dialog — which fetches on every open — can't inflate
    * the behind count forever.
    */
-  git_fetch: ({ opId }) =>
+  git_fetch: ({ path, opId }) =>
     runOp("fetch", opId, FETCH_STEPS, (): string => {
+      // Rust reports a successful manual fetch to the auto-fetch hint too.
+      const status: AutoFetchStatus = {
+        project: String(path),
+        lastFetchedAt: Date.now(),
+        lastError: null,
+      };
+      void emit("atlas:git-autofetch", status);
       const now = new Date().toISOString();
       for (const branch of BRANCHES) if (branch.isRemote) branch.date = now;
       const branch = currentBranch();
