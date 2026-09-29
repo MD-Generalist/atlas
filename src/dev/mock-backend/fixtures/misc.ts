@@ -1,5 +1,5 @@
 // The commands that belong to no one surface: chat history, plans,
-// keybindings, the updater, `config.toml`, the local model manager, the
+// the updater, `config.toml`, the local model manager, the
 // leftover agent verbs, and the housekeeping the shell fires on its own.
 //
 // None of these are big enough to earn a fixture file, but every one of them
@@ -28,8 +28,6 @@ import type {
 } from "@/features/chat/lib/history-api";
 import type { Entitlement } from "@/features/chat/stores/ai-grant-store";
 import type { PlanRecord } from "@/features/chat/lib/plans";
-import type { KeybindingsFile } from "@/features/keybindings/lib/types";
-import { DEFAULT_KEYBINDINGS_FILE } from "@/features/keybindings/lib/types";
 import type { AppSettings } from "@/features/settings/lib/app-settings";
 import { DEFAULT_SETTINGS } from "@/features/settings/lib/app-settings";
 import type { UpdateOutcome } from "@/features/settings/lib/atlas-config-api";
@@ -299,13 +297,6 @@ export const miscHandlers: MockHandlers = {
     plans = [record as PlanRecord, ...plans];
     return null;
   },
-
-  // ── keybindings ─────────────────────────────────────────────────────────
-  // Rust writes the file and answers with what it wrote, so the editor shows
-  // the saved state rather than the state it optimistically drew.
-  keybindings_save: ({ file }): KeybindingsFile =>
-    (file as KeybindingsFile) ?? DEFAULT_KEYBINDINGS_FILE,
-  keybindings_open: nothing,
 
   // ── `config.toml` ───────────────────────────────────────────────────────
   update_atlas_settings: ({ patch, expectedGeneration }): UpdateOutcome => {

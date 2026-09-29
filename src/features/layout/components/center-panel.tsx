@@ -783,7 +783,7 @@ function PersistentPanel({
         />
       );
     case "knowledge":
-      return <KnowledgePanel />;
+      return <KnowledgePanel tabId={tab.id} />;
     case "browser":
       return (
         <BrowserPanel
@@ -956,7 +956,7 @@ function TabContent({ tab }: { tab: Tab }) {
     case "canvas":
       return <CanvasPanel />;
     case "knowledge":
-      return <KnowledgePanel />;
+      return <KnowledgePanel tabId={tab.id} />;
     case "knowledge-graph":
       return <KnowledgeGraph />;
     case "memory":

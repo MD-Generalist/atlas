@@ -24,6 +24,7 @@ import { chatTools } from "./chat-tools";
 import { collab } from "./collab";
 import { designSystem } from "./design-system";
 import { gitConflict } from "./git-conflict";
+import { keymapFirstRun } from "./keymap-first-run";
 import { knowledge } from "./knowledge";
 import { memorySetup } from "./memory-setup";
 import { timelineEmpty } from "./timeline-empty";
@@ -63,6 +64,7 @@ const all: Scenario[] = [
   collab,
   memorySetup,
   timelineEmpty,
+  keymapFirstRun,
   designSystem,
 ];
 

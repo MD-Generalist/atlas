@@ -12,6 +12,8 @@ import {
   useKeybindingsStore,
   watchKeybindingsOnFocus,
 } from "@/features/keybindings/stores/keybindings-store";
+import { KeymapOnboarding } from "@/features/keybindings/components/keymap-onboarding";
+import { useNativeCloseTabAccelerator } from "@/features/keybindings/lib/use-native-close-tab-accelerator";
 import { useLayoutStore } from "@/features/layout/stores/layout-store";
 import { useTerminalStore } from "@/features/terminal/stores/terminal-store";
 import {
@@ -144,6 +146,7 @@ export function App() {
     void useKeybindingsStore.getState().actions.load();
     return watchKeybindingsOnFocus();
   }, []);
+  useNativeCloseTabAccelerator();
 
   // No Claude probe here any more. It used to run at boot to drive a banner
   // above the composer and hard-disable the input; both are gone, and probing
@@ -1588,6 +1591,7 @@ export function App() {
       <NotificationPanel />
       <FeedbackPanel />
       <UpdateAvailableModal />
+      <KeymapOnboarding />
       <ConnectDialog />
       <LoadingOrganisationOverlay />
       <StopAgentsDialog />

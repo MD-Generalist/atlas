@@ -759,6 +759,7 @@ pub fn run() {
             commands::keybindings::keybindings_load,
             commands::keybindings::keybindings_save,
             commands::keybindings::keybindings_open,
+            commands::keybindings::keybindings_set_close_tab_accelerator,
             commands::memory_graph::memory_embed_status,
             commands::memory_graph::memory_embed_download,
             commands::memory_graph::memory_index_build,
