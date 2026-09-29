@@ -208,7 +208,7 @@ bun run test:watch                      # re-run on save
 ```
 
 Tests live next to the code they cover (`src/lib/time-ago.test.ts`), except for
-ones that check the repo as a whole, which live in `tests/`. Two of those run on
+ones that check the repo as a whole, which live in `tests/`. Three of those run on
 every PR and are worth knowing about:
 
 - `tests/ipc-contract.test.ts` — every `invoke("name")` in the frontend resolves
@@ -217,8 +217,16 @@ every PR and are worth knowing about:
   Rename a command without updating its callers and this is what tells you,
   instead of a dead button at runtime; leave a command behind after its last
   caller goes and it tells you that too.
-- `tests/ci-coverage.test.ts` — every crate in `crates/` is in the CI matrix, so
-  a new crate can't merge with its tests unrun.
+- `tests/ci-coverage.test.ts` — every crate in `crates/` is in the CI matrix
+  (`.github/ci-crates.json`), so a new crate can't merge with its tests unrun.
+- `tests/ci-affected.test.ts` — CI runs only the Rust jobs a change affects,
+  planned by `scripts/ci-affected.mjs` from the diff and the crate dependency
+  graph. A crate that reads a file outside its own directory (`include_str!`
+  of something under `docs/`, a test walking the repo) has to declare it in
+  that script's `EXTRA_INPUTS`, or an edit to that file would skip the crate's
+  tests. This suite finds such reads and tells you when one is undeclared.
+  To see what CI would run for your branch:
+  `node scripts/ci-affected.mjs --base origin/<version-branch>`.
 
 For a new IPC module, copy the pattern in
 `src/features/settings/lib/byok-api.test.ts`: mock `invoke` and assert the
