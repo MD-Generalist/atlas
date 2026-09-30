@@ -553,6 +553,100 @@ const LOGO_PNG_BASE64 =
 const SPEC_PDF_BASE64 =
   "JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUiA1IDAgUl0gL0NvdW50IDIgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCA2MTIgNzkyXSAvUmVzb3VyY2VzIDw8IC9Gb250IDw8IC9GMSA3IDAgUiA+PiA+PiAvQ29udGVudHMgNCAwIFIgPj4KZW5kb2JqCjQgMCBvYmoKPDwgL0xlbmd0aCA1OTYgPj4Kc3RyZWFtCkJUIC9GMSAyMiBUZiA3MiA3MjAgVGQgKEFjbWUgZGVzaWduIHRva2VucykgVGogRVQKQlQgL0YxIDExIFRmIDcyIDY5MCBUZCAoSW50ZXJuYWwgc3BlY2lmaWNhdGlvbiAtIHJldmlzaW9uIDQpIFRqIEVUCkJUIC9GMSAxMSBUZiA3MiA2NTAgVGQgKEV2ZXJ5IGNvbG91ciBpbiB0aGUgYWRtaW4gYXBwIHJlc29sdmVzIHRvIGEgdG9rZW4gZGVjbGFyZWQgaW4pIFRqIEVUCkJUIC9GMSAxMSBUZiA3MiA2MzQgVGQgKHNyYy9zdHlsZXMvdG9rZW5zLmNzcy4gTm8gaGV4IGxpdGVyYWwgbWF5IGFwcGVhciBpbiBKU1guKSBUaiBFVApCVCAvRjEgMTEgVGYgNzIgNjAyIFRkICgxLiBCYXNlIHRva2VucyBjYXJyeSB0aGUgcmF3IHJhbXAuKSBUaiBFVApCVCAvRjEgMTEgVGYgNzIgNTg2IFRkICgyLiBTZW1hbnRpYyB0b2tlbnMgbmFtZSBhIHJvbGUsIG5ldmVyIGEgY29sb3VyLikgVGogRVQKQlQgL0YxIDExIFRmIDcyIDU3MCBUZCAoMy4gRGFyayBtb2RlIHJlZGVmaW5lcyB0aGUgYmFzZSwgbmV2ZXIgdGhlIHNlbWFudGljcy4pIFRqIEVUCjAuNDMgMC42MSAxIHJnIDcyIDUyMCAyMDAgMjQgcmUgZgowLjY5IDAuNDggMSByZyAyODggNTIwIDIwMCAyNCByZSBmCmVuZHN0cmVhbQplbmRvYmoKNSAwIG9iago8PCAvVHlwZSAvUGFnZSAvUGFyZW50IDIgMCBSIC9NZWRpYUJveCBbMCAwIDYxMiA3OTJdIC9SZXNvdXJjZXMgPDwgL0ZvbnQgPDwgL0YxIDcgMCBSID4+ID4+IC9Db250ZW50cyA2IDAgUiA+PgplbmRvYmoKNiAwIG9iago8PCAvTGVuZ3RoIDM5NyA+PgpzdHJlYW0KQlQgL0YxIDIyIFRmIDcyIDcyMCBUZCAoT3BlbiBxdWVzdGlvbnMpIFRqIEVUCkJUIC9GMSAxMSBUZiA3MiA2ODYgVGQgKEFDTUUtMTE4NCBtb3ZlcyAvdXNlcnMgdG8gL3YyL3VzZXJzLiBUaGUgdG9rZW4gcmFtcCkgVGogRVQKQlQgL0YxIDExIFRmIDcyIDY3MCBUZCAocmVnZW5lcmF0aW9uIGxhbmRzIGluIHRoZSBzYW1lIHJlbGVhc2UuKSBUaiBFVApCVCAvRjEgMTEgVGYgNzIgNjM4IFRkIChIaWdobGlnaHRpbmcgdGhpcyBwYXJhZ3JhcGggaXMgdGhlIGZhc3Rlc3Qgd2F5IHRvIHNlZSB3aGV0aGVyKSBUaiBFVApCVCAvRjEgMTEgVGYgNzIgNjIyIFRkIChhbiBhbm5vdGF0aW9uIHN1cnZpdmVzIGEgcGFnZSByb3RhdGUuKSBUaiBFVAowLjk1IDAuMzMgMC4zNSByZyA3MiA1NjAgNDE2IDIgcmUgZgplbmRzdHJlYW0KZW5kb2JqCjcgMCBvYmoKPDwgL1R5cGUgL0ZvbnQgL1N1YnR5cGUgL1R5cGUxIC9CYXNlRm9udCAvSGVsdmV0aWNhIC9FbmNvZGluZyAvV2luQW5zaUVuY29kaW5nID4+CmVuZG9iagp4cmVmCjAgOAowMDAwMDAwMDAwIDY1NTM1IGYgCjAwMDAwMDAwMDkgMDAwMDAgbiAKMDAwMDAwMDA1OCAwMDAwMCBuIAowMDAwMDAwMTIxIDAwMDAwIG4gCjAwMDAwMDAyNDcgMDAwMDAgbiAKMDAwMDAwMDg5NCAwMDAwMCBuIAowMDAwMDAxMDIwIDAwMDAwIG4gCjAwMDAwMDE0NjggMDAwMDAgbiAKdHJhaWxlcgo8PCAvU2l6ZSA4IC9Sb290IDEgMCBSID4+CnN0YXJ0eHJlZgoxNTY1CiUlRU9GCg==";
 
+// One cell or output of every kind the notebook viewer distinguishes, including
+// the two it must refuse: the `text/html` output carries a script, and should
+// fall back to its `text/plain` sibling rather than run.
+const EXPLORE_IPYNB = JSON.stringify(
+  {
+    cells: [
+      {
+        cell_type: "markdown",
+        metadata: {},
+        source: ["# Signup funnel\n", "\n", "Weekly conversion from **visit** to **paid**.\n"],
+      },
+      {
+        cell_type: "code",
+        execution_count: 1,
+        metadata: {},
+        outputs: [{ output_type: "stream", name: "stdout", text: ["loaded 4 weeks\n"] }],
+        source: [
+          "import pandas as pd\n",
+          "df = pd.read_csv('funnel.csv')\n",
+          "print('loaded 4 weeks')",
+        ],
+      },
+      {
+        cell_type: "code",
+        execution_count: 2,
+        metadata: {},
+        outputs: [
+          {
+            output_type: "execute_result",
+            execution_count: 2,
+            metadata: {},
+            data: {
+              "text/html": ["<script>alert('ran')</script><table><tr><td>0.042</td></tr></table>"],
+              "text/plain": [
+                "week\n",
+                "1    0.031\n",
+                "2    0.036\n",
+                "3    0.040\n",
+                "4    0.042",
+              ],
+            },
+          },
+        ],
+        source: ["df.paid / df.visits"],
+      },
+      {
+        cell_type: "code",
+        execution_count: 3,
+        metadata: {},
+        outputs: [
+          {
+            output_type: "display_data",
+            metadata: {},
+            data: { "image/png": LOGO_PNG_BASE64, "text/plain": ["<Figure size 96x96>"] },
+          },
+          {
+            output_type: "stream",
+            name: "stderr",
+            text: ["UserWarning: tight_layout not applied\n"],
+          },
+        ],
+        source: ["df.plot()"],
+      },
+      {
+        cell_type: "code",
+        execution_count: 4,
+        metadata: {},
+        outputs: [
+          {
+            output_type: "error",
+            ename: "ZeroDivisionError",
+            evalue: "division by zero",
+            traceback: [
+              "\u001b[0;31m---------------------------------------------------------------------------\u001b[0m",
+              "\u001b[0;31mZeroDivisionError\u001b[0m: division by zero",
+            ],
+          },
+        ],
+        source: ["df.paid.sum() / 0"],
+      },
+      { cell_type: "code", execution_count: null, metadata: {}, outputs: [], source: [] },
+      { cell_type: "raw", metadata: {}, source: ["raw cell: passed through untouched"] },
+    ],
+    metadata: {
+      kernelspec: { display_name: "Python 3", language: "python", name: "python3" },
+      language_info: { name: "python" },
+    },
+    nbformat: 4,
+    nbformat_minor: 5,
+  },
+  null,
+  1,
+);
+
 /** Working-tree content, keyed by path relative to the project root. */
 const SEED: Record<string, MockFile> = {
   "src/lib/api.ts": { text: API_TS, mtimeMs: T0 },
@@ -580,6 +674,7 @@ const SEED: Record<string, MockFile> = {
     mime: "application/pdf",
     mtimeMs: T0 - 5_400_000,
   },
+  "notebooks/explore.ipynb": { text: EXPLORE_IPYNB, mtimeMs: T0 - 2_700_000 },
   // Seeded so `fs_add_to_gitignore` lands on its dedupe branch — the one every
   // project open hits — instead of always creating the file. Delete it in the
   // explorer to reach the create branch.

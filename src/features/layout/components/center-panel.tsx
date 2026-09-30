@@ -57,6 +57,11 @@ const SpacesTab = lazy(() =>
 const PdfViewer = lazy(() =>
   import("@/features/pdf/components/pdf-viewer").then((m) => ({ default: m.PdfViewer })),
 );
+const NotebookViewer = lazy(() =>
+  import("@/features/notebook/components/notebook-viewer").then((m) => ({
+    default: m.NotebookViewer,
+  })),
+);
 const GitDiffPanel = lazy(() =>
   import("@/features/git/components/git-diff-panel").then((m) => ({ default: m.GitDiffPanel })),
 );
@@ -121,6 +126,7 @@ import {
   Gauge,
   Layers,
   Frame,
+  NotebookText,
 } from "lucide-react";
 import { PROJECTLESS_TYPES, type TabType } from "@/lib/constants";
 
@@ -143,6 +149,7 @@ const tabIcons: Record<TabType, FallbackIcon> = {
   media: Code,
   svg: Code,
   pdf: FileText,
+  notebook: NotebookText,
   unsupported: Code,
   usage: Gauge,
   artifacts: Layers,
@@ -977,6 +984,8 @@ function TabContent({ tab }: { tab: Tab }) {
       return <SvgViewer filePath={tab.data.filePath as string} />;
     case "pdf":
       return <PdfViewer filePath={tab.data.filePath as string} tabId={tab.id} />;
+    case "notebook":
+      return <NotebookViewer filePath={tab.data.filePath as string} />;
     case "diff":
       return (
         <GitDiffPanel
