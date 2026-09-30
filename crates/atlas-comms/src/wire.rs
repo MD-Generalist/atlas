@@ -351,10 +351,16 @@ pub enum ServerFrame {
     },
 
     #[serde(rename = "conversation.created")]
-    ConversationCreated { seq: i64, conversation: Conversation },
+    ConversationCreated {
+        seq: i64,
+        conversation: Conversation,
+    },
 
     #[serde(rename = "conversation.updated")]
-    ConversationUpdated { seq: i64, conversation: Conversation },
+    ConversationUpdated {
+        seq: i64,
+        conversation: Conversation,
+    },
 
     #[serde(rename = "member.joined")]
     MemberJoined {
@@ -797,7 +803,10 @@ mod tests {
             code_refs: vec![],
             artifact_refs: vec![],
         };
-        assert!(serde_json::to_value(&frame).unwrap().get("artifact_refs").is_none());
+        assert!(serde_json::to_value(&frame)
+            .unwrap()
+            .get("artifact_refs")
+            .is_none());
     }
 
     #[test]
@@ -851,7 +860,9 @@ mod tests {
             ],
         }))
         .unwrap();
-        let ServerFrame::MessageNew(new) = frame else { panic!("not a message.new") };
+        let ServerFrame::MessageNew(new) = frame else {
+            panic!("not a message.new")
+        };
         let message = new.into_message();
         assert_eq!(
             message.artifact_refs,

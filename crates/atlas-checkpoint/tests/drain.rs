@@ -39,7 +39,9 @@ const ORG: &str = "org-tryatlas";
 enum Reply {
     Accept,
     /// Accept some rows and reject others, by row-id substring.
-    Partial { reject: Vec<String> },
+    Partial {
+        reject: Vec<String>,
+    },
     Status(u16),
     /// Accept, but only once the token has been refreshed.
     ExpireOnce,
@@ -184,10 +186,7 @@ fn handle(
         let _ = reader.read_exact(&mut body);
     }
 
-    let token = headers
-        .get("authorization")
-        .cloned()
-        .unwrap_or_default();
+    let token = headers.get("authorization").cloned().unwrap_or_default();
 
     // Blob upload.
     if request_line.starts_with("PUT /blobs/") {
@@ -210,11 +209,7 @@ fn handle(
     // Slug availability.
     if request_line.starts_with("GET /workspaces/slug-available") {
         let available = !request_line.contains("slug=taken");
-        respond(
-            &mut stream,
-            200,
-            &format!("{{\"available\":{available}}}"),
-        );
+        respond(&mut stream, 200, &format!("{{\"available\":{available}}}"));
         return;
     }
 
@@ -225,7 +220,11 @@ fn handle(
             .lock()
             .unwrap()
             .push(String::from_utf8_lossy(&body).into_owned());
-        respond(&mut stream, 200, "{\"status\":\"no_match\",\"candidates\":[]}");
+        respond(
+            &mut stream,
+            200,
+            "{\"status\":\"no_match\",\"candidates\":[]}",
+        );
         return;
     }
 
@@ -292,12 +291,11 @@ fn handle(
                     serde_json::json!({ "rowId": id, "accepted": accepted })
                 })
                 .collect();
-            received
-                .lock()
-                .unwrap()
-                .extend(artifacts.into_iter().filter(|a| {
-                    !reject.iter().any(|r| a.row_id().contains(r.as_str()))
-                }));
+            received.lock().unwrap().extend(
+                artifacts
+                    .into_iter()
+                    .filter(|a| !reject.iter().any(|r| a.row_id().contains(r.as_str()))),
+            );
             respond(
                 &mut stream,
                 202,
@@ -406,7 +404,11 @@ fn pending_rows_are_uploaded_and_marked_sent() {
     let outcome = drain(&store, &config(&stub.base_url, &token)).expect("drains");
 
     assert_eq!(outcome.status, DrainStatus::Drained);
-    assert!(outcome.sent >= 3, "session + prompt + response, got {}", outcome.sent);
+    assert!(
+        outcome.sent >= 3,
+        "session + prompt + response, got {}",
+        outcome.sent
+    );
     assert_eq!(outcome.still_pending, 0);
     assert!(!stub.artifacts().is_empty());
 }
@@ -447,7 +449,10 @@ fn the_wire_project_id_is_never_the_local_row_key() {
     assert!(!artifacts.is_empty());
     for artifact in artifacts {
         let json = serde_json::to_string(&artifact).unwrap();
-        assert!(json.contains(&format!("\"workspaceId\":\"{WIRE_WORKSPACE}\"")), "{json}");
+        assert!(
+            json.contains(&format!("\"workspaceId\":\"{WIRE_WORKSPACE}\"")),
+            "{json}"
+        );
         assert!(!json.contains(&format!("\"{WORKSPACE}\"")), "{json}");
     }
 }
@@ -483,7 +488,10 @@ fn registering_without_a_name_omits_the_field_rather_than_sending_null() {
     let token = always_token();
     register_workspace(
         &config(&stub.base_url, &token),
-        Registration { slug: "atlas", ..Registration::default() },
+        Registration {
+            slug: "atlas",
+            ..Registration::default()
+        },
     )
     .expect("registers without a name or fingerprints");
 
@@ -505,7 +513,10 @@ fn a_schema_refusal_reports_the_server_message_not_the_store() {
     let token = always_token();
     let err = register_workspace(
         &config(&stub.base_url, &token),
-        Registration { slug: "null", ..Registration::default() },
+        Registration {
+            slug: "null",
+            ..Registration::default()
+        },
     )
     .expect_err("a 422 is an error");
     let text = err.to_string();
@@ -534,7 +545,11 @@ fn connecting_on_fingerprints_alone_sends_no_null_keys() {
     let body = bodies[0].as_object().expect("object body");
     let mut keys: Vec<&str> = body.keys().map(String::as_str).collect();
     keys.sort_unstable();
-    assert_eq!(keys, ["create", "gitUrl", "orgId", "rootCommitSha"], "{body:?}");
+    assert_eq!(
+        keys,
+        ["create", "gitUrl", "orgId", "rootCommitSha"],
+        "{body:?}"
+    );
     assert!(body.values().all(|v| !v.is_null()), "{body:?}");
     assert_eq!(body["create"], false);
 }
@@ -545,7 +560,10 @@ fn registering_a_taken_slug_is_refused_plainly() {
     let token = always_token();
     let err = register_workspace(
         &config(&stub.base_url, &token),
-        Registration { slug: "taken", ..Registration::default() },
+        Registration {
+            slug: "taken",
+            ..Registration::default()
+        },
     )
     .expect_err("a 409 is an error");
     assert!(err.to_string().contains("already taken"), "{err}");
@@ -597,7 +615,9 @@ fn when_the_server_recovers_pending_rows_drain() {
 
     let token = always_token();
     assert_eq!(
-        drain(&store, &config("http://127.0.0.1:1", &token)).unwrap().status,
+        drain(&store, &config("http://127.0.0.1:1", &token))
+            .unwrap()
+            .status,
         DrainStatus::Offline
     );
 
@@ -618,7 +638,11 @@ fn a_server_error_leaves_rows_pending_rather_than_failing_them() {
     let token = always_token();
     let outcome = drain(&store, &config(&stub.base_url, &token)).unwrap();
 
-    assert_eq!(outcome.status, DrainStatus::Offline, "5xx is the server's problem");
+    assert_eq!(
+        outcome.status,
+        DrainStatus::Offline,
+        "5xx is the server's problem"
+    );
     assert_eq!(outcome.failed, 0);
     assert!(outcome.still_pending > 0);
 }
@@ -700,14 +724,22 @@ fn a_rejected_row_is_marked_failed_and_the_rest_still_drain() {
     record(&mut store, "s1", "hello");
 
     // Reject the Session row; messages still go.
-    let stub = Stub::start(vec![Reply::Partial { reject: vec!["as-".into()] }], 200);
+    let stub = Stub::start(
+        vec![Reply::Partial {
+            reject: vec!["as-".into()],
+        }],
+        200,
+    );
     let token = always_token();
     let outcome = drain(&store, &config(&stub.base_url, &token)).unwrap();
 
     assert_eq!(outcome.failed, 1, "the rejected row is marked failed");
     assert!(outcome.sent > 0, "the rest kept draining");
     assert!(
-        store.row_count_in_state(WORKSPACE, atlas_checkpoint::SyncState::Failed).unwrap() > 0
+        store
+            .row_count_in_state(WORKSPACE, atlas_checkpoint::SyncState::Failed)
+            .unwrap()
+            > 0
     );
 }
 
@@ -762,7 +794,10 @@ fn a_row_is_never_sent_when_its_blob_upload_failed() {
             "a row with a spilled payload was sent despite the blob failing"
         );
     }
-    assert!(outcome.still_pending > 0, "it stays pending for the next pass");
+    assert!(
+        outcome.still_pending > 0,
+        "it stays pending for the next pass"
+    );
 }
 
 // ── Batching ────────────────────────────────────────────────────────────────
@@ -776,7 +811,13 @@ fn batches_respect_the_count_ceiling() {
     }
 
     let batch = store
-        .pending_artifacts(WORKSPACE, WIRE_WORKSPACE, ORG, atlas_checkpoint::sync::MAX_BATCH_COUNT, usize::MAX)
+        .pending_artifacts(
+            WORKSPACE,
+            WIRE_WORKSPACE,
+            ORG,
+            atlas_checkpoint::sync::MAX_BATCH_COUNT,
+            usize::MAX,
+        )
         .unwrap();
     assert!(batch.len() <= atlas_checkpoint::sync::MAX_BATCH_COUNT);
 }
@@ -791,9 +832,17 @@ fn batches_respect_the_byte_ceiling_independently_of_the_count() {
         record(&mut store, &format!("s{i}"), &"x".repeat(40_000));
     }
 
-    let batch = store.pending_artifacts(WORKSPACE, WIRE_WORKSPACE, ORG, 100, 64 * 1024).unwrap();
-    let bytes: usize = batch.iter().map(atlas_checkpoint::artifacts::AtlasArtifact::approx_bytes).sum();
-    assert!(batch.len() < 100, "the byte ceiling bit before the count did");
+    let batch = store
+        .pending_artifacts(WORKSPACE, WIRE_WORKSPACE, ORG, 100, 64 * 1024)
+        .unwrap();
+    let bytes: usize = batch
+        .iter()
+        .map(atlas_checkpoint::artifacts::AtlasArtifact::approx_bytes)
+        .sum();
+    assert!(
+        batch.len() < 100,
+        "the byte ceiling bit before the count did"
+    );
     assert!(bytes < 512 * 1024, "batch was {bytes} bytes");
 }
 
@@ -808,7 +857,11 @@ fn a_batch_level_rejection_bisects_to_the_poison_row_and_the_rest_drain() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = cloud_store(dir.path());
     record(&mut store, "s1", "a perfectly fine answer");
-    record(&mut store, "s2", "poison marker that fails any batch carrying it");
+    record(
+        &mut store,
+        "s2",
+        "poison marker that fails any batch carrying it",
+    );
     record(&mut store, "s3", "another fine answer");
 
     let stub = Stub::start(
@@ -820,9 +873,14 @@ fn a_batch_level_rejection_bisects_to_the_poison_row_and_the_rest_drain() {
 
     assert_eq!(outcome.failed, 1, "exactly the poison row was convicted");
     assert_eq!(outcome.sent, 8, "3 sessions + 6 messages, minus the poison");
-    assert_eq!(outcome.still_pending, 0, "nothing left stalled behind the poison");
     assert_eq!(
-        store.row_count_in_state(WORKSPACE, atlas_checkpoint::SyncState::Failed).unwrap(),
+        outcome.still_pending, 0,
+        "nothing left stalled behind the poison"
+    );
+    assert_eq!(
+        store
+            .row_count_in_state(WORKSPACE, atlas_checkpoint::SyncState::Failed)
+            .unwrap(),
         1
     );
     assert!(
@@ -846,7 +904,11 @@ fn convicted_rows_can_be_re_pended_and_then_drain() {
 
     assert_eq!(first.failed, 3, "every row was convicted one by one");
     assert_eq!(first.still_pending, 0);
-    assert_eq!(first.status, DrainStatus::Drained, "nothing pending remains");
+    assert_eq!(
+        first.status,
+        DrainStatus::Drained,
+        "nothing pending remains"
+    );
     assert!(
         rejecting.ingest_calls() <= 8,
         "conviction is bounded, took {} passes",
@@ -860,7 +922,9 @@ fn convicted_rows_can_be_re_pended_and_then_drain() {
     assert_eq!(second.status, DrainStatus::Drained);
     assert_eq!(second.sent, 3, "the re-pended rows drained");
     assert_eq!(
-        store.row_count_in_state(WORKSPACE, atlas_checkpoint::SyncState::Failed).unwrap(),
+        store
+            .row_count_in_state(WORKSPACE, atlas_checkpoint::SyncState::Failed)
+            .unwrap(),
         0
     );
 }
@@ -908,9 +972,16 @@ fn a_blob_upload_403_surfaces_not_authorized_and_rows_stay_pending() {
     assert_eq!(outcome.status, DrainStatus::NotAuthorized);
     assert_eq!(outcome.sent, 0, "nothing was sent");
     assert_eq!(outcome.failed, 0, "a 403 is not the rows' fault");
-    assert!(outcome.still_pending > 0, "rows stay pending, honestly reported");
+    assert!(
+        outcome.still_pending > 0,
+        "rows stay pending, honestly reported"
+    );
     assert!(stub.artifacts().is_empty());
-    assert_eq!(stub.blob_calls(), 1, "the drain stopped instead of retrying");
+    assert_eq!(
+        stub.blob_calls(),
+        1,
+        "the drain stopped instead of retrying"
+    );
 }
 
 // ── Permanently unsendable rows ─────────────────────────────────────────────
@@ -933,9 +1004,15 @@ fn a_missing_local_blob_fails_its_row_and_everything_else_drains() {
     assert_eq!(outcome.failed, 1, "the blob-less row failed");
     assert!(outcome.sent > 0, "everything else drained");
     assert_eq!(outcome.still_pending, 0);
-    assert_eq!(outcome.status, DrainStatus::Drained, "an honest Drained: nothing pending remains");
     assert_eq!(
-        store.row_count_in_state(WORKSPACE, atlas_checkpoint::SyncState::Failed).unwrap(),
+        outcome.status,
+        DrainStatus::Drained,
+        "an honest Drained: nothing pending remains"
+    );
+    assert_eq!(
+        store
+            .row_count_in_state(WORKSPACE, atlas_checkpoint::SyncState::Failed)
+            .unwrap(),
         1
     );
     for artifact in stub.artifacts() {
@@ -971,7 +1048,10 @@ fn a_persistent_401_refreshes_exactly_once_then_stops() {
         2,
         "one original attempt plus exactly one refreshed retry"
     );
-    assert!(outcome.still_pending > 0, "rows stay pending for a later, fixed credential");
+    assert!(
+        outcome.still_pending > 0,
+        "rows stay pending for a later, fixed credential"
+    );
 }
 
 // ── Batch construction edge ─────────────────────────────────────────────────
@@ -986,11 +1066,17 @@ fn a_single_artifact_over_the_byte_ceiling_still_ships_alone() {
 
     let mut passes = 0;
     loop {
-        let batch = store.pending_artifacts(WORKSPACE, WIRE_WORKSPACE, ORG, 100, 1).unwrap();
+        let batch = store
+            .pending_artifacts(WORKSPACE, WIRE_WORKSPACE, ORG, 100, 1)
+            .unwrap();
         if batch.is_empty() {
             break;
         }
-        assert_eq!(batch.len(), 1, "every artifact dwarfs the ceiling, so each ships alone");
+        assert_eq!(
+            batch.len(),
+            1,
+            "every artifact dwarfs the ceiling, so each ships alone"
+        );
         store.mark_sent(batch[0].row_id()).unwrap();
         passes += 1;
         assert!(passes <= 10, "the queue drains rather than deadlocking");
@@ -1073,7 +1159,10 @@ fn a_budgeted_pass_yields_after_a_batch_and_the_next_pass_finishes() {
     budgeted.deadline = Some(std::time::Instant::now());
     let first = drain(&store, &budgeted).unwrap();
     assert_eq!(first.status, DrainStatus::Yielded);
-    assert!(first.sent > 0 && first.sent <= atlas_checkpoint::sync::MAX_BATCH_COUNT, "one batch: {first:?}");
+    assert!(
+        first.sent > 0 && first.sent <= atlas_checkpoint::sync::MAX_BATCH_COUNT,
+        "one batch: {first:?}"
+    );
     assert!(first.still_pending > 0, "{first:?}");
     assert_eq!(stub.ingest_calls(), 1);
 
@@ -1095,7 +1184,10 @@ fn a_drain_on_a_sibling_never_holds_up_recording() {
     record(&mut store, "before", "queued before the drain");
 
     let sibling = store.sibling().expect("a sibling opens");
-    assert!(sibling.is_writer(), "the sibling writes under this process's lock");
+    assert!(
+        sibling.is_writer(),
+        "the sibling writes under this process's lock"
+    );
     let base_url = stub.base_url.clone();
     let draining = std::thread::spawn(move || {
         let token = always_token();
@@ -1107,9 +1199,16 @@ fn a_drain_on_a_sibling_never_holds_up_recording() {
     }
 
     let started = std::time::Instant::now();
-    record(&mut store, "during", "recorded while the drain waits on the uplink");
+    record(
+        &mut store,
+        "during",
+        "recorded while the drain waits on the uplink",
+    );
     let took = started.elapsed();
-    assert!(took < Duration::from_millis(1_000), "recording waited {took:?} on the drain");
+    assert!(
+        took < Duration::from_millis(1_000),
+        "recording waited {took:?} on the drain"
+    );
 
     let outcome = draining.join().unwrap();
     assert_eq!(outcome.status, DrainStatus::Drained);
@@ -1135,6 +1234,8 @@ fn a_sibling_holds_the_writer_lock_after_its_origin_is_dropped() {
     drop(store);
     assert!(!Store::open(dir.path().join(".atlas")).unwrap().is_writer());
     drop(sibling);
-    assert!(Store::open(dir.path().join(".atlas")).unwrap().is_writer(), "released with the last connection");
+    assert!(
+        Store::open(dir.path().join(".atlas")).unwrap().is_writer(),
+        "released with the last connection"
+    );
 }
-

@@ -125,7 +125,13 @@ fn state_path(memory_dir: &Path, session_id: &str) -> std::path::PathBuf {
 /// Keep a session id filesystem-safe.
 fn sanitize(s: &str) -> String {
     s.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
@@ -139,7 +145,8 @@ pub fn should_extract(turns: &[TranscriptTurn], state: &ExtractState) -> bool {
     if turns.len() < MIN_MESSAGES_TO_EXTRACT {
         return false;
     }
-    if state.extraction_count > 0 && state.tool_calls_since_last < MIN_TOOL_CALLS_BETWEEN_EXTRACTIONS
+    if state.extraction_count > 0
+        && state.tool_calls_since_last < MIN_TOOL_CALLS_BETWEEN_EXTRACTIONS
     {
         return false;
     }
@@ -152,7 +159,10 @@ pub fn should_extract(turns: &[TranscriptTurn], state: &ExtractState) -> bool {
 }
 
 /// The turns since the last pass that carry any text.
-fn new_turns<'a>(turns: &'a [TranscriptTurn], state: &ExtractState) -> impl Iterator<Item = &'a TranscriptTurn> {
+fn new_turns<'a>(
+    turns: &'a [TranscriptTurn],
+    state: &ExtractState,
+) -> impl Iterator<Item = &'a TranscriptTurn> {
     let start = state.last_extracted_turn_index.min(turns.len());
     turns[start..].iter().filter(|t| !t.text.trim().is_empty())
 }
@@ -364,10 +374,26 @@ mod tests {
         assert_eq!(
             found,
             vec![
-                Extracted { kind: EntryKind::Decision, content: "Sign JWTs with RS256".into(), confidence: 0.9 },
-                Extracted { kind: EntryKind::Fact, content: "The API speaks JSON over REST".into(), confidence: 0.85 },
-                Extracted { kind: EntryKind::Failure, content: "HS256 needs a shared secret; avoid".into(), confidence: 0.7 },
-                Extracted { kind: EntryKind::Architecture, content: "Server components render /todos".into(), confidence: 0.6 },
+                Extracted {
+                    kind: EntryKind::Decision,
+                    content: "Sign JWTs with RS256".into(),
+                    confidence: 0.9
+                },
+                Extracted {
+                    kind: EntryKind::Fact,
+                    content: "The API speaks JSON over REST".into(),
+                    confidence: 0.85
+                },
+                Extracted {
+                    kind: EntryKind::Failure,
+                    content: "HS256 needs a shared secret; avoid".into(),
+                    confidence: 0.7
+                },
+                Extracted {
+                    kind: EntryKind::Architecture,
+                    content: "Server components render /todos".into(),
+                    confidence: 0.6
+                },
             ]
         );
     }
@@ -386,8 +412,16 @@ mod tests {
         assert_eq!(
             found,
             vec![
-                Extracted { kind: EntryKind::Fact, content: "Uses pnpm workspaces".into(), confidence: 1.0 },
-                Extracted { kind: EntryKind::Decision, content: "Keep SQLite in WAL mode".into(), confidence: 0.5 },
+                Extracted {
+                    kind: EntryKind::Fact,
+                    content: "Uses pnpm workspaces".into(),
+                    confidence: 1.0
+                },
+                Extracted {
+                    kind: EntryKind::Decision,
+                    content: "Keep SQLite in WAL mode".into(),
+                    confidence: 0.5
+                },
             ]
         );
         assert!(parse_extracted("I could not produce JSON.").is_empty());
@@ -397,11 +431,16 @@ mod tests {
     #[tokio::test]
     async fn a_turn_before_the_gates_never_calls_the_model() {
         let mut state = ExtractState::default();
-        let found = extract(&make_turns(4), &mut state, Trigger::TurnFinished, |_| async {
-            panic!("the model must not be called before the gates are met");
-            #[allow(unreachable_code)]
-            Ok(String::new())
-        })
+        let found = extract(
+            &make_turns(4),
+            &mut state,
+            Trigger::TurnFinished,
+            |_| async {
+                panic!("the model must not be called before the gates are met");
+                #[allow(unreachable_code)]
+                Ok(String::new())
+            },
+        )
         .await
         .unwrap();
         assert!(found.is_empty());
@@ -413,10 +452,18 @@ mod tests {
         let dir = tmp_dir("happy");
         let mut state = ExtractState::default();
         let turns = make_turns(26);
-        let found = extract(&turns, &mut state, Trigger::TurnFinished, |prompt| async move {
-            assert!(prompt.contains("reply 25"), "the conversation rides in the prompt");
-            Ok(CANNED.to_string())
-        })
+        let found = extract(
+            &turns,
+            &mut state,
+            Trigger::TurnFinished,
+            |prompt| async move {
+                assert!(
+                    prompt.contains("reply 25"),
+                    "the conversation rides in the prompt"
+                );
+                Ok(CANNED.to_string())
+            },
+        )
         .await
         .unwrap();
         assert_eq!(found.len(), 4);
@@ -448,11 +495,19 @@ mod tests {
             ..Default::default()
         };
         let turns = make_turns(4);
-        let found = extract(&turns, &mut state, Trigger::SessionEnd, |prompt| async move {
-            assert!(!prompt.contains("reply 1\n"), "turns already extracted are not sent again");
-            assert!(prompt.contains("reply 3"));
-            Ok(CANNED.to_string())
-        })
+        let found = extract(
+            &turns,
+            &mut state,
+            Trigger::SessionEnd,
+            |prompt| async move {
+                assert!(
+                    !prompt.contains("reply 1\n"),
+                    "turns already extracted are not sent again"
+                );
+                assert!(prompt.contains("reply 3"));
+                Ok(CANNED.to_string())
+            },
+        )
         .await
         .unwrap();
         assert_eq!(found.len(), 4);
@@ -471,9 +526,12 @@ mod tests {
     #[tokio::test]
     async fn a_failed_model_call_leaves_the_state_for_the_next_turn() {
         let mut state = ExtractState::default();
-        let err = extract(&make_turns(26), &mut state, Trigger::TurnFinished, |_| async {
-            Err(anyhow::anyhow!("offline"))
-        })
+        let err = extract(
+            &make_turns(26),
+            &mut state,
+            Trigger::TurnFinished,
+            |_| async { Err(anyhow::anyhow!("offline")) },
+        )
         .await;
         assert!(err.is_err());
         assert_eq!(state.extraction_count, 0);

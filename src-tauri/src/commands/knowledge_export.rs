@@ -79,11 +79,7 @@ fn resolve_title(project_path: &str, entry_id: &str) -> String {
             }
         }
     }
-    entry_id
-        .rsplit('/')
-        .next()
-        .unwrap_or(entry_id)
-        .to_string()
+    entry_id.rsplit('/').next().unwrap_or(entry_id).to_string()
 }
 
 #[derive(Debug, Clone)]
@@ -118,7 +114,9 @@ fn walk(dir: &Path, root: &Path, project_path: &str, out: &mut Vec<NoteFile>) {
         }
         let rel = path.strip_prefix(root).unwrap_or(&path);
         let id = rel.with_extension("").to_string_lossy().to_string();
-        let Ok(body_md) = fs::read_to_string(&path) else { continue };
+        let Ok(body_md) = fs::read_to_string(&path) else {
+            continue;
+        };
         let title = resolve_title(project_path, &id);
         out.push(NoteFile { id, title, body_md });
     }
@@ -310,11 +308,7 @@ pub async fn knowledge_export_server(
         let target_dir = std::env::temp_dir().join("atlas-kb-server-target");
 
         let output = atlas_process::command("cargo")
-            .args([
-                "build",
-                "--release",
-                "--manifest-path",
-            ])
+            .args(["build", "--release", "--manifest-path"])
             .arg(&server_manifest)
             .arg("--target-dir")
             .arg(&target_dir)
@@ -330,7 +324,11 @@ pub async fn knowledge_export_server(
         }
 
         // 3. Copy the built binary to the user's chosen path.
-        let bin_name = if cfg!(windows) { "atlas-kb-server.exe" } else { "atlas-kb-server" };
+        let bin_name = if cfg!(windows) {
+            "atlas-kb-server.exe"
+        } else {
+            "atlas-kb-server"
+        };
         let built = target_dir.join("release").join(bin_name);
         if !built.exists() {
             return Err(format!("built binary missing at {}", built.display()));
@@ -342,7 +340,9 @@ pub async fn knowledge_export_server(
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let mut perms = fs::metadata(&target_path).map_err(|e| e.to_string())?.permissions();
+            let mut perms = fs::metadata(&target_path)
+                .map_err(|e| e.to_string())?
+                .permissions();
             perms.set_mode(0o755);
             let _ = fs::set_permissions(&target_path, perms);
         }

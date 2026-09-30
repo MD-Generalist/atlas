@@ -135,8 +135,14 @@ pub enum EntryKind {
 
 impl EntryKind {
     /// Every kind, working memory first.
-    pub const ALL: [EntryKind; 6] =
-        [Self::Plan, Self::FileChanged, Self::Decision, Self::Fact, Self::Failure, Self::Architecture];
+    pub const ALL: [EntryKind; 6] = [
+        Self::Plan,
+        Self::FileChanged,
+        Self::Decision,
+        Self::Fact,
+        Self::Failure,
+        Self::Architecture,
+    ];
 
     /// The display cap of this kind (the Active plan shows one).
     pub fn cap(self) -> usize {
@@ -188,7 +194,10 @@ impl EntryKind {
 
     /// The four durable kinds (accumulate, searchable, promotable).
     pub fn is_durable(self) -> bool {
-        matches!(self, Self::Decision | Self::Fact | Self::Failure | Self::Architecture)
+        matches!(
+            self,
+            Self::Decision | Self::Fact | Self::Failure | Self::Architecture
+        )
     }
 }
 
@@ -342,7 +351,9 @@ pub fn open_scope(root: &Path) -> Result<Arc<RecordStore>> {
     // share one handle, or two connections would race on one sequence.
     let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     let root = root.as_path();
-    let mut reg = registry().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut reg = registry()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if let Some(store) = reg.get(root) {
         return Ok(store.clone());
     }
@@ -376,7 +387,9 @@ struct VectorIndex {
 
 impl std::fmt::Debug for RecordStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RecordStore").field("root", &self.root).finish()
+        f.debug_struct("RecordStore")
+            .field("root", &self.root)
+            .finish()
     }
 }
 
@@ -403,7 +416,10 @@ impl RecordStore {
     /// Install (or remove) the embedder used for near-duplicate merging and
     /// search. `None` = key-or-hash dedup only.
     pub fn set_embedder(&self, embedder: Option<Arc<dyn Embedder>>) {
-        *self.embedder.write().unwrap_or_else(std::sync::PoisonError::into_inner) = embedder;
+        *self
+            .embedder
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = embedder;
     }
 
     /// Whether an embedder is installed.
@@ -412,11 +428,16 @@ impl RecordStore {
     }
 
     fn embedder(&self) -> Option<Arc<dyn Embedder>> {
-        self.embedder.read().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
+        self.embedder
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     fn vectors(&self) -> MutexGuard<'_, Option<VectorIndex>> {
-        self.vectors.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+        self.vectors
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// `text` embedded by the installed model, unit length; `None` when there
@@ -432,7 +453,9 @@ impl RecordStore {
     }
 
     fn conn(&self) -> MutexGuard<'_, Connection> {
-        self.conn.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+        self.conn
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     // ── Events ───────────────────────────────────────────────────────────────
@@ -478,7 +501,9 @@ impl RecordStore {
         let folded = match &vector {
             Some((model, v)) => {
                 let id: Option<i64> = tx
-                    .query_row("SELECT id FROM entries WHERE seq = ?1", [seq as i64], |r| r.get(0))
+                    .query_row("SELECT id FROM entries WHERE seq = ?1", [seq as i64], |r| {
+                        r.get(0)
+                    })
                     .optional()?;
                 if let Some(id) = id {
                     put_vector(&tx, id, model, v)?;
@@ -500,7 +525,10 @@ impl RecordStore {
     /// `model` (an unbuilt index picks it up from the table when built).
     fn index_put(&self, id: i64, model: &str, v: &[f32]) {
         let mut index = self.vectors();
-        if let Some(index) = index.as_mut().filter(|i| i.model == model && i.dim == v.len()) {
+        if let Some(index) = index
+            .as_mut()
+            .filter(|i| i.model == model && i.dim == v.len())
+        {
             let _ = index.hnsw.remove(id as u64);
             if let Err(e) = index.hnsw.add(id as u64, v) {
                 tracing::warn!(target: "atlas::memory", "vector index add failed: {e:#}");
@@ -512,9 +540,11 @@ impl RecordStore {
     pub fn last_event(&self) -> Result<Option<(u64, i64)>> {
         let conn = self.conn();
         Ok(conn
-            .query_row("SELECT seq, ts FROM events ORDER BY seq DESC LIMIT 1", [], |r| {
-                Ok((r.get::<_, i64>(0)? as u64, r.get::<_, i64>(1)?))
-            })
+            .query_row(
+                "SELECT seq, ts FROM events ORDER BY seq DESC LIMIT 1",
+                [],
+                |r| Ok((r.get::<_, i64>(0)? as u64, r.get::<_, i64>(1)?)),
+            )
             .optional()?)
     }
 
@@ -578,8 +608,11 @@ impl RecordStore {
     /// Every entry of `kind`, however many (storage is unbounded).
     pub fn count(&self, kind: EntryKind) -> Result<usize> {
         let conn = self.conn();
-        let n: i64 =
-            conn.query_row("SELECT COUNT(*) FROM entries WHERE kind = ?1", [kind.as_str()], |r| r.get(0))?;
+        let n: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM entries WHERE kind = ?1",
+            [kind.as_str()],
+            |r| r.get(0),
+        )?;
         Ok(n as usize)
     }
 
@@ -595,7 +628,10 @@ impl RecordStore {
             if !kinds.is_empty() && !kinds.contains(&e.kind) {
                 continue;
             }
-            if q.is_empty() || e.content.to_lowercase().contains(&q) || e.key.to_lowercase().contains(&q) {
+            if q.is_empty()
+                || e.content.to_lowercase().contains(&q)
+                || e.key.to_lowercase().contains(&q)
+            {
                 out.push(e);
                 if out.len() >= limit {
                     break;
@@ -635,13 +671,22 @@ impl RecordStore {
     fn write_entry(&self, e: NewEntry, log_at: Option<i64>) -> Result<Remembered> {
         let e = redacted(e);
         // Embedding is the slow part; done before the connection is locked.
-        let vector = if e.kind.is_durable() { self.embed(&e.content) } else { None };
+        let vector = if e.kind.is_durable() {
+            self.embed(&e.content)
+        } else {
+            None
+        };
 
         let mut conn = self.conn();
         let tx = conn.transaction()?;
         let (id, outcome) = match find_identity(&tx, &e)? {
             Some(found) => write_identity(&tx, &e, found)?,
-            None => match vector.as_ref().map(|(m, v)| self.near_duplicate(&tx, &e, m, v)).transpose()?.flatten() {
+            None => match vector
+                .as_ref()
+                .map(|(m, v)| self.near_duplicate(&tx, &e, m, v))
+                .transpose()?
+                .flatten()
+            {
                 Some(survivor) => {
                     merge_into(&tx, survivor, &e)?;
                     (survivor, WriteOutcome::Merged)
@@ -672,7 +717,10 @@ impl RecordStore {
                 payload: serde_json::json!({ "text": e.content }),
             };
             insert_event(&tx, &row)?;
-            tx.execute("UPDATE entries SET seq = ?2 WHERE id = ?1", params![id, seq as i64])?;
+            tx.execute(
+                "UPDATE entries SET seq = ?2 WHERE id = ?1",
+                params![id, seq as i64],
+            )?;
         }
         let entry = tx.query_row("SELECT * FROM entries WHERE id = ?1", [id], entry_from_row)?;
         tx.commit()?;
@@ -685,14 +733,25 @@ impl RecordStore {
     /// The stored entry of `e`'s kind most similar to `v`, if at or above
     /// [`NEAR_DUPLICATE`]. Keyed entries only merge with keyless ones (two
     /// different keys are two different memories).
-    fn near_duplicate(&self, tx: &Transaction<'_>, e: &NewEntry, model: &str, v: &[f32]) -> Result<Option<i64>> {
+    fn near_duplicate(
+        &self,
+        tx: &Transaction<'_>,
+        e: &NewEntry,
+        model: &str,
+        v: &[f32],
+    ) -> Result<Option<i64>> {
         const CANDIDATES: usize = 32;
         let hits = {
             let mut index = self.vectors();
-            if !index.as_ref().is_some_and(|i| i.model == model && i.dim == v.len()) {
+            if !index
+                .as_ref()
+                .is_some_and(|i| i.model == model && i.dim == v.len())
+            {
                 *index = Some(build_index(tx, model, v.len())?);
             }
-            let Some(index) = index.as_ref() else { return Ok(None) };
+            let Some(index) = index.as_ref() else {
+                return Ok(None);
+            };
             index.hnsw.search(v, CANDIDATES)?
         };
         // The index only proposes; the table is the truth (a candidate may
@@ -707,7 +766,9 @@ impl RecordStore {
                     |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
                 )
                 .optional()?;
-            let Some((kind, key, blob)) = row else { continue };
+            let Some((kind, key, blob)) = row else {
+                continue;
+            };
             if kind != e.kind.as_str() || (!e.key.is_empty() && !key.is_empty()) {
                 continue;
             }
@@ -733,18 +794,27 @@ impl RecordStore {
         }
         let kind = {
             let conn = self.conn();
-            conn.query_row("SELECT kind FROM entries WHERE id = ?1", [id], |r| r.get::<_, String>(0))
-                .optional()?
+            conn.query_row("SELECT kind FROM entries WHERE id = ?1", [id], |r| {
+                r.get::<_, String>(0)
+            })
+            .optional()?
         };
         let Some(kind) = kind.and_then(|k| EntryKind::parse(&k)) else {
             return Ok(None);
         };
         // Embedding is the slow part; done before the connection is locked.
-        let vector = if kind.is_durable() { self.embed(&content) } else { None };
+        let vector = if kind.is_durable() {
+            self.embed(&content)
+        } else {
+            None
+        };
 
         let mut conn = self.conn();
         let tx = conn.transaction()?;
-        let Some(old) = tx.query_row("SELECT * FROM entries WHERE id = ?1", [id], entry_from_row).optional()? else {
+        let Some(old) = tx
+            .query_row("SELECT * FROM entries WHERE id = ?1", [id], entry_from_row)
+            .optional()?
+        else {
             return Ok(None);
         };
         // A correction: the wording it replaces no longer surfaces from the
@@ -798,7 +868,9 @@ impl RecordStore {
     pub fn forget(&self, id: i64) -> Result<Option<Entry>> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
-        let entry = tx.query_row("SELECT * FROM entries WHERE id = ?1", [id], entry_from_row).optional()?;
+        let entry = tx
+            .query_row("SELECT * FROM entries WHERE id = ?1", [id], entry_from_row)
+            .optional()?;
         if let Some(e) = &entry {
             tx.execute("DELETE FROM entries WHERE id = ?1", [id])?;
             tx.execute("DELETE FROM entry_vectors WHERE id = ?1", [id])?;
@@ -829,13 +901,20 @@ impl RecordStore {
     /// gate the legacy migration uses; any source name works).
     pub fn import_recorded(&self, source: &str) -> Result<bool> {
         let conn = self.conn();
-        Ok(conn.query_row("SELECT EXISTS(SELECT 1 FROM legacy_imports WHERE source = ?1)", [source], |r| r.get(0))?)
+        Ok(conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM legacy_imports WHERE source = ?1)",
+            [source],
+            |r| r.get(0),
+        )?)
     }
 
     /// Record that the one-time import from `source` ran at `at`. Idempotent.
     pub fn mark_imported(&self, source: &str, at: i64) -> Result<()> {
         let conn = self.conn();
-        conn.execute("INSERT OR IGNORE INTO legacy_imports (source, at) VALUES (?1, ?2)", params![source, at])?;
+        conn.execute(
+            "INSERT OR IGNORE INTO legacy_imports (source, at) VALUES (?1, ?2)",
+            params![source, at],
+        )?;
         Ok(())
     }
 
@@ -844,7 +923,13 @@ impl RecordStore {
     /// entry contains, plus its cosine to the query when an embedder is
     /// installed. An empty query lists the most recently written entries.
     /// Every entry returned is stamped as used at `now`.
-    pub fn search(&self, query: &str, kinds: &[EntryKind], limit: usize, now: i64) -> Result<Vec<Entry>> {
+    pub fn search(
+        &self,
+        query: &str,
+        kinds: &[EntryKind],
+        limit: usize,
+        now: i64,
+    ) -> Result<Vec<Entry>> {
         const MIN_SIMILARITY: f32 = 0.35;
         if query.trim().is_empty() {
             let out = self.query("", kinds, limit)?;
@@ -856,8 +941,11 @@ impl RecordStore {
         let conn = self.conn();
         let similar: HashMap<i64, f32> = match &vector {
             Some((model, v)) => {
-                let mut stmt = conn.prepare("SELECT id, vec FROM entry_vectors WHERE model = ?1")?;
-                let rows = stmt.query_map([model], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?)))?;
+                let mut stmt =
+                    conn.prepare("SELECT id, vec FROM entry_vectors WHERE model = ?1")?;
+                let rows = stmt.query_map([model], |r| {
+                    Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?))
+                })?;
                 let mut out = HashMap::new();
                 for row in rows {
                     let (id, blob) = row?;
@@ -878,8 +966,15 @@ impl RecordStore {
                 continue;
             }
             let haystack = format!("{} {}", e.key, e.content).to_lowercase();
-            let hit = terms.iter().filter(|t| haystack.contains(t.as_str())).count();
-            let term_score = if terms.is_empty() { 0.0 } else { hit as f32 / terms.len() as f32 };
+            let hit = terms
+                .iter()
+                .filter(|t| haystack.contains(t.as_str()))
+                .count();
+            let term_score = if terms.is_empty() {
+                0.0
+            } else {
+                hit as f32 / terms.len() as f32
+            };
             let score = term_score + similar.get(&e.id).copied().unwrap_or(0.0);
             if score > 0.0 {
                 scored.push((score, e));
@@ -891,7 +986,13 @@ impl RecordStore {
         scored.sort_by(|a, b| b.0.total_cmp(&a.0));
         let out: Vec<Entry> = scored.into_iter().take(limit).map(|(_, e)| e).collect();
         self.mark_used(&out, now)?;
-        Ok(out.into_iter().map(|e| Entry { last_used_at: Some(now), ..e }).collect())
+        Ok(out
+            .into_iter()
+            .map(|e| Entry {
+                last_used_at: Some(now),
+                ..e
+            })
+            .collect())
     }
 
     /// One entry by id, stamped as used at `now`; `None` when there is no
@@ -905,7 +1006,10 @@ impl RecordStore {
             return Ok(None);
         };
         self.mark_used(std::slice::from_ref(&entry), now)?;
-        Ok(Some(Entry { last_used_at: Some(now), ..entry }))
+        Ok(Some(Entry {
+            last_used_at: Some(now),
+            ..entry
+        }))
     }
 
     /// Whether `id` is still a live entry, WITHOUT stamping it as used.
@@ -928,7 +1032,10 @@ impl RecordStore {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
         for e in entries {
-            tx.execute("UPDATE entries SET last_used_at = ?2 WHERE id = ?1", params![e.id, now])?;
+            tx.execute(
+                "UPDATE entries SET last_used_at = ?2 WHERE id = ?1",
+                params![e.id, now],
+            )?;
         }
         tx.commit()?;
         Ok(())
@@ -969,8 +1076,9 @@ impl RecordStore {
     /// Every session row.
     pub fn sessions(&self) -> Result<Vec<SessionRow>> {
         let conn = self.conn();
-        let mut stmt = conn
-            .prepare("SELECT session_id, agent, started_at, ended_at FROM sessions ORDER BY session_id")?;
+        let mut stmt = conn.prepare(
+            "SELECT session_id, agent, started_at, ended_at FROM sessions ORDER BY session_id",
+        )?;
         let rows = stmt.query_map([], |r| {
             Ok(SessionRow {
                 session_id: r.get(0)?,
@@ -1044,7 +1152,11 @@ fn migrate_schema(conn: &Connection) -> Result<()> {
 /// The payload field an event of `kind` carries an entry's content in: a file
 /// change's summary, every other kind's text.
 fn content_field(kind: EntryKind) -> &'static str {
-    if kind == EntryKind::FileChanged { "summary" } else { "text" }
+    if kind == EntryKind::FileChanged {
+        "summary"
+    } else {
+        "text"
+    }
 }
 
 /// The log event a user's edit of `e` to `content` is recorded as: the
@@ -1067,16 +1179,29 @@ fn retract_events_of(tx: &Transaction<'_>, e: &Entry) -> Result<()> {
     {
         let mut stmt = tx.prepare("SELECT seq, key, payload FROM events WHERE kind = ?1")?;
         let rows = stmt.query_map([e.kind.event_kind().as_str()], |r| {
-            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+            ))
         })?;
         for row in rows {
             let (seq, key, payload) = row?;
-            let payload: serde_json::Value = serde_json::from_str(&payload).unwrap_or(serde_json::Value::Null);
-            let text = payload.get(content_field(e.kind)).and_then(|v| v.as_str()).unwrap_or("").trim();
+            let payload: serde_json::Value =
+                serde_json::from_str(&payload).unwrap_or(serde_json::Value::Null);
+            let text = payload
+                .get(content_field(e.kind))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
             let same_wording = !text.is_empty() && content_hash(text) == e.content_hash;
             let ours = match e.kind {
-                EntryKind::FileChanged => payload.get("path").and_then(|v| v.as_str()).unwrap_or(&key) == e.key,
-                EntryKind::Decision if !e.key.is_empty() => key == e.key || (same_wording && key.is_empty()),
+                EntryKind::FileChanged => {
+                    payload.get("path").and_then(|v| v.as_str()).unwrap_or(&key) == e.key
+                }
+                EntryKind::Decision if !e.key.is_empty() => {
+                    key == e.key || (same_wording && key.is_empty())
+                }
                 EntryKind::Decision => same_wording && key.is_empty(),
                 _ => same_wording,
             };
@@ -1086,7 +1211,10 @@ fn retract_events_of(tx: &Transaction<'_>, e: &Entry) -> Result<()> {
         }
     }
     for seq in seqs {
-        tx.execute("INSERT OR IGNORE INTO retracted_events (seq) VALUES (?1)", [seq])?;
+        tx.execute(
+            "INSERT OR IGNORE INTO retracted_events (seq) VALUES (?1)",
+            [seq],
+        )?;
     }
     Ok(())
 }
@@ -1221,9 +1349,9 @@ fn redact_value(v: serde_json::Value) -> serde_json::Value {
         serde_json::Value::Array(items) => {
             serde_json::Value::Array(items.into_iter().map(redact_value).collect())
         }
-        serde_json::Value::Object(map) => serde_json::Value::Object(
-            map.into_iter().map(|(k, v)| (k, redact_value(v))).collect(),
-        ),
+        serde_json::Value::Object(map) => {
+            serde_json::Value::Object(map.into_iter().map(|(k, v)| (k, redact_value(v))).collect())
+        }
         other => other,
     }
 }
@@ -1232,7 +1360,10 @@ fn redact_value(v: serde_json::Value) -> serde_json::Value {
 
 /// Whitespace-collapsed, lower-cased — the dedup form of a text.
 pub fn normalize(s: &str) -> String {
-    s.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+    s.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
 }
 
 /// Hex sha256 of the normalised text.
@@ -1281,7 +1412,11 @@ fn encode_vec(v: &[f32]) -> Vec<u8> {
 }
 
 fn decode_vec(b: &[u8]) -> Vec<f32> {
-    b.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect()
+    b.as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| f32::from_le_bytes(*c))
+        .collect()
 }
 
 fn put_vector(tx: &Transaction<'_>, id: i64, model: &str, v: &[f32]) -> Result<()> {
@@ -1297,7 +1432,9 @@ fn put_vector(tx: &Transaction<'_>, id: i64, model: &str, v: &[f32]) -> Result<(
 fn build_index(tx: &Transaction<'_>, model: &str, dim: usize) -> Result<VectorIndex> {
     let hnsw = HnswStore::open(dim)?;
     let mut stmt = tx.prepare("SELECT id, vec FROM entry_vectors WHERE model = ?1")?;
-    let rows = stmt.query_map([model], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?)))?;
+    let rows = stmt.query_map([model], |r| {
+        Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?))
+    })?;
     for row in rows {
         let (id, blob) = row?;
         let v = decode_vec(&blob);
@@ -1305,7 +1442,11 @@ fn build_index(tx: &Transaction<'_>, model: &str, dim: usize) -> Result<VectorIn
             hnsw.add(id as u64, &v)?;
         }
     }
-    Ok(VectorIndex { model: model.to_string(), dim, hnsw })
+    Ok(VectorIndex {
+        model: model.to_string(),
+        dim,
+        hnsw,
+    })
 }
 
 // ── Fold: event → entries ────────────────────────────────────────────────────
@@ -1355,7 +1496,15 @@ fn fold(tx: &Transaction<'_>, ev: &EventRow) -> Result<()> {
                 "SELECT id FROM entries WHERE kind = 'file_changed' AND key = ?1",
                 params![path],
             )?;
-            write_folded(tx, ev, EntryKind::FileChanged, &path, &summary, "", &matches)?;
+            write_folded(
+                tx,
+                ev,
+                EntryKind::FileChanged,
+                &path,
+                &summary,
+                "",
+                &matches,
+            )?;
         }
         EventKind::Fact => {
             let text = text();
@@ -1448,7 +1597,17 @@ fn write_folded(
             "INSERT INTO entries (kind, key, content, status, source, agent, session, confidence, \
              created_at, updated_at, content_hash, seq) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6, 1.0, ?7, ?7, ?8, ?9)",
-            params![kind.as_str(), key, content, status, ev.agent, ev.session_id, ev.ts, hash, ev.seq as i64],
+            params![
+                kind.as_str(),
+                key,
+                content,
+                status,
+                ev.agent,
+                ev.session_id,
+                ev.ts,
+                hash,
+                ev.seq as i64
+            ],
         )?;
     }
     Ok(())
@@ -1497,7 +1656,12 @@ fn find_identity(tx: &Transaction<'_>, e: &NewEntry) -> Result<Option<Found>> {
         tx.query_row(
             "SELECT id, content_hash FROM entries WHERE kind = ?1 AND key = ?2 ORDER BY id LIMIT 1",
             params![e.kind.as_str(), e.key],
-            |r| Ok(Found { id: r.get(0)?, content_hash: r.get(1)? }),
+            |r| {
+                Ok(Found {
+                    id: r.get(0)?,
+                    content_hash: r.get(1)?,
+                })
+            },
         )
         .optional()?
     };
@@ -1516,7 +1680,16 @@ fn write_identity(tx: &Transaction<'_>, e: &NewEntry, found: Found) -> Result<(i
     tx.execute(
         "UPDATE entries SET content = ?2, source = ?3, agent = ?4, session = ?5, confidence = ?6, \
          updated_at = ?7, content_hash = ?8 WHERE id = ?1",
-        params![found.id, e.content, e.source, e.agent, e.session_id, e.confidence, e.at, hash],
+        params![
+            found.id,
+            e.content,
+            e.source,
+            e.agent,
+            e.session_id,
+            e.confidence,
+            e.at,
+            hash
+        ],
     )?;
     Ok((found.id, WriteOutcome::Replaced))
 }
@@ -1559,7 +1732,8 @@ pub(crate) mod tests {
     use super::*;
 
     pub(crate) fn temp_root(label: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("atlas-record-{label}-{}", uuid::Uuid::new_v4()));
+        let dir =
+            std::env::temp_dir().join(format!("atlas-record-{label}-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -1581,7 +1755,14 @@ pub(crate) mod tests {
         let secret = "sk-proj-AbCdEf0123456789GhIjKlMnOpQrStUv";
 
         store
-            .append_event(ev(EventKind::Fact, "", serde_json::json!({"text": format!("the key is {secret}")})), 1)
+            .append_event(
+                ev(
+                    EventKind::Fact,
+                    "",
+                    serde_json::json!({"text": format!("the key is {secret}")}),
+                ),
+                1,
+            )
             .unwrap();
         store
             .upsert(NewEntry {
@@ -1597,7 +1778,11 @@ pub(crate) mod tests {
             .unwrap();
 
         let events = store.events_newest(10).unwrap();
-        assert!(!events[0].payload.to_string().contains(secret), "{:?}", events[0]);
+        assert!(
+            !events[0].payload.to_string().contains(secret),
+            "{:?}",
+            events[0]
+        );
         let everything = store.query("", &[], 100).unwrap();
         assert_eq!(everything.len(), 2);
         for e in everything {
@@ -1612,16 +1797,33 @@ pub(crate) mod tests {
         let store = open_scope(&root).unwrap();
         for i in 1..=60 {
             store
-                .append_event(ev(EventKind::Decision, &format!("k{i}"), serde_json::json!({"text": format!("d{i}")})), i)
+                .append_event(
+                    ev(
+                        EventKind::Decision,
+                        &format!("k{i}"),
+                        serde_json::json!({"text": format!("d{i}")}),
+                    ),
+                    i,
+                )
                 .unwrap();
         }
         assert_eq!(store.count(EntryKind::Decision).unwrap(), 60);
-        let shown = store.list(EntryKind::Decision, CAP_DECISIONS, Origin::EventLog).unwrap();
+        let shown = store
+            .list(EntryKind::Decision, CAP_DECISIONS, Origin::EventLog)
+            .unwrap();
         assert_eq!(shown.len(), 50);
         assert_eq!(shown.first().unwrap().content, "d11");
         assert_eq!(shown.last().unwrap().content, "d60");
         // The first decision is still searchable.
-        assert_eq!(store.query("d1", &[EntryKind::Decision], 100).unwrap().iter().filter(|e| e.content == "d1").count(), 1);
+        assert_eq!(
+            store
+                .query("d1", &[EntryKind::Decision], 100)
+                .unwrap()
+                .iter()
+                .filter(|e| e.content == "d1")
+                .count(),
+            1
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -1629,9 +1831,27 @@ pub(crate) mod tests {
     fn a_replaced_entry_keeps_its_id() {
         let root = temp_root("replace");
         let store = open_scope(&root).unwrap();
-        store.append_event(ev(EventKind::Decision, "alg", serde_json::json!({"text": "HS256"})), 1).unwrap();
+        store
+            .append_event(
+                ev(
+                    EventKind::Decision,
+                    "alg",
+                    serde_json::json!({"text": "HS256"}),
+                ),
+                1,
+            )
+            .unwrap();
         let before = store.list(EntryKind::Decision, 10, Origin::Any).unwrap();
-        store.append_event(ev(EventKind::Decision, "alg", serde_json::json!({"text": "RS256"})), 2).unwrap();
+        store
+            .append_event(
+                ev(
+                    EventKind::Decision,
+                    "alg",
+                    serde_json::json!({"text": "RS256"}),
+                ),
+                2,
+            )
+            .unwrap();
         let after = store.list(EntryKind::Decision, 10, Origin::Any).unwrap();
         assert_eq!(after.len(), 1);
         assert_eq!(after[0].id, before[0].id);
@@ -1648,9 +1868,19 @@ pub(crate) mod tests {
         store.session_ended("s1", "codex", 20).unwrap();
         assert_eq!(
             store.sessions().unwrap(),
-            vec![SessionRow { session_id: "s1".into(), agent: "codex".into(), started_at: Some(10), ended_at: Some(20) }]
+            vec![SessionRow {
+                session_id: "s1".into(),
+                agent: "codex".into(),
+                started_at: Some(10),
+                ended_at: Some(20)
+            }]
         );
-        let kinds: Vec<String> = store.events_newest(10).unwrap().into_iter().map(|e| e.kind).collect();
+        let kinds: Vec<String> = store
+            .events_newest(10)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.kind)
+            .collect();
         assert_eq!(kinds, vec!["session_end", "session_start"]);
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -1666,7 +1896,12 @@ pub(crate) mod tests {
         store.session_started("s1", "codex", 30).unwrap();
         assert_eq!(
             store.sessions().unwrap(),
-            vec![SessionRow { session_id: "s1".into(), agent: "codex".into(), started_at: Some(30), ended_at: None }]
+            vec![SessionRow {
+                session_id: "s1".into(),
+                agent: "codex".into(),
+                started_at: Some(30),
+                ended_at: None
+            }]
         );
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -1678,10 +1913,13 @@ pub(crate) mod tests {
 
     impl Embedder for TableEmbedder {
         fn embed(&self, text: &str) -> Option<Embedding> {
-            self.0.iter().find(|(t, _)| *t == text).map(|(_, v)| Embedding {
-                model: "table-3".into(),
-                vector: v.clone(),
-            })
+            self.0
+                .iter()
+                .find(|(t, _)| *t == text)
+                .map(|(_, v)| Embedding {
+                    model: "table-3".into(),
+                    vector: v.clone(),
+                })
         }
     }
 
@@ -1715,19 +1953,38 @@ pub(crate) mod tests {
         let store = open_scope(&root).unwrap();
         store.set_embedder(Some(table()));
 
-        let first = store.remember(tool_write(EntryKind::Fact, "", "JWTs are signed with RS256", 1), 1).unwrap();
+        let first = store
+            .remember(
+                tool_write(EntryKind::Fact, "", "JWTs are signed with RS256", 1),
+                1,
+            )
+            .unwrap();
         assert_eq!(first.outcome, WriteOutcome::Inserted);
-        let again = store.remember(tool_write(EntryKind::Fact, "", "JWT signing uses RS256", 2), 2).unwrap();
+        let again = store
+            .remember(
+                tool_write(EntryKind::Fact, "", "JWT signing uses RS256", 2),
+                2,
+            )
+            .unwrap();
         assert_eq!(again.outcome, WriteOutcome::Merged);
         assert_eq!(again.entry.id, first.entry.id);
         assert_eq!(again.entry.uses, 1);
         assert_eq!(again.entry.content, "JWTs are signed with RS256");
 
-        let related = store.remember(tool_write(EntryKind::Fact, "", "JWT expiry is fifteen minutes", 3), 3).unwrap();
+        let related = store
+            .remember(
+                tool_write(EntryKind::Fact, "", "JWT expiry is fifteen minutes", 3),
+                3,
+            )
+            .unwrap();
         assert_eq!(related.outcome, WriteOutcome::Inserted);
         // Same text, other kind: kinds never merge.
-        let other_kind =
-            store.remember(tool_write(EntryKind::Decision, "", "JWT signing uses RS256", 4), 4).unwrap();
+        let other_kind = store
+            .remember(
+                tool_write(EntryKind::Decision, "", "JWT signing uses RS256", 4),
+                4,
+            )
+            .unwrap();
         assert_eq!(other_kind.outcome, WriteOutcome::Inserted);
         assert_eq!(store.count(EntryKind::Fact).unwrap(), 2);
         let _ = std::fs::remove_dir_all(&root);
@@ -1741,11 +1998,21 @@ pub(crate) mod tests {
         {
             let store = RecordStore::open(&root).unwrap();
             store.set_embedder(Some(table()));
-            store.remember(tool_write(EntryKind::Fact, "", "JWTs are signed with RS256", 1), 1).unwrap();
+            store
+                .remember(
+                    tool_write(EntryKind::Fact, "", "JWTs are signed with RS256", 1),
+                    1,
+                )
+                .unwrap();
         }
         let store = RecordStore::open(&root).unwrap();
         store.set_embedder(Some(table()));
-        let again = store.remember(tool_write(EntryKind::Fact, "", "JWT signing uses RS256", 2), 2).unwrap();
+        let again = store
+            .remember(
+                tool_write(EntryKind::Fact, "", "JWT signing uses RS256", 2),
+                2,
+            )
+            .unwrap();
         assert_eq!(again.outcome, WriteOutcome::Merged);
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -1754,14 +2021,31 @@ pub(crate) mod tests {
     fn without_an_embedding_model_dedup_falls_back_to_the_content_hash() {
         let root = temp_root("near-dup-no-model");
         let store = open_scope(&root).unwrap();
-        store.remember(tool_write(EntryKind::Fact, "", "JWTs are signed with RS256", 1), 1).unwrap();
-        let near = store.remember(tool_write(EntryKind::Fact, "", "JWT signing uses RS256", 2), 2).unwrap();
+        store
+            .remember(
+                tool_write(EntryKind::Fact, "", "JWTs are signed with RS256", 1),
+                1,
+            )
+            .unwrap();
+        let near = store
+            .remember(
+                tool_write(EntryKind::Fact, "", "JWT signing uses RS256", 2),
+                2,
+            )
+            .unwrap();
         assert_eq!(near.outcome, WriteOutcome::Inserted);
-        let exact = store.remember(tool_write(EntryKind::Fact, "", "jwts are  signed with RS256", 3), 3).unwrap();
+        let exact = store
+            .remember(
+                tool_write(EntryKind::Fact, "", "jwts are  signed with RS256", 3),
+                3,
+            )
+            .unwrap();
         assert_eq!(exact.outcome, WriteOutcome::Merged);
         // A model that cannot embed a text (unknown to the table) is no error.
         store.set_embedder(Some(table()));
-        let unknown = store.remember(tool_write(EntryKind::Fact, "", "Tabs, not spaces", 4), 4).unwrap();
+        let unknown = store
+            .remember(tool_write(EntryKind::Fact, "", "Tabs, not spaces", 4), 4)
+            .unwrap();
         assert_eq!(unknown.outcome, WriteOutcome::Inserted);
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -1771,9 +2055,23 @@ pub(crate) mod tests {
         let root = temp_root("remember-key");
         let store = open_scope(&root).unwrap();
         store.set_embedder(Some(table()));
-        let first = store.remember(tool_write(EntryKind::Decision, "deploy", "Deploys go through Fly", 1), 1).unwrap();
-        let second =
-            store.remember(tool_write(EntryKind::Decision, "deploy", "JWTs are signed with RS256", 2), 2).unwrap();
+        let first = store
+            .remember(
+                tool_write(EntryKind::Decision, "deploy", "Deploys go through Fly", 1),
+                1,
+            )
+            .unwrap();
+        let second = store
+            .remember(
+                tool_write(
+                    EntryKind::Decision,
+                    "deploy",
+                    "JWTs are signed with RS256",
+                    2,
+                ),
+                2,
+            )
+            .unwrap();
         assert_eq!(second.outcome, WriteOutcome::Replaced);
         assert_eq!(second.entry.id, first.entry.id);
         assert_eq!(second.entry.content, "JWTs are signed with RS256");
@@ -1785,8 +2083,13 @@ pub(crate) mod tests {
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].kind, "decision");
         assert_eq!(events[0].key, "deploy");
-        assert_eq!(events[0].payload, serde_json::json!({"text": "JWTs are signed with RS256"}));
-        let shown = store.list(EntryKind::Decision, CAP_DECISIONS, Origin::EventLog).unwrap();
+        assert_eq!(
+            events[0].payload,
+            serde_json::json!({"text": "JWTs are signed with RS256"})
+        );
+        let shown = store
+            .list(EntryKind::Decision, CAP_DECISIONS, Origin::EventLog)
+            .unwrap();
         assert_eq!(shown.len(), 1);
         assert_eq!(shown[0].seq, Some(events[0].seq));
         let _ = std::fs::remove_dir_all(&root);
@@ -1799,11 +2102,24 @@ pub(crate) mod tests {
         let root = temp_root("merge-log");
         let store = open_scope(&root).unwrap();
         store.set_embedder(Some(table()));
-        let first = store.remember(tool_write(EntryKind::Fact, "", "JWTs are signed with RS256", 1), 1).unwrap();
-        store.remember(tool_write(EntryKind::Fact, "", "JWT signing uses RS256", 2), 2).unwrap();
+        let first = store
+            .remember(
+                tool_write(EntryKind::Fact, "", "JWTs are signed with RS256", 1),
+                1,
+            )
+            .unwrap();
+        store
+            .remember(
+                tool_write(EntryKind::Fact, "", "JWT signing uses RS256", 2),
+                2,
+            )
+            .unwrap();
         let events = store.events_newest(10).unwrap();
         assert_eq!(events.len(), 1);
-        assert_eq!(store.list(EntryKind::Fact, 10, Origin::EventLog).unwrap()[0].seq, first.entry.seq);
+        assert_eq!(
+            store.list(EntryKind::Fact, 10, Origin::EventLog).unwrap()[0].seq,
+            first.entry.seq
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -1815,9 +2131,21 @@ pub(crate) mod tests {
         let store = open_scope(&root).unwrap();
         store.set_embedder(Some(table()));
         store
-            .append_event(ev(EventKind::Fact, "", serde_json::json!({"text": "JWTs are signed with RS256"})), 1)
+            .append_event(
+                ev(
+                    EventKind::Fact,
+                    "",
+                    serde_json::json!({"text": "JWTs are signed with RS256"}),
+                ),
+                1,
+            )
             .unwrap();
-        let near = store.remember(tool_write(EntryKind::Fact, "", "JWT signing uses RS256", 2), 2).unwrap();
+        let near = store
+            .remember(
+                tool_write(EntryKind::Fact, "", "JWT signing uses RS256", 2),
+                2,
+            )
+            .unwrap();
         assert_eq!(near.outcome, WriteOutcome::Merged);
         assert_eq!(near.entry.content, "JWTs are signed with RS256");
         let _ = std::fs::remove_dir_all(&root);
@@ -1828,11 +2156,24 @@ pub(crate) mod tests {
         let root = temp_root("forget");
         let store = open_scope(&root).unwrap();
         store.set_embedder(Some(table()));
-        let first = store.remember(tool_write(EntryKind::Fact, "", "JWTs are signed with RS256", 1), 1).unwrap();
-        assert_eq!(store.forget(first.entry.id).unwrap().map(|e| e.id), Some(first.entry.id));
+        let first = store
+            .remember(
+                tool_write(EntryKind::Fact, "", "JWTs are signed with RS256", 1),
+                1,
+            )
+            .unwrap();
+        assert_eq!(
+            store.forget(first.entry.id).unwrap().map(|e| e.id),
+            Some(first.entry.id)
+        );
         assert_eq!(store.forget(first.entry.id).unwrap(), None);
         // Nothing left to merge into.
-        let near = store.remember(tool_write(EntryKind::Fact, "", "JWT signing uses RS256", 2), 2).unwrap();
+        let near = store
+            .remember(
+                tool_write(EntryKind::Fact, "", "JWT signing uses RS256", 2),
+                2,
+            )
+            .unwrap();
         assert_eq!(near.outcome, WriteOutcome::Inserted);
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -1843,23 +2184,50 @@ pub(crate) mod tests {
     fn an_edit_rewrites_the_entry_as_the_user() {
         let root = temp_root("edit");
         let store = open_scope(&root).unwrap();
-        store.append_event(ev(EventKind::Decision, "alg", serde_json::json!({"text": "HS256"})), 1).unwrap();
+        store
+            .append_event(
+                ev(
+                    EventKind::Decision,
+                    "alg",
+                    serde_json::json!({"text": "HS256"}),
+                ),
+                1,
+            )
+            .unwrap();
         let id = store.list(EntryKind::Decision, 10, Origin::Any).unwrap()[0].id;
 
-        let edited = store.edit(id, "  RS256, rotated monthly ", "user", 5).unwrap().expect("the entry exists");
+        let edited = store
+            .edit(id, "  RS256, rotated monthly ", "user", 5)
+            .unwrap()
+            .expect("the entry exists");
         assert_eq!(edited.id, id);
-        assert_eq!((edited.content.as_str(), edited.key.as_str()), ("RS256, rotated monthly", "alg"));
-        assert_eq!((edited.source.as_str(), edited.agent.as_str()), ("user", "user"));
+        assert_eq!(
+            (edited.content.as_str(), edited.key.as_str()),
+            ("RS256, rotated monthly", "alg")
+        );
+        assert_eq!(
+            (edited.source.as_str(), edited.agent.as_str()),
+            ("user", "user")
+        );
         assert_eq!((edited.confidence, edited.updated_at), (1.0, 5));
         assert_eq!(edited.seq, Some(2));
 
         let logged = &store.events_newest(1).unwrap()[0];
-        assert_eq!((logged.seq, logged.kind.as_str(), logged.key.as_str()), (2, "decision", "alg"));
+        assert_eq!(
+            (logged.seq, logged.kind.as_str(), logged.key.as_str()),
+            (2, "decision", "alg")
+        );
         assert_eq!(logged.agent, "user");
-        assert_eq!(logged.payload, serde_json::json!({"text": "RS256, rotated monthly"}));
+        assert_eq!(
+            logged.payload,
+            serde_json::json!({"text": "RS256, rotated monthly"})
+        );
 
         assert_eq!(store.edit(9_999, "anything", "user", 6).unwrap(), None);
-        assert!(store.edit(id, "   ", "user", 6).is_err(), "an edit never empties an entry");
+        assert!(
+            store.edit(id, "   ", "user", 6).is_err(),
+            "an edit never empties an entry"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -1870,7 +2238,14 @@ pub(crate) mod tests {
         let root = temp_root("edit-file");
         let store = open_scope(&root).unwrap();
         store
-            .append_event(ev(EventKind::FileChanged, "", serde_json::json!({"path": "a.ts", "summary": "x"})), 1)
+            .append_event(
+                ev(
+                    EventKind::FileChanged,
+                    "",
+                    serde_json::json!({"path": "a.ts", "summary": "x"}),
+                ),
+                1,
+            )
             .unwrap();
         let id = store.list(EntryKind::FileChanged, 10, Origin::Any).unwrap()[0].id;
         store.edit(id, "renamed the export", "user", 2).unwrap();
@@ -1888,21 +2263,70 @@ pub(crate) mod tests {
     fn a_forgotten_entry_no_longer_surfaces_from_the_log() {
         let root = temp_root("forget-log");
         let store = open_scope(&root).unwrap();
-        store.append_event(ev(EventKind::Fact, "", serde_json::json!({"text": "The staging DB is on port 6543"})), 1).unwrap();
-        store.append_event(ev(EventKind::Fact, "", serde_json::json!({"text": "the staging db is on port 6543"})), 2).unwrap();
-        store.append_event(ev(EventKind::Fact, "", serde_json::json!({"text": "Deploys go through Fly"})), 3).unwrap();
+        store
+            .append_event(
+                ev(
+                    EventKind::Fact,
+                    "",
+                    serde_json::json!({"text": "The staging DB is on port 6543"}),
+                ),
+                1,
+            )
+            .unwrap();
+        store
+            .append_event(
+                ev(
+                    EventKind::Fact,
+                    "",
+                    serde_json::json!({"text": "the staging db is on port 6543"}),
+                ),
+                2,
+            )
+            .unwrap();
+        store
+            .append_event(
+                ev(
+                    EventKind::Fact,
+                    "",
+                    serde_json::json!({"text": "Deploys go through Fly"}),
+                ),
+                3,
+            )
+            .unwrap();
         let entry = store.query("6543", &[], 10).unwrap().remove(0);
 
         store.forget(entry.id).unwrap().expect("forgotten");
         assert!(store.search_events("6543", 10).unwrap().is_empty());
-        let listed: Vec<u64> = store.events_newest(10).unwrap().iter().map(|e| e.seq).collect();
+        let listed: Vec<u64> = store
+            .events_newest(10)
+            .unwrap()
+            .iter()
+            .map(|e| e.seq)
+            .collect();
         assert_eq!(listed, vec![3]);
         assert_eq!(store.search_events("fly", 10).unwrap().len(), 1);
         assert_eq!(store.last_event().unwrap().map(|(seq, _)| seq), Some(3));
 
         // A fresh write of the same words is a new memory, and shows.
-        store.append_event(ev(EventKind::Fact, "", serde_json::json!({"text": "The staging DB is on port 6543"})), 4).unwrap();
-        assert_eq!(store.search_events("6543", 10).unwrap().iter().map(|e| e.seq).collect::<Vec<_>>(), vec![4]);
+        store
+            .append_event(
+                ev(
+                    EventKind::Fact,
+                    "",
+                    serde_json::json!({"text": "The staging DB is on port 6543"}),
+                ),
+                4,
+            )
+            .unwrap();
+        assert_eq!(
+            store
+                .search_events("6543", 10)
+                .unwrap()
+                .iter()
+                .map(|e| e.seq)
+                .collect::<Vec<_>>(),
+            vec![4]
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -1915,19 +2339,48 @@ pub(crate) mod tests {
         let store = open_scope(&root).unwrap();
         for (i, path) in ["a.ts", "b.ts"].into_iter().enumerate() {
             store
-                .append_event(ev(EventKind::FileChanged, "", serde_json::json!({"path": path, "summary": "formatted"})), i as i64)
+                .append_event(
+                    ev(
+                        EventKind::FileChanged,
+                        "",
+                        serde_json::json!({"path": path, "summary": "formatted"}),
+                    ),
+                    i as i64,
+                )
                 .unwrap();
         }
-        let a = store.list(EntryKind::FileChanged, 10, Origin::Any).unwrap().into_iter().find(|e| e.key == "a.ts").unwrap();
+        let a = store
+            .list(EntryKind::FileChanged, 10, Origin::Any)
+            .unwrap()
+            .into_iter()
+            .find(|e| e.key == "a.ts")
+            .unwrap();
         store.forget(a.id).unwrap();
         let left = store.search_events("formatted", 10).unwrap().len();
         assert_eq!(left, 1);
-        assert!(store.events_newest(10).unwrap()[0].payload.to_string().contains("b.ts"));
+        assert!(store.events_newest(10).unwrap()[0]
+            .payload
+            .to_string()
+            .contains("b.ts"));
 
-        store.append_event(ev(EventKind::Fact, "", serde_json::json!({"text": "Staging is on port 6543"})), 5).unwrap();
+        store
+            .append_event(
+                ev(
+                    EventKind::Fact,
+                    "",
+                    serde_json::json!({"text": "Staging is on port 6543"}),
+                ),
+                5,
+            )
+            .unwrap();
         let fact = store.query("6543", &[], 1).unwrap().remove(0);
-        store.edit(fact.id, "Staging is on port 5432", "user", 6).unwrap();
-        assert!(store.search_events("6543", 10).unwrap().is_empty(), "the corrected wording is gone");
+        store
+            .edit(fact.id, "Staging is on port 5432", "user", 6)
+            .unwrap();
+        assert!(
+            store.search_events("6543", 10).unwrap().is_empty(),
+            "the corrected wording is gone"
+        );
         assert_eq!(store.search_events("5432", 10).unwrap().len(), 1);
         store.forget(fact.id).unwrap();
         assert!(store.search_events("staging", 10).unwrap().is_empty());
@@ -1947,14 +2400,24 @@ pub(crate) mod tests {
         .into_iter()
         .enumerate()
         {
-            store.remember(tool_write(kind, "", text, i as i64), i as i64).unwrap();
+            store
+                .remember(tool_write(kind, "", text, i as i64), i as i64)
+                .unwrap();
         }
         let hits = store.search("rs256 signing", &[], 10, 100).unwrap();
-        assert_eq!(hits.first().map(|e| e.content.as_str()), Some("JWTs are signed with RS256"));
-        assert!(hits.iter().all(|e| e.content != "Deploys go through Fly"), "{hits:?}");
+        assert_eq!(
+            hits.first().map(|e| e.content.as_str()),
+            Some("JWTs are signed with RS256")
+        );
+        assert!(
+            hits.iter().all(|e| e.content != "Deploys go through Fly"),
+            "{hits:?}"
+        );
         assert_eq!(hits[0].last_used_at, Some(100));
 
-        let only_decisions = store.search("fly", &[EntryKind::Decision], 10, 100).unwrap();
+        let only_decisions = store
+            .search("fly", &[EntryKind::Decision], 10, 100)
+            .unwrap();
         assert_eq!(only_decisions.len(), 1);
         let none = store.search("fly", &[EntryKind::Fact], 10, 100).unwrap();
         assert!(none.is_empty());

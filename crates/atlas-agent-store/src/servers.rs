@@ -30,13 +30,14 @@ use tokio::sync::watch;
 
 use crate::archive::{
     github_release_archive_from_url, github_release_digest, install_archive,
-    registry_archive_kind_for_url, remove_stale_versioned_archive_cache_dirs, sanitize_path_component,
-    versioned_archive_cache_dir,
+    registry_archive_kind_for_url, remove_stale_versioned_archive_cache_dirs,
+    sanitize_path_component, versioned_archive_cache_dir,
 };
 use crate::http::HttpClient;
 use crate::node::{
     bounded_npm_package_spec, installed_below_ceiling, installed_package_version,
-    installed_version_satisfies, npm_command_env, npm_platform, read_package_executable, NodeRuntime,
+    installed_version_satisfies, npm_command_env, npm_platform, read_package_executable,
+    NodeRuntime,
 };
 use crate::npm_tree::{install_state, InstallState, NpmPlatform};
 use crate::registry::{current_platform_key, RegistryTargetConfig};
@@ -531,8 +532,7 @@ impl ExternalAgentServer for LocalRegistryNpxAgent {
                 // own, and the point of this layer is that ours wins.
                 let mut base = project_env.await;
                 base.extend(npm_command_env(&node_binary));
-                let env =
-                    layered_env(base, &distribution_env, extra_env, &byok_env, &settings_env);
+                let env = layered_env(base, &distribution_env, extra_env, &byok_env, &settings_env);
 
                 let mut command_args = vec![executable.to_string_lossy().into_owned()];
                 command_args.extend(args);
@@ -597,7 +597,8 @@ async fn ensure_npx_package(
         "running npm install for the agent package"
     );
     if let Some(tx) = loading_status {
-        tx.send(Some(format!("Installing {package_name} {version}…"))).ok();
+        tx.send(Some(format!("Installing {package_name} {version}…")))
+            .ok();
     }
     let outcome = install_package(
         node,
@@ -666,7 +667,16 @@ async fn install_package(
     platform: Option<NpmPlatform>,
 ) -> Result<InstallOutcome> {
     let node_modules = install_dir.join("node_modules");
-    match install_tree(node, install_dir, package_name, bounded_spec, platform, true).await {
+    match install_tree(
+        node,
+        install_dir,
+        package_name,
+        bounded_spec,
+        platform,
+        true,
+    )
+    .await
+    {
         Ok(()) => {
             let installed = installed_package_version(&node_modules, package_name)
                 .await
@@ -689,9 +699,16 @@ async fn install_package(
             );
             // The online error is the one worth showing: it names the network
             // problem, where the cache's would only say it had nothing.
-            if install_tree(node, install_dir, package_name, bounded_spec, platform, false)
-                .await
-                .is_err()
+            if install_tree(
+                node,
+                install_dir,
+                package_name,
+                bounded_spec,
+                platform,
+                false,
+            )
+            .await
+            .is_err()
             {
                 return Err(online_error);
             }
@@ -748,7 +765,9 @@ async fn install_tree(
         &[package_spec, "--save-exact", cache_policy],
     )
     .await?;
-    let Some(platform) = platform else { return Ok(()) };
+    let Some(platform) = platform else {
+        return Ok(());
+    };
 
     let state = install_state(install_dir, platform).await;
     let InstallState::MissingOptional(gaps) = state else {
@@ -830,7 +849,9 @@ const WANTED_SPEC_FILE: &str = ".atlas-wanted";
 /// registry moved again, and one written wrongly — as a build whose "online"
 /// retry never went online did — pinned an old copy for good.
 fn resolved_sidecar(package_spec: &str, version: &str, at: SystemTime) -> String {
-    let secs = at.duration_since(UNIX_EPOCH).map_or(0, |since| since.as_secs());
+    let secs = at
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs());
     format!("{package_spec}#newest-available={version}@{secs}")
 }
 
@@ -868,8 +889,11 @@ async fn read_wanted_spec(install_dir: &std::path::Path) -> Option<String> {
 }
 
 async fn write_wanted_spec(install_dir: &std::path::Path, package_spec: &str) {
-    if let Err(error) =
-        tokio::fs::write(install_dir.join(WANTED_SPEC_FILE), format!("{package_spec}\n")).await
+    if let Err(error) = tokio::fs::write(
+        install_dir.join(WANTED_SPEC_FILE),
+        format!("{package_spec}\n"),
+    )
+    .await
     {
         tracing::warn!(
             path = %install_dir.join(WANTED_SPEC_FILE).display(),
@@ -921,14 +945,22 @@ async fn install_needed(
         return Some("installed package declares no usable executable".to_owned());
     }
     if let Some(platform) = platform {
-        if let Some(reason) = install_state(install_dir, platform).await.reinstall_reason() {
+        if let Some(reason) = install_state(install_dir, platform)
+            .await
+            .reinstall_reason()
+        {
             return Some(reason);
         }
     }
     let sidecar = read_wanted_spec(install_dir).await;
     match sidecar {
         Some(previous)
-            if newest_available_is_fresh(&previous, package_spec, &installed, SystemTime::now()) =>
+            if newest_available_is_fresh(
+                &previous,
+                package_spec,
+                &installed,
+                SystemTime::now(),
+            ) =>
         {
             None
         }
@@ -1136,7 +1168,11 @@ mod tests {
         let dir = installed_without_platform_package(version);
         let platform_dir = dir.path().join("node_modules/@scope/agent-darwin-arm64");
         std::fs::create_dir_all(&platform_dir).unwrap();
-        std::fs::write(platform_dir.join("package.json"), r#"{"name":"@scope/agent"}"#).unwrap();
+        std::fs::write(
+            platform_dir.join("package.json"),
+            r#"{"name":"@scope/agent"}"#,
+        )
+        .unwrap();
         dir
     }
 
@@ -1207,9 +1243,11 @@ mod tests {
     #[tokio::test]
     async fn an_older_copy_is_not_adopted_without_a_sidecar() {
         let dir = installed("1.9.0");
-        assert!(install_needed(dir.path(), PACKAGE, "@scope/agent@1.11.0", PLATFORM)
-            .await
-            .is_some());
+        assert!(
+            install_needed(dir.path(), PACKAGE, "@scope/agent@1.11.0", PLATFORM)
+                .await
+                .is_some()
+        );
         assert_eq!(sidecar(&dir), None);
     }
 
@@ -1217,20 +1255,39 @@ mod tests {
     async fn a_confirmed_newest_available_version_is_not_reinstalled() {
         let dir = installed("1.9.0");
         let spec = "@scope/agent@1.11.0";
-        write_wanted_spec(dir.path(), &resolved_sidecar(spec, "1.9.0", SystemTime::now())).await;
-        assert_eq!(install_needed(dir.path(), PACKAGE, spec, PLATFORM).await, None);
+        write_wanted_spec(
+            dir.path(),
+            &resolved_sidecar(spec, "1.9.0", SystemTime::now()),
+        )
+        .await;
+        assert_eq!(
+            install_needed(dir.path(), PACKAGE, spec, PLATFORM).await,
+            None
+        );
 
         // The confirmation is for that version only.
         let dir = installed("1.8.0");
-        write_wanted_spec(dir.path(), &resolved_sidecar(spec, "1.9.0", SystemTime::now())).await;
-        assert!(install_needed(dir.path(), PACKAGE, spec, PLATFORM).await.is_some());
+        write_wanted_spec(
+            dir.path(),
+            &resolved_sidecar(spec, "1.9.0", SystemTime::now()),
+        )
+        .await;
+        assert!(install_needed(dir.path(), PACKAGE, spec, PLATFORM)
+            .await
+            .is_some());
 
         // And a registry bump past it still installs.
         let dir = installed("1.9.0");
-        write_wanted_spec(dir.path(), &resolved_sidecar(spec, "1.9.0", SystemTime::now())).await;
-        assert!(install_needed(dir.path(), PACKAGE, "@scope/agent@1.12.0", PLATFORM)
-            .await
-            .is_some());
+        write_wanted_spec(
+            dir.path(),
+            &resolved_sidecar(spec, "1.9.0", SystemTime::now()),
+        )
+        .await;
+        assert!(
+            install_needed(dir.path(), PACKAGE, "@scope/agent@1.12.0", PLATFORM)
+                .await
+                .is_some()
+        );
     }
 
     /// "npm does not have it yet" is only true for now: an expired record, or
@@ -1243,13 +1300,19 @@ mod tests {
         let long_ago = SystemTime::now() - NEWEST_AVAILABLE_TTL - Duration::from_secs(60);
         write_wanted_spec(dir.path(), &resolved_sidecar(spec, "1.9.0", long_ago)).await;
         assert_eq!(
-            install_needed(dir.path(), PACKAGE, spec, PLATFORM).await.as_deref(),
-            Some("re-checking whether npm serves @scope/agent@1.11.0 yet (it last confirmed 1.9.0)")
+            install_needed(dir.path(), PACKAGE, spec, PLATFORM)
+                .await
+                .as_deref(),
+            Some(
+                "re-checking whether npm serves @scope/agent@1.11.0 yet (it last confirmed 1.9.0)"
+            )
         );
 
         let dir = installed("1.9.0");
         write_wanted_spec(dir.path(), &format!("{spec}#newest-available=1.9.0")).await;
-        assert!(install_needed(dir.path(), PACKAGE, spec, PLATFORM).await.is_some());
+        assert!(install_needed(dir.path(), PACKAGE, spec, PLATFORM)
+            .await
+            .is_some());
     }
 
     /// The listing reads the version on disk per card, and the Update button
@@ -1258,7 +1321,10 @@ mod tests {
     #[tokio::test]
     async fn the_installed_version_is_read_and_the_decision_can_be_forgotten() {
         let registry = tempfile::tempdir().unwrap();
-        assert_eq!(installed_npx_version(registry.path(), "agent", "@scope/agent@1.11.0"), None);
+        assert_eq!(
+            installed_npx_version(registry.path(), "agent", "@scope/agent@1.11.0"),
+            None
+        );
 
         let dir = npx_install_dir(registry.path(), "agent");
         let package = dir.join("node_modules/@scope/agent");
@@ -1274,20 +1340,32 @@ mod tests {
             &resolved_sidecar("@scope/agent@1.11.0", "1.9.0", SystemTime::now()),
         )
         .await;
-        forget_npx_install_decision(registry.path(), "agent").await.unwrap();
+        forget_npx_install_decision(registry.path(), "agent")
+            .await
+            .unwrap();
         assert_eq!(read_wanted_spec(&dir).await, None);
         // Nothing to forget is not an error.
-        forget_npx_install_decision(registry.path(), "agent").await.unwrap();
+        forget_npx_install_decision(registry.path(), "agent")
+            .await
+            .unwrap();
     }
 
     #[test]
     fn only_a_stale_outcome_leaves_the_sidecar_alone() {
         let spec = "@scope/agent@1.11.0";
-        assert_eq!(InstallOutcome::AtCeiling.sidecar(spec).as_deref(), Some(spec));
+        assert_eq!(
+            InstallOutcome::AtCeiling.sidecar(spec).as_deref(),
+            Some(spec)
+        );
         let newest = InstallOutcome::NewestAvailable("1.9.0".into())
             .sidecar(spec)
             .expect("recorded");
-        assert!(newest_available_is_fresh(&newest, spec, "1.9.0", SystemTime::now()));
+        assert!(newest_available_is_fresh(
+            &newest,
+            spec,
+            "1.9.0",
+            SystemTime::now()
+        ));
         assert_eq!(InstallOutcome::Stale.sidecar(spec), None);
     }
 
@@ -1314,9 +1392,11 @@ mod tests {
         assert_eq!(sidecar(&dir), None, "nothing is adopted without an install");
 
         let dir = installed("2.0.0");
-        assert!(install_needed(dir.path(), PACKAGE, "@scope/agent@1.11.0", PLATFORM)
-            .await
-            .is_some_and(|reason| reason.contains("outside the ceiling")));
+        assert!(
+            install_needed(dir.path(), PACKAGE, "@scope/agent@1.11.0", PLATFORM)
+                .await
+                .is_some_and(|reason| reason.contains("outside the ceiling"))
+        );
         assert_eq!(sidecar(&dir), None);
     }
 

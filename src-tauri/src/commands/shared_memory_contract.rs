@@ -27,7 +27,10 @@ fn ticking_store() -> SharedMemoryStore {
 }
 
 fn temp_project(label: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("atlas-shared-contract-{label}-{}", uuid::Uuid::new_v4()));
+    let dir = std::env::temp_dir().join(format!(
+        "atlas-shared-contract-{label}-{}",
+        uuid::Uuid::new_v4()
+    ));
     std::fs::create_dir_all(&dir).unwrap();
     dir
 }
@@ -97,7 +100,8 @@ fn check_golden(name: &str, actual: Value) {
         std::fs::write(&path, format!("{actual}\n")).unwrap();
         return;
     }
-    let expected = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let expected =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     assert_eq!(actual, expected.trim_end(), "golden {name} differs");
 }
 
@@ -111,45 +115,213 @@ fn scripted_sequence(store: &SharedMemoryStore, p: &str) -> Vec<u64> {
     };
     a("claude-code", "s1", EventKind::SessionStart, "", json!({}));
     a("codex", "s2", EventKind::SessionStart, "", json!({}));
-    a("claude-code", "s1", EventKind::PlanSet, "plan", json!({"text": "- [pending] Plan A", "status": "active"}));
-    a("codex", "s2", EventKind::PlanSet, "plan", json!({"text": "- [pending] Plan B", "status": "in_progress"}));
-    a("claude-code", "s1", EventKind::PlanSet, "plan", json!({"text": "", "status": "active"}));
-    a("claude-code", "s1", EventKind::Decision, "auth.alg", json!({"text": "Sign JWTs with HS256"}));
-    a("codex", "s2", EventKind::Decision, "auth.alg", json!({"text": "Sign JWTs with RS256"}));
-    a("codex", "s2", EventKind::Decision, "", json!({"text": "Use   Postgres 16"}));
-    a("claude-code", "s1", EventKind::Decision, "", json!({"text": "use postgres 16"}));
-    a("claude-code", "s1", EventKind::Decision, "", json!({"text": "   "}));
-    a("codex", "s2", EventKind::FileChanged, "src/a.ts", json!({"path": "src/a.ts", "summary": "Edit src/a.ts"}));
-    a("claude-code", "s1", EventKind::FileChanged, "src/a.ts", json!({"path": "src/a.ts", "summary": "Rewrite src/a.ts"}));
-    a("claude-code", "s1", EventKind::FileChanged, "src/b.ts", json!({"summary": "Create src/b.ts"}));
-    a("claude-code", "s1", EventKind::FileChanged, "", json!({"summary": "no path"}));
-    a("codex", "s2", EventKind::Fact, "port", json!({"text": "The API listens on 4747"}));
-    a("claude-code", "s1", EventKind::Fact, "other", json!({"text": "the api listens on 4747"}));
-    a("codex", "s2", EventKind::Failure, "", json!({"text": "npm ci fails offline"}));
-    a("claude-code", "s1", EventKind::Failure, "npm ci fails offline", json!({"text": "Offline installs need the cache"}));
-    a("codex", "s2", EventKind::Architecture, "", json!({"text": "The backend is the only writer"}));
-    a("codex", "s2", EventKind::Architecture, "", json!({"text": "The  backend is the ONLY writer"}));
-    a("codex", "s2", EventKind::TodoAdded, "", json!({"text": "write docs"}));
-    a("codex", "s2", EventKind::TodoDone, "", json!({"text": "write docs"}));
+    a(
+        "claude-code",
+        "s1",
+        EventKind::PlanSet,
+        "plan",
+        json!({"text": "- [pending] Plan A", "status": "active"}),
+    );
+    a(
+        "codex",
+        "s2",
+        EventKind::PlanSet,
+        "plan",
+        json!({"text": "- [pending] Plan B", "status": "in_progress"}),
+    );
+    a(
+        "claude-code",
+        "s1",
+        EventKind::PlanSet,
+        "plan",
+        json!({"text": "", "status": "active"}),
+    );
+    a(
+        "claude-code",
+        "s1",
+        EventKind::Decision,
+        "auth.alg",
+        json!({"text": "Sign JWTs with HS256"}),
+    );
+    a(
+        "codex",
+        "s2",
+        EventKind::Decision,
+        "auth.alg",
+        json!({"text": "Sign JWTs with RS256"}),
+    );
+    a(
+        "codex",
+        "s2",
+        EventKind::Decision,
+        "",
+        json!({"text": "Use   Postgres 16"}),
+    );
+    a(
+        "claude-code",
+        "s1",
+        EventKind::Decision,
+        "",
+        json!({"text": "use postgres 16"}),
+    );
+    a(
+        "claude-code",
+        "s1",
+        EventKind::Decision,
+        "",
+        json!({"text": "   "}),
+    );
+    a(
+        "codex",
+        "s2",
+        EventKind::FileChanged,
+        "src/a.ts",
+        json!({"path": "src/a.ts", "summary": "Edit src/a.ts"}),
+    );
+    a(
+        "claude-code",
+        "s1",
+        EventKind::FileChanged,
+        "src/a.ts",
+        json!({"path": "src/a.ts", "summary": "Rewrite src/a.ts"}),
+    );
+    a(
+        "claude-code",
+        "s1",
+        EventKind::FileChanged,
+        "src/b.ts",
+        json!({"summary": "Create src/b.ts"}),
+    );
+    a(
+        "claude-code",
+        "s1",
+        EventKind::FileChanged,
+        "",
+        json!({"summary": "no path"}),
+    );
+    a(
+        "codex",
+        "s2",
+        EventKind::Fact,
+        "port",
+        json!({"text": "The API listens on 4747"}),
+    );
+    a(
+        "claude-code",
+        "s1",
+        EventKind::Fact,
+        "other",
+        json!({"text": "the api listens on 4747"}),
+    );
+    a(
+        "codex",
+        "s2",
+        EventKind::Failure,
+        "",
+        json!({"text": "npm ci fails offline"}),
+    );
+    a(
+        "claude-code",
+        "s1",
+        EventKind::Failure,
+        "npm ci fails offline",
+        json!({"text": "Offline installs need the cache"}),
+    );
+    a(
+        "codex",
+        "s2",
+        EventKind::Architecture,
+        "",
+        json!({"text": "The backend is the only writer"}),
+    );
+    a(
+        "codex",
+        "s2",
+        EventKind::Architecture,
+        "",
+        json!({"text": "The  backend is the ONLY writer"}),
+    );
+    a(
+        "codex",
+        "s2",
+        EventKind::TodoAdded,
+        "",
+        json!({"text": "write docs"}),
+    );
+    a(
+        "codex",
+        "s2",
+        EventKind::TodoDone,
+        "",
+        json!({"text": "write docs"}),
+    );
     a("codex", "s2", EventKind::SessionEnd, "", json!({}));
-    a("codex", "s2", EventKind::PlanSet, "plan", json!({"text": "- [completed] Plan B", "status": "done"}));
+    a(
+        "codex",
+        "s2",
+        EventKind::PlanSet,
+        "plan",
+        json!({"text": "- [completed] Plan B", "status": "done"}),
+    );
     for i in 1..=55 {
-        a("codex", "s2", EventKind::Decision, &format!("k{i}"), json!({"text": format!("decision number {i}")}));
+        a(
+            "codex",
+            "s2",
+            EventKind::Decision,
+            &format!("k{i}"),
+            json!({"text": format!("decision number {i}")}),
+        );
     }
-    a("claude-code", "s1", EventKind::Decision, "k30", json!({"text": "decision thirty, revised"}));
+    a(
+        "claude-code",
+        "s1",
+        EventKind::Decision,
+        "k30",
+        json!({"text": "decision thirty, revised"}),
+    );
     for i in 1..=34 {
-        a("claude-code", "s1", EventKind::Failure, "", json!({"text": format!("failure number {i}")}));
+        a(
+            "claude-code",
+            "s1",
+            EventKind::Failure,
+            "",
+            json!({"text": format!("failure number {i}")}),
+        );
     }
     for i in 1..=52 {
-        a("codex", "s2", EventKind::FileChanged, &format!("src/f{i}.rs"), json!({"path": format!("src/f{i}.rs"), "summary": format!("Edit f{i}")}));
+        a(
+            "codex",
+            "s2",
+            EventKind::FileChanged,
+            &format!("src/f{i}.rs"),
+            json!({"path": format!("src/f{i}.rs"), "summary": format!("Edit f{i}")}),
+        );
     }
     for i in 1..=31 {
-        a("codex", "s2", EventKind::Architecture, "", json!({"text": format!("module {i} owns its state")}));
+        a(
+            "codex",
+            "s2",
+            EventKind::Architecture,
+            "",
+            json!({"text": format!("module {i} owns its state")}),
+        );
     }
     for i in 1..=51 {
-        a("claude-code", "s1", EventKind::Fact, "", json!({"text": format!("fact number {i}")}));
+        a(
+            "claude-code",
+            "s1",
+            EventKind::Fact,
+            "",
+            json!({"text": format!("fact number {i}")}),
+        );
     }
-    a("claude-code", "s1", EventKind::PlanSet, "plan", json!({"text": "- [pending] Plan C", "status": "active"}));
+    a(
+        "claude-code",
+        "s1",
+        EventKind::PlanSet,
+        "plan",
+        json!({"text": "- [pending] Plan C", "status": "active"}),
+    );
     seqs
 }
 
@@ -167,7 +339,15 @@ fn scripted_appends_reproduce_the_shared_tab_contract() {
     // Clear wipes the record; the next append starts the sequence again.
     store.clear(&p).unwrap();
     golden["after_clear"] = snapshot(&store, &p);
-    golden["append_after_clear"] = json!(append(&store, &p, "codex", "s3", EventKind::Fact, "", json!({"text": "fresh start"})));
+    golden["append_after_clear"] = json!(append(
+        &store,
+        &p,
+        "codex",
+        "s3",
+        EventKind::Fact,
+        "",
+        json!({"text": "fresh start"})
+    ));
     golden["after_clear_and_append"] = snapshot(&store, &p);
 
     check_golden("contract.golden.json", golden);
@@ -189,7 +369,15 @@ fn a_legacy_project_answers_the_contract_unchanged() {
     // A second store (a relaunch) sees the same record, not a doubled one.
     let reopened = ticking_store();
     assert_eq!(canonical(snapshot(&reopened, &p)), canonical(first));
-    let seq = append(&reopened, &p, "codex", "s9", EventKind::Decision, "", json!({"text": "after migration"}));
+    let seq = append(
+        &reopened,
+        &p,
+        "codex",
+        "s9",
+        EventKind::Decision,
+        "",
+        json!({"text": "after migration"}),
+    );
     assert_eq!(seq, 12);
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -203,6 +391,10 @@ pub(super) fn seed_legacy_project(dir: &Path) {
     std::fs::copy(src.join("events.jsonl"), shared.join("events.jsonl")).unwrap();
     // Stored as `.md.fixture`: the repo ignores `*.md` outside docs.
     for f in ["sess-a.md", "sess-b.md"] {
-        std::fs::copy(src.join("extracted").join(format!("{f}.fixture")), extracted.join(f)).unwrap();
+        std::fs::copy(
+            src.join("extracted").join(format!("{f}.fixture")),
+            extracted.join(f),
+        )
+        .unwrap();
     }
 }

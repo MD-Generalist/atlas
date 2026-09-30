@@ -150,7 +150,10 @@ async fn fetch_remote(app: &AppHandle) -> Option<RemoteUpdateConfig> {
 }
 
 fn emit_checking(app: &AppHandle, checking: bool) {
-    let _ = app.emit("atlas:update-checking", serde_json::json!({ "checking": checking }));
+    let _ = app.emit(
+        "atlas:update-checking",
+        serde_json::json!({ "checking": checking }),
+    );
 }
 
 // ── Check ────────────────────────────────────────────────────────────────────
@@ -188,7 +191,10 @@ async fn maybe_start_update(app: &AppHandle, cfg: RemoteUpdateConfig) {
     if let Some(m) = load_manifest(app) {
         if m.ready && m.version == cfg.version && staged_installer(&m).is_some() {
             *app.state::<UpdaterState>().ready.lock() = Some(cfg.version.clone());
-            let _ = app.emit("atlas:update-ready", serde_json::json!({ "version": cfg.version }));
+            let _ = app.emit(
+                "atlas:update-ready",
+                serde_json::json!({ "version": cfg.version }),
+            );
             return;
         }
     }
@@ -263,11 +269,17 @@ pub(super) async fn update_ignore(version: String, app: AppHandle) -> Result<(),
     };
     // Off the async runtime thread — this touches the filesystem.
     let app_for_write = app.clone();
-    let snapshot = tokio::task::spawn_blocking(move || crate::state::atlas_config::update(&app_for_write, patch))
-        .await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())?;
-    crate::commands::atlas_config::notify_settings_changed(&app, &snapshot.settings, snapshot.generation);
+    let snapshot = tokio::task::spawn_blocking(move || {
+        crate::state::atlas_config::update(&app_for_write, patch)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+    crate::commands::atlas_config::notify_settings_changed(
+        &app,
+        &snapshot.settings,
+        snapshot.generation,
+    );
     Ok(())
 }
 
@@ -291,7 +303,10 @@ async fn download_and_stage(app: AppHandle, cfg: RemoteUpdateConfig) {
     match result {
         Ok(_) => {
             *app.state::<UpdaterState>().ready.lock() = Some(cfg.version.clone());
-            let _ = app.emit("atlas:update-ready", serde_json::json!({ "version": cfg.version }));
+            let _ = app.emit(
+                "atlas:update-ready",
+                serde_json::json!({ "version": cfg.version }),
+            );
         }
         Err(e) => {
             tracing::warn!(target: "atlas::updater", "download/stage failed: {e}");
@@ -300,7 +315,10 @@ async fn download_and_stage(app: AppHandle, cfg: RemoteUpdateConfig) {
     }
 }
 
-async fn do_download_and_stage(app: &AppHandle, cfg: &RemoteUpdateConfig) -> Result<PathBuf, String> {
+async fn do_download_and_stage(
+    app: &AppHandle,
+    cfg: &RemoteUpdateConfig,
+) -> Result<PathBuf, String> {
     let dir = updates_dir(app)?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("updates dir: {e}"))?;
     let msi = dir.join(format!("Atlas-{}.msi", cfg.version));
@@ -433,13 +451,7 @@ pub(super) async fn update_apply(app: AppHandle) -> Result<(), String> {
     }
     // Recorded before exiting so `apply_on_exit` doesn't launch a second
     // installer for the same package on the way out.
-    save_manifest(
-        &app,
-        &Staging {
-            applied: true,
-            ..m
-        },
-    )?;
+    save_manifest(&app, &Staging { applied: true, ..m })?;
     app.exit(0);
     Ok(())
 }
@@ -458,19 +470,15 @@ pub fn apply_on_exit(app: &AppHandle) {
     if ignored.as_deref() == Some(m.version.as_str()) {
         return;
     }
-    let Some(installer) = staged_installer(&m) else { return };
+    let Some(installer) = staged_installer(&m) else {
+        return;
+    };
     // Same guard as "Restart now": only upgrade an MSI-installed Atlas.
     if installed_exe(app).is_err() {
         return;
     }
     if spawn_apply_helper(app, &installer, None).is_ok() {
-        let _ = save_manifest(
-            app,
-            &Staging {
-                applied: true,
-                ..m
-            },
-        );
+        let _ = save_manifest(app, &Staging { applied: true, ..m });
     }
 }
 
@@ -488,7 +496,10 @@ pub fn init_on_startup(app: &AppHandle) {
             let _ = std::fs::remove_dir_all(&dir);
         }
         if m.applied {
-            let _ = app.emit("atlas:update-applied", serde_json::json!({ "version": CURRENT_VERSION }));
+            let _ = app.emit(
+                "atlas:update-applied",
+                serde_json::json!({ "version": CURRENT_VERSION }),
+            );
         }
         return;
     }
@@ -547,7 +558,11 @@ if ($Relaunch -ne "" -and ($p.ExitCode -eq 0 -or $p.ExitCode -eq 3010)) {
 
 /// Write the helper next to the installer and start it detached (its own
 /// hidden console, nothing inherited), so it outlives this process.
-fn spawn_apply_helper(app: &AppHandle, installer: &Path, relaunch: Option<&Path>) -> Result<(), String> {
+fn spawn_apply_helper(
+    app: &AppHandle,
+    installer: &Path,
+    relaunch: Option<&Path>,
+) -> Result<(), String> {
     let script = updates_dir(app)?.join(APPLY_SCRIPT_NAME);
     std::fs::write(&script, apply_script()).map_err(|e| format!("write apply helper: {e}"))?;
 
@@ -588,8 +603,9 @@ fn installed_exe(app: &AppHandle) -> Result<PathBuf, String> {
         .product_name
         .clone()
         .unwrap_or_else(|| "Atlas".to_string());
-    let install_dir = installed_location(&product)
-        .ok_or("Atlas isn't installed from its MSI on this machine; download the installer manually")?;
+    let install_dir = installed_location(&product).ok_or(
+        "Atlas isn't installed from its MSI on this machine; download the installer manually",
+    )?;
     let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
     let running_dir = exe
         .parent()
@@ -616,7 +632,11 @@ fn installed_location(product: &str) -> Option<PathBuf> {
 
     [HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER]
         .into_iter()
-        .filter_map(|hive| RegKey::predef(hive).open_subkey_with_flags(UNINSTALL, KEY_READ).ok())
+        .filter_map(|hive| {
+            RegKey::predef(hive)
+                .open_subkey_with_flags(UNINSTALL, KEY_READ)
+                .ok()
+        })
         .find_map(|uninstall| {
             uninstall.enum_keys().flatten().find_map(|name| {
                 let entry = uninstall.open_subkey_with_flags(&name, KEY_READ).ok()?;

@@ -253,12 +253,17 @@ pub(crate) fn fold_project(
     let mut deltas_by_session: HashMap<&str, Vec<&atlas_checkpoint::UsageDeltaRow>> =
         HashMap::new();
     for row in &record.deltas {
-        deltas_by_session.entry(row.session_id.as_str()).or_default().push(row);
+        deltas_by_session
+            .entry(row.session_id.as_str())
+            .or_default()
+            .push(row);
     }
-    let mut turns_by_session: HashMap<&str, Vec<&atlas_checkpoint::TurnMessages>> =
-        HashMap::new();
+    let mut turns_by_session: HashMap<&str, Vec<&atlas_checkpoint::TurnMessages>> = HashMap::new();
     for turn in &record.turn_messages {
-        turns_by_session.entry(turn.session_id.as_str()).or_default().push(turn);
+        turns_by_session
+            .entry(turn.session_id.as_str())
+            .or_default()
+            .push(turn);
     }
 
     let mut days: BTreeMap<DayKey, Rollup> = BTreeMap::new();
@@ -276,7 +281,10 @@ pub(crate) fn fold_project(
         first_activity_ms = Some(first_activity_ms.map_or(started_ms, |f| f.min(started_ms)));
         last_activity_ms = Some(last_activity_ms.map_or(last_ms, |l| l.max(last_ms)));
 
-        let rows = deltas_by_session.get(session.id.as_str()).map(Vec::as_slice).unwrap_or(&[]);
+        let rows = deltas_by_session
+            .get(session.id.as_str())
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
         let ledger_sum = rows.iter().fold([0u64; 5], |mut acc, row| {
             for (a, b) in acc.iter_mut().zip(row.totals.split()) {
                 *a += b;
@@ -303,7 +311,14 @@ pub(crate) fn fold_project(
         for row in rows {
             let model = row.model.as_deref().or(session.model.as_deref());
             let c = usage::cost_usd(&row.totals, usage::price_for(model, prices));
-            if let Some(b) = bucket_for(&mut days, project_path, &agent, &session.id, usage::local_day(row.recorded_at.timestamp_millis()), model) {
+            if let Some(b) = bucket_for(
+                &mut days,
+                project_path,
+                &agent,
+                &session.id,
+                usage::local_day(row.recorded_at.timestamp_millis()),
+                model,
+            ) {
                 b.metrics.add_split(row.totals.split());
                 b.metrics.cost += c;
                 cost += c;
@@ -316,7 +331,14 @@ pub(crate) fn fold_project(
             let totals = TokenTotals::from_split(remainder, None, None);
             let model = session.model.as_deref();
             let c = usage::cost_usd(&totals, usage::price_for(model, prices));
-            if let Some(b) = bucket_for(&mut days, project_path, &agent, &session.id, usage::local_day(last_ms), model) {
+            if let Some(b) = bucket_for(
+                &mut days,
+                project_path,
+                &agent,
+                &session.id,
+                usage::local_day(last_ms),
+                model,
+            ) {
                 b.metrics.add_split(remainder);
                 b.metrics.cost += c;
                 cost += c;
@@ -331,7 +353,14 @@ pub(crate) fn fold_project(
                     .find(|r| r.turn_seq == turn.turn_seq)
                     .and_then(|r| r.model.as_deref())
                     .or(session.model.as_deref());
-                if let Some(b) = bucket_for(&mut days, project_path, &agent, &session.id, usage::local_day(turn.first_at.timestamp_millis()), model) {
+                if let Some(b) = bucket_for(
+                    &mut days,
+                    project_path,
+                    &agent,
+                    &session.id,
+                    usage::local_day(turn.first_at.timestamp_millis()),
+                    model,
+                ) {
                     b.metrics.messages += turn.messages;
                 }
             }
@@ -380,7 +409,9 @@ fn bucket_for<'a>(
         date: date?,
         project_path: project_path.to_string(),
         agent: agent.to_string(),
-        model: model.map(str::to_string).unwrap_or_else(|| UNKNOWN.to_string()),
+        model: model
+            .map(str::to_string)
+            .unwrap_or_else(|| UNKNOWN.to_string()),
     };
     let entry = days.entry(key).or_default();
     entry.ids.insert(session_id.to_string());
@@ -415,7 +446,11 @@ fn assemble(folds: Vec<ProjectFold>) -> Assembled {
             (Some(a), Some(b)) => Some(a.min(b)),
             (a, b) => a.or(b),
         };
-        spans.push((fold.project_path, fold.first_activity_ms, fold.last_activity_ms));
+        spans.push((
+            fold.project_path,
+            fold.first_activity_ms,
+            fold.last_activity_ms,
+        ));
     }
 
     let mut totals = Rollup::default();
@@ -424,9 +459,18 @@ fn assemble(folds: Vec<ProjectFold>) -> Assembled {
     let mut by_model: BTreeMap<&str, Rollup> = BTreeMap::new();
     for (key, rollup) in &days {
         totals.absorb(rollup);
-        by_project.entry(key.project_path.as_str()).or_default().absorb(rollup);
-        by_agent.entry(key.agent.as_str()).or_default().absorb(rollup);
-        by_model.entry(key.model.as_str()).or_default().absorb(rollup);
+        by_project
+            .entry(key.project_path.as_str())
+            .or_default()
+            .absorb(rollup);
+        by_agent
+            .entry(key.agent.as_str())
+            .or_default()
+            .absorb(rollup);
+        by_model
+            .entry(key.model.as_str())
+            .or_default()
+            .absorb(rollup);
     }
 
     let projects = spans
@@ -436,18 +480,27 @@ fn assemble(folds: Vec<ProjectFold>) -> Assembled {
             project_name: usage::project_name(path),
             first_activity_ms: *first,
             last_activity_ms: *last,
-            metrics: by_project.remove(path.as_str()).unwrap_or_default().finish(),
+            metrics: by_project
+                .remove(path.as_str())
+                .unwrap_or_default()
+                .finish(),
         })
         .collect();
 
     let mut agents: Vec<AgentMetrics> = by_agent
         .into_iter()
-        .map(|(agent, r)| AgentMetrics { agent: agent.to_string(), metrics: r.finish() })
+        .map(|(agent, r)| AgentMetrics {
+            agent: agent.to_string(),
+            metrics: r.finish(),
+        })
         .collect();
     agents.sort_by(|a, b| by_cost_then_tokens(&a.metrics, &b.metrics));
     let mut models: Vec<ModelMetrics> = by_model
         .into_iter()
-        .map(|(model, r)| ModelMetrics { model: model.to_string(), metrics: r.finish() })
+        .map(|(model, r)| ModelMetrics {
+            model: model.to_string(),
+            metrics: r.finish(),
+        })
         .collect();
     models.sort_by(|a, b| by_cost_then_tokens(&a.metrics, &b.metrics));
 
@@ -546,7 +599,12 @@ fn fold_byok_lines(raw: &str) -> ByokFold {
         let model = e.model.unwrap_or_else(|| UNKNOWN.to_string());
         let d = days
             .entry((day.clone(), provider.clone(), model.clone()))
-            .or_insert(ByokDay { date: day, provider, model, ..Default::default() });
+            .or_insert(ByokDay {
+                date: day,
+                provider,
+                model,
+                ..Default::default()
+            });
         d.input += e.input_tokens;
         d.output += e.output_tokens;
         d.cost += cost;
@@ -565,9 +623,11 @@ pub(crate) fn byok_usage_path(app: &AppHandle) -> Option<PathBuf> {
 }
 
 fn iso_local_day(s: &str) -> Option<String> {
-    chrono::DateTime::parse_from_rfc3339(s)
-        .ok()
-        .map(|dt| dt.with_timezone(&chrono::Local).format("%Y-%m-%d").to_string())
+    chrono::DateTime::parse_from_rfc3339(s).ok().map(|dt| {
+        dt.with_timezone(&chrono::Local)
+            .format("%Y-%m-%d")
+            .to_string()
+    })
 }
 
 // ── Commands ───────────────────────────────────────────────────────────────
@@ -605,7 +665,10 @@ pub async fn usage_dashboard(
             .unwrap_or_default();
 
         let totals = GrandTotals {
-            total_tokens: assembled.totals.input + assembled.totals.output + byok.input + byok.output,
+            total_tokens: assembled.totals.input
+                + assembled.totals.output
+                + byok.input
+                + byok.output,
             total_cost_usd: assembled.totals.cost + byok.cost,
             byok_input: byok.input,
             byok_output: byok.output,
@@ -638,17 +701,21 @@ pub async fn usage_dashboard(
 #[tauri::command]
 pub async fn usage_export_markdown(target_path: String, markdown: String) -> Result<(), String> {
     crate::commands::save_guard::guard_save_dest(&target_path)?;
-    tokio::task::spawn_blocking(move || std::fs::write(&target_path, markdown).map_err(|e| e.to_string()))
-        .await
-        .map_err(|e| e.to_string())?
+    tokio::task::spawn_blocking(move || {
+        std::fs::write(&target_path, markdown).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
 pub async fn usage_write_file(target_path: String, bytes: Vec<u8>) -> Result<(), String> {
     crate::commands::save_guard::guard_save_dest(&target_path)?;
-    tokio::task::spawn_blocking(move || std::fs::write(&target_path, bytes).map_err(|e| e.to_string()))
-        .await
-        .map_err(|e| e.to_string())?
+    tokio::task::spawn_blocking(move || {
+        std::fs::write(&target_path, bytes).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[cfg(test)]
@@ -658,7 +725,12 @@ mod tests {
     use chrono::{TimeZone, Utc};
 
     fn price(input: f64, output: f64) -> ModelPrice {
-        ModelPrice { input, output, cache_read: 0.0, cache_write: 0.0 }
+        ModelPrice {
+            input,
+            output,
+            cache_read: 0.0,
+            cache_write: 0.0,
+        }
     }
 
     fn prices() -> BTreeMap<String, ModelPrice> {
@@ -677,7 +749,11 @@ mod tests {
     }
 
     fn totals(input: u64, output: u64) -> TokenTotals {
-        TokenTotals { input_tokens: input, output_tokens: output, ..Default::default() }
+        TokenTotals {
+            input_tokens: input,
+            output_tokens: output,
+            ..Default::default()
+        }
     }
 
     fn session(id: &str, agent: &str, model: Option<&str>, totals: TokenTotals) -> Session {
@@ -703,7 +779,13 @@ mod tests {
         }
     }
 
-    fn delta(session: &Session, turn_seq: i64, model: Option<&str>, at: DateTime<Utc>, t: TokenTotals) -> UsageDeltaRow {
+    fn delta(
+        session: &Session,
+        turn_seq: i64,
+        model: Option<&str>,
+        at: DateTime<Utc>,
+        t: TokenTotals,
+    ) -> UsageDeltaRow {
         UsageDeltaRow {
             session_id: session.id.clone(),
             turn_seq,
@@ -713,11 +795,25 @@ mod tests {
         }
     }
 
-    fn turn(session: &Session, turn_seq: i64, messages: u64, first_at: DateTime<Utc>) -> TurnMessages {
-        TurnMessages { session_id: session.id.clone(), turn_seq, messages, first_at }
+    fn turn(
+        session: &Session,
+        turn_seq: i64,
+        messages: u64,
+        first_at: DateTime<Utc>,
+    ) -> TurnMessages {
+        TurnMessages {
+            session_id: session.id.clone(),
+            turn_seq,
+            messages,
+            first_at,
+        }
     }
 
-    fn record(sessions: Vec<Session>, deltas: Vec<UsageDeltaRow>, turns: Vec<TurnMessages>) -> ProjectRecord {
+    fn record(
+        sessions: Vec<Session>,
+        deltas: Vec<UsageDeltaRow>,
+        turns: Vec<TurnMessages>,
+    ) -> ProjectRecord {
         let message_counts = turns
             .iter()
             .fold(HashMap::<String, i64>::new(), |mut acc, t| {
@@ -757,7 +853,11 @@ mod tests {
         ];
         let out = assembled(vec![("/p", record(vec![s], deltas, vec![]))]);
 
-        assert_eq!(out.daily.len(), 2, "no remainder: nothing lands on the last-active day");
+        assert_eq!(
+            out.daily.len(),
+            2,
+            "no remainder: nothing lands on the last-active day"
+        );
         assert_eq!(out.daily[0].date, day_of(at(20, 10)));
         assert_eq!(out.daily[0].metrics.input, 100);
         assert_eq!(out.daily[1].date, day_of(at(21, 10)));
@@ -818,14 +918,23 @@ mod tests {
     fn a_model_switch_prices_each_side_at_its_own_model_and_sums_to_the_session() {
         let s = session("s1", "claude-code", Some("gpt-5"), totals(2_000_000, 0));
         let deltas = vec![
-            delta(&s, 1, Some("claude-opus-4"), at(20, 10), totals(1_000_000, 0)),
+            delta(
+                &s,
+                1,
+                Some("claude-opus-4"),
+                at(20, 10),
+                totals(1_000_000, 0),
+            ),
             delta(&s, 2, Some("gpt-5"), at(20, 11), totals(1_000_000, 0)),
         ];
         let out = assembled(vec![("/p", record(vec![s], deltas, vec![]))]);
 
         assert_eq!(out.daily.len(), 2, "same day, two models, two rows");
-        let by_model: HashMap<&str, f64> =
-            out.daily.iter().map(|d| (d.model.as_str(), d.metrics.cost)).collect();
+        let by_model: HashMap<&str, f64> = out
+            .daily
+            .iter()
+            .map(|d| (d.model.as_str(), d.metrics.cost))
+            .collect();
         assert!(close(by_model["claude-opus-4"], 15.0));
         assert!(close(by_model["gpt-5"], 1.25));
         assert!(close(out.sessions[0].cost, 16.25));
@@ -837,7 +946,12 @@ mod tests {
 
     #[test]
     fn every_rollup_folds_from_the_same_daily_rows() {
-        let a = session("a", "claude-code", Some("claude-opus-4"), totals(1_000_000, 0));
+        let a = session(
+            "a",
+            "claude-code",
+            Some("claude-opus-4"),
+            totals(1_000_000, 0),
+        );
         let mut b = session("b", "codex", Some("gpt-5"), totals(1_000_000, 100_000));
         b.last_activity_at = Some(at(21, 9));
         let mut c = session("c", "codex", Some("gpt-5"), totals(400_000, 0));
@@ -849,9 +963,21 @@ mod tests {
 
         let sum = |v: &[f64]| v.iter().sum::<f64>();
         let daily = sum(&out.daily.iter().map(|d| d.metrics.cost).collect::<Vec<_>>());
-        let projects = sum(&out.projects.iter().map(|p| p.metrics.cost).collect::<Vec<_>>());
-        let agents = sum(&out.agents.iter().map(|a| a.metrics.cost).collect::<Vec<_>>());
-        let models = sum(&out.models.iter().map(|m| m.metrics.cost).collect::<Vec<_>>());
+        let projects = sum(&out
+            .projects
+            .iter()
+            .map(|p| p.metrics.cost)
+            .collect::<Vec<_>>());
+        let agents = sum(&out
+            .agents
+            .iter()
+            .map(|a| a.metrics.cost)
+            .collect::<Vec<_>>());
+        let models = sum(&out
+            .models
+            .iter()
+            .map(|m| m.metrics.cost)
+            .collect::<Vec<_>>());
         // 15 + (1.25 + 1.0) + 0.5
         assert!(close(daily, 17.75), "{daily}");
         assert!(close(projects, daily));
@@ -859,14 +985,27 @@ mod tests {
         assert!(close(models, daily));
         assert!(close(out.totals.cost, daily));
 
-        assert_eq!(out.projects.iter().map(|p| p.project_path.as_str()).collect::<Vec<_>>(), vec!["/p1", "/p2"], "input order");
+        assert_eq!(
+            out.projects
+                .iter()
+                .map(|p| p.project_path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["/p1", "/p2"],
+            "input order"
+        );
         assert_eq!(out.projects[1].metrics.sessions, 2, "distinct sessions");
         assert_eq!(out.totals.sessions, 3);
         let codex = out.agents.iter().find(|a| a.agent == "codex").unwrap();
         assert_eq!(codex.metrics.sessions, 2);
         assert_eq!(codex.metrics.input, 1_400_000);
-        assert_eq!(out.projects[0].first_activity_ms, Some(at(20, 9).timestamp_millis()));
-        assert_eq!(out.projects[1].last_activity_ms, Some(at(22, 9).timestamp_millis()));
+        assert_eq!(
+            out.projects[0].first_activity_ms,
+            Some(at(20, 9).timestamp_millis())
+        );
+        assert_eq!(
+            out.projects[1].last_activity_ms,
+            Some(at(22, 9).timestamp_millis())
+        );
     }
 
     #[test]
@@ -876,7 +1015,11 @@ mod tests {
         let turns = vec![turn(&s, 1, 2, at(20, 10)), turn(&s, 2, 4, at(24, 10))];
         let out = assembled(vec![("/p", record(vec![s], vec![], turns))]);
 
-        assert_eq!(out.daily.len(), 2, "no tokens, still a day of work per turn");
+        assert_eq!(
+            out.daily.len(),
+            2,
+            "no tokens, still a day of work per turn"
+        );
         assert_eq!(out.daily[0].date, day_of(at(20, 10)));
         assert_eq!(out.daily[0].metrics.messages, 2);
         assert_eq!(out.daily[1].date, day_of(at(24, 10)));
@@ -909,18 +1052,28 @@ mod tests {
 
         assert_eq!(total, SESSION_ROW_CAP as u64 + 1);
         assert_eq!(rows.len(), SESSION_ROW_CAP);
-        assert_eq!(rows[0].session_id, format!("s{SESSION_ROW_CAP}"), "newest first");
-        assert!(rows.windows(2).all(|w| w[0].last_activity_ms >= w[1].last_activity_ms));
+        assert_eq!(
+            rows[0].session_id,
+            format!("s{SESSION_ROW_CAP}"),
+            "newest first"
+        );
+        assert!(rows
+            .windows(2)
+            .all(|w| w[0].last_activity_ms >= w[1].last_activity_ms));
     }
 
     #[test]
     fn byok_lines_fold_by_day_provider_and_model_and_skip_what_does_not_parse() {
         let raw = concat!(
-            r#"{"ts":"2026-08-20T10:00:00+00:00","provider":"openai","model":"gpt-5","inputTokens":100,"outputTokens":10,"costUsd":0.5}"#, "\n",
+            r#"{"ts":"2026-08-20T10:00:00+00:00","provider":"openai","model":"gpt-5","inputTokens":100,"outputTokens":10,"costUsd":0.5}"#,
+            "\n",
             "not json at all\n",
-            r#"{"ts":"2026-08-20T11:00:00+00:00","provider":"openai","model":"gpt-5","inputTokens":50,"outputTokens":5,"costUsd":0.25}"#, "\n",
-            r#"{"ts":"2026-08-20T12:00:00+00:00","provider":"openai","model":"gpt-4o","inputTokens":1,"outputTokens":1,"costUsd":null}"#, "\n",
-            r#"{"ts":"2026-08-21T12:00:00+00:00","inputTokens":7,"outputTokens":7}"#, "\n",
+            r#"{"ts":"2026-08-20T11:00:00+00:00","provider":"openai","model":"gpt-5","inputTokens":50,"outputTokens":5,"costUsd":0.25}"#,
+            "\n",
+            r#"{"ts":"2026-08-20T12:00:00+00:00","provider":"openai","model":"gpt-4o","inputTokens":1,"outputTokens":1,"costUsd":null}"#,
+            "\n",
+            r#"{"ts":"2026-08-21T12:00:00+00:00","inputTokens":7,"outputTokens":7}"#,
+            "\n",
         );
         let fold = fold_byok_lines(raw);
 

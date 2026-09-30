@@ -46,8 +46,12 @@ struct IconThemesChangedEvent {
 }
 
 fn notify(app: &AppHandle) {
-    let _ =
-        app.emit(ICON_THEMES_CHANGED_EVENT, IconThemesChangedEvent { kind: "icon-themes-changed" });
+    let _ = app.emit(
+        ICON_THEMES_CHANGED_EVENT,
+        IconThemesChangedEvent {
+            kind: "icon-themes-changed",
+        },
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -69,7 +73,9 @@ pub async fn resolve_icons(
 ) -> Result<Vec<Option<ResolvedIcon>>, String> {
     tokio::task::spawn_blocking(move || {
         let theme = atlas_icon_theme::load(&theme_id).map_err(|error| error.to_string())?;
-        Ok(atlas_icon_theme::resolve_icons(&theme, &requests, appearance))
+        Ok(atlas_icon_theme::resolve_icons(
+            &theme, &requests, appearance,
+        ))
     })
     .await
     .map_err(|error| format!("icon resolve task failed: {error}"))?
@@ -144,7 +150,11 @@ fn network_error(context: &str, error: &reqwest::Error) -> String {
 }
 
 fn text_field(value: &serde_json::Value, key: &str) -> String {
-    value.get(key).and_then(serde_json::Value::as_str).unwrap_or_default().to_string()
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_string()
 }
 
 /// How many search hits are checked. Each costs one manifest fetch.
@@ -179,7 +189,10 @@ pub async fn search_icon_themes(query: String) -> Result<Vec<OpenVsxIconTheme>, 
         .await
         .map_err(|error| network_error("The Open VSX search", &error))?;
     if !response.status().is_success() {
-        return Err(format!("Open VSX answered {} to the search.", response.status()));
+        return Err(format!(
+            "Open VSX answered {} to the search.",
+            response.status()
+        ));
     }
     let body: serde_json::Value = response
         .json()
@@ -193,8 +206,11 @@ pub async fn search_icon_themes(query: String) -> Result<Vec<OpenVsxIconTheme>, 
         .map(|theme| theme.id)
         .collect::<Vec<_>>();
 
-    let entries =
-        body.get("extensions").and_then(serde_json::Value::as_array).cloned().unwrap_or_default();
+    let entries = body
+        .get("extensions")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     let mut checks = tokio::task::JoinSet::new();
     for (rank, entry) in entries.into_iter().take(SEARCH_CANDIDATES).enumerate() {
         let namespace = text_field(&entry, "namespace");
@@ -218,10 +234,18 @@ pub async fn search_icon_themes(query: String) -> Result<Vec<OpenVsxIconTheme>, 
                     id,
                     namespace,
                     name: name.clone(),
-                    display_name: if display_name.is_empty() { name } else { display_name },
+                    display_name: if display_name.is_empty() {
+                        name
+                    } else {
+                        display_name
+                    },
                     version: text_field(&entry, "version"),
                     description: text_field(&entry, "description"),
-                    license: if license.is_empty() { "Unspecified".to_string() } else { license },
+                    license: if license.is_empty() {
+                        "Unspecified".to_string()
+                    } else {
+                        license
+                    },
                     downloads: entry
                         .get("downloadCount")
                         .and_then(serde_json::Value::as_u64)
@@ -255,8 +279,12 @@ pub async fn search_icon_themes(query: String) -> Result<Vec<OpenVsxIconTheme>, 
 /// a row from the results, not fail the whole search.
 async fn contributes_an_icon_theme(client: &reqwest::Client, namespace: &str, name: &str) -> bool {
     let url = format!("{OPEN_VSX_API}/{namespace}/{name}/latest/file/package.json");
-    let Ok(response) = client.get(&url).send().await else { return false };
-    let Ok(body) = response.json::<serde_json::Value>().await else { return false };
+    let Ok(response) = client.get(&url).send().await else {
+        return false;
+    };
+    let Ok(body) = response.json::<serde_json::Value>().await else {
+        return false;
+    };
     body.get("contributes")
         .and_then(|contributes| contributes.get("iconThemes"))
         .and_then(serde_json::Value::as_array)
@@ -327,7 +355,10 @@ pub async fn install_icon_theme(
         .await
         .map_err(|error| network_error("The download", &error))?;
     if !response.status().is_success() {
-        return Err(format!("Open VSX answered {} to the download.", response.status()));
+        return Err(format!(
+            "Open VSX answered {} to the download.",
+            response.status()
+        ));
     }
     // Refuse on the declared length before reading a byte, then hold the body
     // to the same cap as it streams — a server that lies about its length, or
@@ -338,8 +369,10 @@ pub async fn install_icon_theme(
         }
     }
     let mut bytes = Vec::new();
-    while let Some(chunk) =
-        response.chunk().await.map_err(|error| network_error("The download", &error))?
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|error| network_error("The download", &error))?
     {
         if bytes.len() + chunk.len() > MAX_VSIX_BYTES {
             return Err(too_big(bytes.len() + chunk.len()));
@@ -422,7 +455,10 @@ mod tests {
     fn a_version_is_encoded_as_a_single_path_segment() {
         assert_eq!(path_segment("5.38.1").as_deref(), Some("5.38.1"));
         assert_eq!(path_segment("../../x").as_deref(), Some("..%2F..%2Fx"));
-        assert_eq!(path_segment("1.0 beta?a=b#c").as_deref(), Some("1.0%20beta%3Fa%3Db%23c"));
+        assert_eq!(
+            path_segment("1.0 beta?a=b#c").as_deref(),
+            Some("1.0%20beta%3Fa%3Db%23c")
+        );
         assert_eq!(path_segment(".."), None);
         assert_eq!(path_segment("."), None);
         assert_eq!(path_segment(""), None);

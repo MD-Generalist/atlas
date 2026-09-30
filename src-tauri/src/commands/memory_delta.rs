@@ -24,11 +24,21 @@ use super::shared_memory::{EventKind, RawEvent, SharedMemoryStore};
 /// Per-text cap so one giant message can't bloat the log.
 const TEXT_CAP: usize = 600;
 
-const DECISION_MARKERS: [&str; 5] =
-    ["decided to", "decision:", "we will use", "let's use", "going with"];
+const DECISION_MARKERS: [&str; 5] = [
+    "decided to",
+    "decision:",
+    "we will use",
+    "let's use",
+    "going with",
+];
 const FACT_MARKERS: [&str; 3] = ["note:", "remember:", "convention:"];
-const FAILURE_MARKERS: [&str; 5] =
-    ["failed:", "doesn't work", "does not work", "anti-pattern", "gotcha:"];
+const FAILURE_MARKERS: [&str; 5] = [
+    "failed:",
+    "doesn't work",
+    "does not work",
+    "anti-pattern",
+    "gotcha:",
+];
 const ARCH_MARKERS: [&str; 3] = ["architecture:", "structured as", "the system uses"];
 
 /// Entry point from `TauriDeltaSink::emit`. Best-effort: a missing session
@@ -93,20 +103,16 @@ pub fn classify(delta: &SessionDelta, session_id: &str, agent: &str) -> Vec<RawE
                 .title
                 .clone()
                 .unwrap_or_else(|| tool_call.tool_name.clone());
-            atlas_checkpoint::tools::extract_paths(
-                &tool_call.locations,
-                &[],
-                &tool_call.arguments,
-            )
-            .into_iter()
-            .map(|path| RawEvent {
-                agent: agent.to_string(),
-                session_id: session_id.to_string(),
-                kind: EventKind::FileChanged,
-                key: path.clone(),
-                payload: serde_json::json!({ "path": path, "summary": cap(&summary) }),
-            })
-            .collect()
+            atlas_checkpoint::tools::extract_paths(&tool_call.locations, &[], &tool_call.arguments)
+                .into_iter()
+                .map(|path| RawEvent {
+                    agent: agent.to_string(),
+                    session_id: session_id.to_string(),
+                    kind: EventKind::FileChanged,
+                    key: path.clone(),
+                    payload: serde_json::json!({ "path": path, "summary": cap(&summary) }),
+                })
+                .collect()
         }
 
         // A completed assistant message → conservative keyword scan for explicit
@@ -128,7 +134,8 @@ fn scan_assistant_text(content: &str, session_id: &str, agent: &str) -> Vec<RawE
     for line in content.lines() {
         let trimmed = line.trim().trim_start_matches(['-', '*', '#', '>', ' ']);
         let lower = trimmed.to_lowercase();
-        let (kind, marker) = if let Some(m) = DECISION_MARKERS.iter().find(|m| lower.contains(**m)) {
+        let (kind, marker) = if let Some(m) = DECISION_MARKERS.iter().find(|m| lower.contains(**m))
+        {
             (EventKind::Decision, *m)
         } else if let Some(m) = FAILURE_MARKERS.iter().find(|m| lower.contains(**m)) {
             (EventKind::Failure, *m)
@@ -228,7 +235,10 @@ mod tests {
         assert_eq!(evs.len(), 1);
         assert_eq!(evs[0].kind, EventKind::PlanSet);
         assert_eq!(evs[0].key, "plan");
-        assert!(evs[0].payload["text"].as_str().unwrap().contains("Migrate auth"));
+        assert!(evs[0].payload["text"]
+            .as_str()
+            .unwrap()
+            .contains("Migrate auth"));
     }
 
     /// An agent's plan update, captured from its delta stream, is a write to
@@ -236,7 +246,8 @@ mod tests {
     /// scope root and the plan kind. This is what the Shared tab re-pulls on.
     #[test]
     fn a_captured_plan_update_announces_the_change() {
-        let dir = std::env::temp_dir().join(format!("atlas-delta-changed-{}", uuid::Uuid::new_v4()));
+        let dir =
+            std::env::temp_dir().join(format!("atlas-delta-changed-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let project = dir.to_string_lossy().to_string();
         let store = SharedMemoryStore::new();
@@ -270,7 +281,11 @@ mod tests {
         let evs = scan_assistant_text("We will use RS256 for signing.", "s1", "codex");
         assert_eq!(evs.len(), 1);
         assert_eq!(evs[0].kind, EventKind::Decision);
-        assert!(evs[0].payload["text"].as_str().unwrap().to_lowercase().contains("rs256"));
+        assert!(evs[0].payload["text"]
+            .as_str()
+            .unwrap()
+            .to_lowercase()
+            .contains("rs256"));
     }
 
     #[test]
@@ -355,12 +370,18 @@ mod tests {
     #[test]
     #[ignore = "known gap: atlas_memory::record::redact misses this; see redaction migration"]
     fn password_field_in_yaml_is_redacted() {
-        assert_redacted("database:\n  user: app\n  password: hunter2hunter2\n", "hunter2hunter2");
+        assert_redacted(
+            "database:\n  user: app\n  password: hunter2hunter2\n",
+            "hunter2hunter2",
+        );
     }
 
     #[test]
     #[ignore = "known gap: atlas_memory::record::redact misses this; see redaction migration"]
     fn password_field_in_json_is_redacted() {
-        assert_redacted(r#"{"user": "app", "password": "hunter2hunter2"}"#, "hunter2hunter2");
+        assert_redacted(
+            r#"{"user": "app", "password": "hunter2hunter2"}"#,
+            "hunter2hunter2",
+        );
     }
 }

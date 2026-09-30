@@ -46,11 +46,11 @@ use atlas_agent_wire::{
 };
 use atlas_bus::{OutboundMiddleware, OutboundPipeline};
 
-use super::agent_host::{
-    AgentHost, AgentInfo, AuthMethodWire, HostError, PermissionDecision, SessionInit,
-    SessionKey, SessionSnapshot,
-};
 use super::agent_analytics::AnalyticsState;
+use super::agent_host::{
+    AgentHost, AgentInfo, AuthMethodWire, HostError, PermissionDecision, SessionInit, SessionKey,
+    SessionSnapshot,
+};
 use super::catalog::emit_catalog_changed;
 use super::memory_indexer::MemoryRegistry;
 use super::memory_pack;
@@ -85,7 +85,9 @@ impl TauriDeltaSink {
             // the bus drops events for a lagging subscriber, and a dropped event
             // is a turn missing from the permanent record. This stage only
             // enqueues; all disk work happens on the capture worker thread.
-            .with(Arc::new(super::capture::CaptureMiddleware { app: app.clone() }))
+            .with(Arc::new(super::capture::CaptureMiddleware {
+                app: app.clone(),
+            }))
             // Atlas-owned transcripts for agents that keep none — what makes
             // an opencode / gemini session still exist in the sidebar after
             // the live session goes away. Always on and agent-agnostic,
@@ -164,7 +166,10 @@ impl AnalyticsMiddleware {
         };
         let plugin_id = self.plugin_id(envelope);
         if let (Some(map), Some(more)) = (props.as_object_mut(), extra.as_object()) {
-            map.insert("agent_family".into(), serde_json::json!(Self::family(&plugin_id)));
+            map.insert(
+                "agent_family".into(),
+                serde_json::json!(Self::family(&plugin_id)),
+            );
             map.insert("plugin_id".into(), serde_json::json!(plugin_id));
             map.insert(
                 "session_ref".into(),
@@ -212,13 +217,17 @@ impl OutboundMiddleware<SessionDeltaEnvelope> for AnalyticsMiddleware {
             SessionDelta::ContextUsage { used, size, cost } => {
                 st.with_turn(sid, |a| a.note_context(*used, *size, *cost))
             }
-            SessionDelta::PermissionRequest { .. } => {
-                st.with_turn(sid, super::agent_analytics::TurnAcc::note_permission_request)
+            SessionDelta::PermissionRequest { .. } => st.with_turn(
+                sid,
+                super::agent_analytics::TurnAcc::note_permission_request,
+            ),
+            SessionDelta::PermissionResolved { .. } => st.with_turn(
+                sid,
+                super::agent_analytics::TurnAcc::note_permission_resolved,
+            ),
+            SessionDelta::RetryStatus { .. } => {
+                st.with_turn(sid, super::agent_analytics::TurnAcc::note_retry)
             }
-            SessionDelta::PermissionResolved { .. } => {
-                st.with_turn(sid, super::agent_analytics::TurnAcc::note_permission_resolved)
-            }
-            SessionDelta::RetryStatus { .. } => st.with_turn(sid, super::agent_analytics::TurnAcc::note_retry),
             SessionDelta::Compaction { active } if *active => {
                 st.with_turn(sid, super::agent_analytics::TurnAcc::note_compaction)
             }
@@ -228,13 +237,17 @@ impl OutboundMiddleware<SessionDeltaEnvelope> for AnalyticsMiddleware {
             SessionDelta::ModelChanged { model_id } => {
                 st.with_turn(sid, |a| a.note_model(model_id))
             }
-            SessionDelta::ModeChanged { .. } => st.with_turn(sid, super::agent_analytics::TurnAcc::note_mode_change),
+            SessionDelta::ModeChanged { .. } => {
+                st.with_turn(sid, super::agent_analytics::TurnAcc::note_mode_change)
+            }
             SessionDelta::MessageAppended { message } => {
                 if message.role == MessageRole::Assistant {
                     st.with_turn(sid, super::agent_analytics::TurnAcc::note_assistant_message);
                 }
             }
-            SessionDelta::PlanUpdated { .. } => st.with_turn(sid, super::agent_analytics::TurnAcc::note_plan_update),
+            SessionDelta::PlanUpdated { .. } => {
+                st.with_turn(sid, super::agent_analytics::TurnAcc::note_plan_update)
+            }
 
             SessionDelta::TurnFinished {
                 stop_reason,
@@ -300,14 +313,19 @@ impl TranscriptMiddleware {
     /// buffer exists — no per-delta plugin lookup, and no way for the two sites
     /// to disagree about which agents are recorded.
     fn flush(&self, session_id: &str) {
-        let state = self.app.state::<Arc<super::agent_transcript::TranscriptState>>();
+        let state = self
+            .app
+            .state::<Arc<super::agent_transcript::TranscriptState>>();
         let Some(snapshot) = state.snapshot(session_id) else {
             return;
         };
         // Disk write off the emit thread — same discipline as memory ingest.
         let app = self.app.clone();
         tauri::async_runtime::spawn_blocking(move || {
-            let dir = app.path().app_config_dir().unwrap_or_else(|_| std::env::temp_dir());
+            let dir = app
+                .path()
+                .app_config_dir()
+                .unwrap_or_else(|_| std::env::temp_dir());
             if let Err(e) = super::agent_transcript::save(&dir, &snapshot) {
                 tracing::warn!(target: "atlas::agent_transcript", "save failed: {e}");
             }
@@ -317,7 +335,9 @@ impl TranscriptMiddleware {
 
 impl OutboundMiddleware<SessionDeltaEnvelope> for TranscriptMiddleware {
     fn on_event(&self, envelope: &SessionDeltaEnvelope) {
-        let state = self.app.state::<Arc<super::agent_transcript::TranscriptState>>();
+        let state = self
+            .app
+            .state::<Arc<super::agent_transcript::TranscriptState>>();
         match &envelope.delta {
             SessionDelta::MessageAppended { message } => {
                 // Cheap guard first: no buffer means no prompt was recorded for
@@ -417,9 +437,7 @@ impl OutboundMiddleware<SessionDeltaEnvelope> for MemoryIngestMiddleware {
             SessionDelta::ToolCallUpserted { tool_call, .. } => {
                 tool_call.status == ToolCallStatus::Completed
             }
-            SessionDelta::MessageAppended { message } => {
-                message.role == MessageRole::Assistant
-            }
+            SessionDelta::MessageAppended { message } => message.role == MessageRole::Assistant,
             _ => false,
         };
         if ingest_relevant && cwd.is_some() {
@@ -529,8 +547,14 @@ struct SharingGatedLifecycle {
 }
 
 enum LifecycleWrite {
-    Started { session_id: String, agent: String, cwd: String },
-    Ended { session_id: String },
+    Started {
+        session_id: String,
+        agent: String,
+        cwd: String,
+    },
+    Ended {
+        session_id: String,
+    },
 }
 
 impl SharingGatedLifecycle {
@@ -579,7 +603,12 @@ impl SharingGatedLifecycle {
 
 impl super::agent_host::SessionLifecycle for SharingGatedLifecycle {
     fn session_started(&self, session_id: &str, agent: &str, cwd: &str) {
-        super::agent_host::SessionLifecycle::session_started(&**self.server.tokens(), session_id, agent, cwd);
+        super::agent_host::SessionLifecycle::session_started(
+            &**self.server.tokens(),
+            session_id,
+            agent,
+            cwd,
+        );
         self.queue(LifecycleWrite::Started {
             session_id: session_id.to_string(),
             agent: agent.to_string(),
@@ -652,10 +681,14 @@ pub fn install_manager(app: &AppHandle) {
     {
         let memory = app.state::<SharedMemoryStore>();
         let emitter = app.clone();
-        memory.on_change(Arc::new(move |change: &super::shared_memory::MemoryChanged| {
-            let _ = emitter.emit(super::shared_memory::MEMORY_CHANGED_EVENT, change);
-        }));
-        super::shared_memory::install_embedder(Arc::new(super::memory_indexer::ModelEmbedder::new(app.clone())));
+        memory.on_change(Arc::new(
+            move |change: &super::shared_memory::MemoryChanged| {
+                let _ = emitter.emit(super::shared_memory::MEMORY_CHANGED_EVENT, change);
+            },
+        ));
+        super::shared_memory::install_embedder(Arc::new(
+            super::memory_indexer::ModelEmbedder::new(app.clone()),
+        ));
         // The extractor: durable entries distilled from sessions, through the
         // gateway or the user's BYOK provider.
         app.manage(Arc::new(super::memory_extract::Extractor::new(
@@ -664,7 +697,10 @@ pub fn install_manager(app: &AppHandle) {
         )));
         let server = Arc::new(super::memory_server::MemoryServerHost::new());
         app.manage(server.clone());
-        host.set_session_lifecycle(Arc::new(SharingGatedLifecycle::new(app.clone(), server.clone())));
+        host.set_session_lifecycle(Arc::new(SharingGatedLifecycle::new(
+            app.clone(),
+            server.clone(),
+        )));
         let gate_app = app.clone();
         let gate: super::memory_server::SharingGate =
             Arc::new(move |cwd: &str| gate_app.state::<MemorySharingState>().is_enabled(cwd));
@@ -675,7 +711,9 @@ pub fn install_manager(app: &AppHandle) {
         let emit_app = app.clone();
         let ui_bridge = Arc::new(super::ui_server::UiBridge::new(Arc::new(
             move |request: &super::ui_server::UiRequest| {
-                emit_app.emit(super::ui_server::action_event(request), request).map_err(|e| e.to_string())
+                emit_app
+                    .emit(super::ui_server::action_event(request), request)
+                    .map_err(|e| e.to_string())
             },
         )));
         app.manage(ui_bridge.clone());
@@ -687,8 +725,10 @@ pub fn install_manager(app: &AppHandle) {
                 .try_state::<crate::state::AtlasConfigHandle>()
                 .is_some_and(|config| config.lock().effective().agent_ui_navigation)
         });
-        let ui_router =
-            super::ui_server::router(super::ui_server::UiTools::new(ui_bridge.clone(), navigation.clone()));
+        let ui_router = super::ui_server::router(super::ui_server::UiTools::new(
+            ui_bridge.clone(),
+            navigation.clone(),
+        ));
         // The organisation tool server (ADR-0014): calls act in the
         // organisation the session's Project is bound to, through the clients
         // the app already holds. Its setting, "Let Atlas Agent act in your
@@ -712,9 +752,11 @@ pub fn install_manager(app: &AppHandle) {
             org_access.clone(),
             session_orgs.clone(),
         )
-        .with_audit(Arc::new(move |record: &super::org_server::OrgActionRecord| {
-            let _ = audit_app.emit(super::org_server::ORG_ACTION_EVENT, record);
-        }))
+        .with_audit(Arc::new(
+            move |record: &super::org_server::OrgActionRecord| {
+                let _ = audit_app.emit(super::org_server::ORG_ACTION_EVENT, record);
+            },
+        ))
         // Drawing on a Space page crosses to the window: the page's codec
         // lives in the frontend.
         .with_window(ui_bridge);
@@ -1135,7 +1177,10 @@ pub fn agents_kill(agent_id: AgentId, host: State<'_, Arc<AgentHost>>) -> Result
 /// handle to kill by. Cancels an in-flight connect, drops a live one, and is
 /// a no-op for an agent that is not running. Renderer arg: `pluginId`.
 #[tauri::command]
-pub fn agents_kill_plugin(plugin_id: String, host: State<'_, Arc<AgentHost>>) -> Result<(), String> {
+pub fn agents_kill_plugin(
+    plugin_id: String,
+    host: State<'_, Arc<AgentHost>>,
+) -> Result<(), String> {
     host.kill_plugin(&plugin_id).map_err(|e| e.to_string())
 }
 
@@ -1277,7 +1322,10 @@ pub async fn agents_replay_transcript(
     // ADR-0001 ends — and it was reachable only through an agent-identity
     // branch. Atlas has recorded every agent's transcript since the usage
     // re-source, and `session/load` replays anything older from the agent.
-    let dir = app.path().app_config_dir().unwrap_or_else(|_| std::env::temp_dir());
+    let dir = app
+        .path()
+        .app_config_dir()
+        .unwrap_or_else(|_| std::env::temp_dir());
     let cwd_owned = cwd.clone();
     let sid = session_id.clone();
     let stored = tauri::async_runtime::spawn_blocking(move || {
@@ -1324,7 +1372,10 @@ pub async fn agent_transcripts_list(
     cwd: String,
     app: AppHandle,
 ) -> Vec<super::agent_transcript::AgentSessionMeta> {
-    let dir = app.path().app_config_dir().unwrap_or_else(|_| std::env::temp_dir());
+    let dir = app
+        .path()
+        .app_config_dir()
+        .unwrap_or_else(|_| std::env::temp_dir());
     tauri::async_runtime::spawn_blocking(move || super::agent_transcript::list(&dir, &cwd))
         .await
         .unwrap_or_default()
@@ -1342,7 +1393,10 @@ pub async fn agent_transcripts_read(
     session_id: String,
     app: AppHandle,
 ) -> Vec<super::agent_transcript::StoredMessage> {
-    let dir = app.path().app_config_dir().unwrap_or_else(|_| std::env::temp_dir());
+    let dir = app
+        .path()
+        .app_config_dir()
+        .unwrap_or_else(|_| std::env::temp_dir());
     tauri::async_runtime::spawn_blocking(move || {
         super::agent_transcript::read(&dir, &cwd, &session_id)
             .map(|t| t.messages)
@@ -1396,8 +1450,7 @@ pub fn threads_projects(
     cwd: Option<String>,
     host: State<'_, Arc<AgentHost>>,
 ) -> Result<Vec<super::agent_host::ThreadProjectWire>, CmdError> {
-    host.thread_projects(cwd.as_deref())
-        .map_err(CmdError::from)
+    host.thread_projects(cwd.as_deref()).map_err(CmdError::from)
 }
 
 /// Every thread, archived or not, newest-started first — the history view.
@@ -1411,10 +1464,7 @@ pub fn threads_history(
 
 /// Take a thread out of the active list, keeping it in history.
 #[tauri::command]
-pub fn threads_archive(
-    thread_id: String,
-    host: State<'_, Arc<AgentHost>>,
-) -> Result<(), CmdError> {
+pub fn threads_archive(thread_id: String, host: State<'_, Arc<AgentHost>>) -> Result<(), CmdError> {
     host.archive_thread(parse_thread_id(&thread_id)?)
         .map_err(CmdError::from)
 }
@@ -1564,7 +1614,8 @@ pub async fn agents_send(
     // one only there), and nothing Atlas wrote can be echoed back as the
     // user's words.
     if !cwd.is_empty() && sharing.is_enabled(&cwd) {
-        app.state::<SharedMemoryStore>().register_session(&key.session_id, &cwd, &plugin_id);
+        app.state::<SharedMemoryStore>()
+            .register_session(&key.session_id, &cwd, &plugin_id);
     }
     host.send(
         &key,
@@ -1582,14 +1633,19 @@ const BOOTSTRAP_BUDGET_SECS: u64 = 8;
 /// recent-session handoff. Everything runs inside a single
 /// [`BOOTSTRAP_BUDGET_SECS`] timeout; on elapse the briefing goes out without
 /// them rather than late.
-async fn build_bootstrap(app: &AppHandle, cwd: &str, session_id: &str) -> super::memory_server::Bootstrap {
+async fn build_bootstrap(
+    app: &AppHandle,
+    cwd: &str,
+    session_id: &str,
+) -> super::memory_server::Bootstrap {
     let pref = app.state::<MemorySharingState>().summarizer_pref(cwd);
     let cwd = cwd.to_string();
     let session_id = session_id.to_string();
 
     let built = tokio::time::timeout(Duration::from_secs(BOOTSTRAP_BUDGET_SECS), async {
         // Curated pack (collect_corpus is async + does its own spawn_blocking).
-        let project_memory = memory_pack::build_memory_pack(&cwd, memory_pack::PACK_MAX_CHARS).await;
+        let project_memory =
+            memory_pack::build_memory_pack(&cwd, memory_pack::PACK_MAX_CHARS).await;
 
         // Recent-session handoff, from what Atlas recorded for any agent:
         // pure disk I/O on a blocking thread.
@@ -1608,12 +1664,16 @@ async fn build_bootstrap(app: &AppHandle, cwd: &str, session_id: &str) -> super:
             .flatten()
         };
 
-        let recent_session = memory_pack::handoff_block(handoff_raw, &pref, |raw, provider, model| async move {
-            memory_summarize::summarize(app, &raw, &provider, &model).await
-        })
-        .await;
+        let recent_session =
+            memory_pack::handoff_block(handoff_raw, &pref, |raw, provider, model| async move {
+                memory_summarize::summarize(app, &raw, &provider, &model).await
+            })
+            .await;
 
-        super::memory_server::Bootstrap { project_memory, recent_session }
+        super::memory_server::Bootstrap {
+            project_memory,
+            recent_session,
+        }
     })
     .await;
 
@@ -1645,7 +1705,8 @@ pub async fn agents_drop_session(
     let _ = agent_id;
     // Release the per-turn accumulator with the session, so a tab closed
     // mid-turn doesn't hold one for the life of the process.
-    app.state::<Arc<AnalyticsState>>().forget_session(&session_id);
+    app.state::<Arc<AnalyticsState>>()
+        .forget_session(&session_id);
     let host = app.state::<Arc<AgentHost>>().inner().clone();
     host.drop_session(&session_id)
         .await
@@ -1658,7 +1719,9 @@ pub async fn agents_set_mode(
     mode_id: String,
     host: State<'_, Arc<AgentHost>>,
 ) -> Result<(), String> {
-    host.set_mode(&key, mode_id).await.map_err(|e| e.to_string())
+    host.set_mode(&key, mode_id)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1667,7 +1730,9 @@ pub async fn agents_set_model(
     model_id: String,
     host: State<'_, Arc<AgentHost>>,
 ) -> Result<(), String> {
-    host.set_model(&key, model_id).await.map_err(|e| e.to_string())
+    host.set_model(&key, model_id)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1750,7 +1815,10 @@ pub async fn agents_auth_env_status(
     agent_id: AgentId,
     host: State<'_, Arc<AgentHost>>,
 ) -> Result<Vec<AuthEnvStatus>, String> {
-    let methods = host.auth_methods(agent_id).await.map_err(|e| e.to_string())?;
+    let methods = host
+        .auth_methods(agent_id)
+        .await
+        .map_err(|e| e.to_string())?;
 
     let mut wanted: Vec<(String, String, Option<String>, bool)> = Vec::new();
     for method in &methods {
@@ -1943,7 +2011,10 @@ pub async fn agents_run_auth_method(
                 } else {
                     Some(format!(
                         "auth subprocess exited with code {}",
-                        status.code().map(|c| c.to_string()).unwrap_or_else(|| "?".into())
+                        status
+                            .code()
+                            .map(|c| c.to_string())
+                            .unwrap_or_else(|| "?".into())
                     ))
                 },
             },
@@ -1973,13 +2044,15 @@ mod cmd_error_tests {
     /// any turn starts, so no `atlas:auth-required` ever fires.
     #[test]
     fn an_auth_failure_carries_the_auth_kind() {
-        let e: CmdError = HostError::classified(
-            "Authentication required. Please run `cursor-agent login`.",
-        )
-        .into();
+        let e: CmdError =
+            HostError::classified("Authentication required. Please run `cursor-agent login`.")
+                .into();
         let v = wire(e);
         assert_eq!(v["kind"], "auth");
-        assert!(v["message"].as_str().unwrap().contains("Authentication required"));
+        assert!(v["message"]
+            .as_str()
+            .unwrap()
+            .contains("Authentication required"));
     }
 
     /// The frontend reads `.message`; stringifying the object would render
@@ -1994,12 +2067,18 @@ mod cmd_error_tests {
 
     #[test]
     fn non_auth_failures_still_classify() {
-        assert_eq!(wire(HostError::unknown_session().into())["kind"], "process_dead");
+        assert_eq!(
+            wire(HostError::unknown_session().into())["kind"],
+            "process_dead"
+        );
         assert_eq!(
             wire(HostError::classified("rate limit exceeded").into())["kind"],
             "transient"
         );
-        assert_eq!(wire(HostError::classified("weird").into())["kind"], "unknown");
+        assert_eq!(
+            wire(HostError::classified("weird").into())["kind"],
+            "unknown"
+        );
     }
 
     /// An agent that is not installed is FATAL, not auth: no amount of signing
@@ -2204,7 +2283,10 @@ impl PendingUpdates {
 
     fn schedule(&self, app: &AppHandle, host: &Arc<AgentHost>, plugin_id: String, version: String) {
         let first = {
-            let mut pending = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut pending = self
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             pending.insert(plugin_id.clone(), version).is_none()
         };
         if !first {

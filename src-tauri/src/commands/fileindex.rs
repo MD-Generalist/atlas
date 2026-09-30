@@ -183,8 +183,10 @@ pub async fn fileindex_open_project(
         guard.get(&key).map(|ex| {
             let stale = ex.last_walk.lock().elapsed() >= REFRESH_MIN_INTERVAL;
             // `swap` claims the refresh slot — only one rebuild in flight.
-            let claimed =
-                stale && !ex.refreshing.swap(true, std::sync::atomic::Ordering::SeqCst);
+            let claimed = stale
+                && !ex
+                    .refreshing
+                    .swap(true, std::sync::atomic::Ordering::SeqCst);
             (ex.files.read().len(), claimed, ex.refreshing.clone())
         })
     };
@@ -489,7 +491,10 @@ pub fn fileindex_search_dirs(
         .into_iter()
         .filter_map(|(rel, abs)| {
             pattern
-                .score(nucleo_matcher::Utf32Str::Ascii(rel.as_bytes()), &mut matcher)
+                .score(
+                    nucleo_matcher::Utf32Str::Ascii(rel.as_bytes()),
+                    &mut matcher,
+                )
                 .map(|score| (score, (rel, abs)))
         })
         .collect();
@@ -549,7 +554,10 @@ pub fn fileindex_search(
         .iter()
         .filter_map(|f| {
             pattern
-                .score(nucleo_matcher::Utf32Str::Ascii(f.rel.as_bytes()), &mut matcher)
+                .score(
+                    nucleo_matcher::Utf32Str::Ascii(f.rel.as_bytes()),
+                    &mut matcher,
+                )
                 .map(|score| (score, f))
         })
         .collect();
@@ -775,11 +783,7 @@ fn summarise_events(events: &[DebouncedEvent]) -> (std::collections::HashSet<Pat
     (dirs, full_refresh)
 }
 
-fn apply_events(
-    root: &Path,
-    files: &Arc<RwLock<Vec<IndexedFile>>>,
-    events: Vec<DebouncedEvent>,
-) {
+fn apply_events(root: &Path, files: &Arc<RwLock<Vec<IndexedFile>>>, events: Vec<DebouncedEvent>) {
     // Strategy: collect adds/removes/renames separately, then mutate the
     // vec once under a single write lock. For complex events (e.g. branch
     // switch), `notify` may not surface kind-level info, in which case we
@@ -960,7 +964,10 @@ mod tests {
             root,
             Path::new("/p/packages/web/node_modules/react/index.js")
         ));
-        assert!(is_ignored_event_path(root, Path::new("/p/a/target/debug/x")));
+        assert!(is_ignored_event_path(
+            root,
+            Path::new("/p/a/target/debug/x")
+        ));
         assert!(is_ignored_event_path(root, Path::new("/p/.git/index")));
 
         assert!(!is_ignored_event_path(root, Path::new("/p/src/main.rs")));
@@ -980,7 +987,11 @@ mod tests {
         let before = files.read().len();
 
         let ev = |kind: EventKind, p: PathBuf| DebouncedEvent {
-            event: notify::Event { kind, paths: vec![p], attrs: Default::default() },
+            event: notify::Event {
+                kind,
+                paths: vec![p],
+                attrs: Default::default(),
+            },
             time: std::time::Instant::now(),
         };
 
@@ -989,7 +1000,10 @@ mod tests {
             t.path().join("a.rs"),
         );
         let (dirs, full_refresh) = summarise_events(std::slice::from_ref(&data));
-        assert!(!full_refresh, "a content edit must not force a full refresh");
+        assert!(
+            !full_refresh,
+            "a content edit must not force a full refresh"
+        );
         assert!(dirs.is_empty());
 
         apply_events(t.path(), &files, vec![data]);

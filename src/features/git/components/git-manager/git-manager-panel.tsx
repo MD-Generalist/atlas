@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 import { HintGroup, HintItem } from "@/ui/hint-group";
 import { useGitStore } from "../../stores/git-store";
 import { handleGitError } from "../../lib/git-errors";
+import { fetchHint } from "../../lib/auto-fetch";
 import { BranchSwitcher } from "./branch-switcher";
 import { MergeBranchDialog } from "./merge-branch-dialog";
 import { GitErrorDialog } from "./git-error-dialog";
@@ -90,11 +91,10 @@ export function GitManagerPanel() {
             </button>
           </HintItem>
           <div className="ml-auto flex items-center gap-0.5">
-            <ToolbarBtn
+            <FetchButton
+              repoPath={repoPath}
               onClick={() => run("fetch", () => actions.fetch())}
               busy={busy === "fetch"}
-              title="Fetch"
-              icon={<RefreshCw size={12} />}
             />
             {hasUpstream ? (
               <>
@@ -148,6 +148,35 @@ export function GitManagerPanel() {
       <MergeBranchDialog open={mergeOpen} onOpenChange={setMergeOpen} />
       <GitErrorDialog />
     </div>
+  );
+}
+
+/** Fetch, hinting when the remote was last fetched (by auto-fetch or by
+ *  hand). Re-renders on its own every 30s so "3m ago" doesn't freeze while
+ *  the rest of the panel sits idle. */
+function FetchButton({
+  repoPath,
+  onClick,
+  busy,
+}: {
+  repoPath: string | null;
+  onClick: () => void;
+  busy: boolean;
+}) {
+  const autoFetch = useGitStore.use.autoFetch();
+  const status = repoPath ? autoFetch[repoPath] : undefined;
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick((n) => n + 1), 30_000);
+    return () => clearInterval(id);
+  }, []);
+  return (
+    <ToolbarBtn
+      onClick={onClick}
+      busy={busy}
+      title={fetchHint(status)}
+      icon={<RefreshCw size={12} />}
+    />
   );
 }
 

@@ -316,7 +316,10 @@ struct GitDirs {
 fn resolve_git_dirs(root: &Path) -> Option<GitDirs> {
     let dot_git = root.join(".git");
     if dot_git.is_dir() {
-        return Some(GitDirs { git_dir: dot_git.clone(), common_dir: dot_git });
+        return Some(GitDirs {
+            git_dir: dot_git.clone(),
+            common_dir: dot_git,
+        });
     }
     if !dot_git.is_file() {
         return None;
@@ -327,7 +330,11 @@ fn resolve_git_dirs(root: &Path) -> Option<GitDirs> {
     let pointer = content.strip_prefix("gitdir:")?.trim();
     let git_dir = {
         let p = Path::new(pointer);
-        if p.is_absolute() { p.to_path_buf() } else { root.join(p) }
+        if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            root.join(p)
+        }
     };
     if !git_dir.is_dir() {
         return None;
@@ -336,11 +343,18 @@ fn resolve_git_dirs(root: &Path) -> Option<GitDirs> {
     let common_dir = match std::fs::read_to_string(git_dir.join("commondir")) {
         Ok(raw) => {
             let p = Path::new(raw.trim());
-            if p.is_absolute() { p.to_path_buf() } else { git_dir.join(p) }
+            if p.is_absolute() {
+                p.to_path_buf()
+            } else {
+                git_dir.join(p)
+            }
         }
         Err(_) => git_dir.clone(),
     };
-    Some(GitDirs { git_dir, common_dir })
+    Some(GitDirs {
+        git_dir,
+        common_dir,
+    })
 }
 
 /// Allow other modules (e.g. `git_status` post-write or future

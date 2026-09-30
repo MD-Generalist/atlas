@@ -178,10 +178,17 @@ pub fn promote_facts_in(global_dir: &Path, store: &RecordStore) -> Result<usize>
 /// any whose content hash has now been seen in enough repositories. Items
 /// below [`PROMOTION_MIN_CONFIDENCE`] are ignored. Returns the number promoted
 /// on this call.
-pub fn record_candidates_in(global_dir: &Path, repository_root: &str, items: &[Candidate]) -> Result<usize> {
+pub fn record_candidates_in(
+    global_dir: &Path,
+    repository_root: &str,
+    items: &[Candidate],
+) -> Result<usize> {
     std::fs::create_dir_all(global_dir).context("create global memory dir")?;
     let mut ledger = load_ledger(global_dir);
-    let listed: BTreeSet<String> = listed_contents(global_dir).iter().map(|c| record::normalize(c)).collect();
+    let listed: BTreeSet<String> = listed_contents(global_dir)
+        .iter()
+        .map(|c| record::normalize(c))
+        .collect();
 
     let mut promoted_now = 0usize;
     // (label, content, confidence) bullets to add to MEMORY.md, newest-first.
@@ -218,7 +225,11 @@ pub fn record_candidates_in(global_dir: &Path, repository_root: &str, items: &[C
             let content = item.content.trim();
             promoted.push(content.to_string());
             if !listed.contains(&record::normalize(content)) {
-                md_appends.push((entry.category.clone(), content.to_string(), entry.max_confidence));
+                md_appends.push((
+                    entry.category.clone(),
+                    content.to_string(),
+                    entry.max_confidence,
+                ));
             }
         }
     }
@@ -286,7 +297,9 @@ fn append_promoted(dir: &Path, contents: &[String]) -> Result<()> {
     use std::io::Write;
     let mut lines = String::new();
     for content in contents {
-        lines.push_str(&serde_json::to_string(&Promoted { content: content.clone() })?);
+        lines.push_str(&serde_json::to_string(&Promoted {
+            content: content.clone(),
+        })?);
         lines.push('\n');
     }
     let mut file = std::fs::OpenOptions::new()
@@ -294,7 +307,8 @@ fn append_promoted(dir: &Path, contents: &[String]) -> Result<()> {
         .append(true)
         .open(promoted_path(dir))
         .context("open global-promoted.jsonl")?;
-    file.write_all(lines.as_bytes()).context("append global-promoted.jsonl")
+    file.write_all(lines.as_bytes())
+        .context("append global-promoted.jsonl")
 }
 
 /// The contents `MEMORY.md` lists, newest first (empty when there is none).
@@ -374,7 +388,11 @@ mod tests {
 
     fn tmp_dir(name: &str) -> PathBuf {
         let mut p = std::env::temp_dir();
-        p.push(format!("atlas-memory-global-{}-{}", std::process::id(), name));
+        p.push(format!(
+            "atlas-memory-global-{}-{}",
+            std::process::id(),
+            name
+        ));
         let _ = std::fs::remove_dir_all(&p);
         std::fs::create_dir_all(&p).unwrap();
         p
@@ -413,10 +431,18 @@ mod tests {
         let a = repository(&base, "a", &[("Always use tabs", 0.9)]);
         let b = repository(&base, "b", &[("always  use tabs", 0.85)]);
 
-        assert_eq!(promote_facts_in(&global, &a).unwrap(), 0, "one repository does not promote");
+        assert_eq!(
+            promote_facts_in(&global, &a).unwrap(),
+            0,
+            "one repository does not promote"
+        );
         assert!(!memory_md_path(&global).exists());
 
-        assert_eq!(promote_facts_in(&global, &b).unwrap(), 1, "the second repository promotes");
+        assert_eq!(
+            promote_facts_in(&global, &b).unwrap(),
+            1,
+            "the second repository promotes"
+        );
         // Re-running either repository changes nothing.
         assert_eq!(promote_facts_in(&global, &a).unwrap(), 0);
         assert_eq!(promote_facts_in(&global, &b).unwrap(), 0);
@@ -427,7 +453,10 @@ mod tests {
         );
         let ledger = load_ledger(&global);
         assert_eq!(ledger.candidates.len(), 1);
-        let row = ledger.candidates.get(&record::content_hash("Always use tabs")).unwrap();
+        let row = ledger
+            .candidates
+            .get(&record::content_hash("Always use tabs"))
+            .unwrap();
         assert!(row.promoted);
         assert_eq!(row.category, "fact");
         assert_eq!(row.project_roots.len(), 2);
@@ -439,15 +468,26 @@ mod tests {
     fn a_fact_below_the_floor_or_in_one_repository_is_not_promoted() {
         let base = tmp_dir("not-promoted");
         let global = base.join("global");
-        let a = repository(&base, "a", &[("Prefer dark mode", 0.7), ("Only here", 0.95)]);
+        let a = repository(
+            &base,
+            "a",
+            &[("Prefer dark mode", 0.7), ("Only here", 0.95)],
+        );
         let b = repository(&base, "b", &[("Prefer dark mode", 0.7)]);
 
         assert_eq!(promote_facts_in(&global, &a).unwrap(), 0);
         assert_eq!(promote_facts_in(&global, &b).unwrap(), 0);
 
-        assert!(!memory_md_path(&global).exists(), "nothing promoted, no list");
+        assert!(
+            !memory_md_path(&global).exists(),
+            "nothing promoted, no list"
+        );
         let ledger = load_ledger(&global);
-        assert_eq!(ledger.candidates.len(), 1, "only the qualifying Fact is a candidate");
+        assert_eq!(
+            ledger.candidates.len(),
+            1,
+            "only the qualifying Fact is a candidate"
+        );
         assert!(!ledger.candidates[&record::content_hash("Only here")].promoted);
 
         std::fs::remove_dir_all(&base).ok();
@@ -520,12 +560,20 @@ mod tests {
             r#"{"candidates":{"31d418d04d3727e4":{"category":"preference","max_confidence":0.9,"project_roots":["/proj/a","/proj/b"],"promoted":true}}}"#,
         )
         .unwrap();
-        let item = Candidate { content_hash: "h1".into(), content: "Always use tabs".into(), confidence: 0.9 };
+        let item = Candidate {
+            content_hash: "h1".into(),
+            content: "Always use tabs".into(),
+            confidence: 0.9,
+        };
         record_candidates_in(&dir, "/proj/a", std::slice::from_ref(&item)).unwrap();
         assert_eq!(record_candidates_in(&dir, "/proj/b", &[item]).unwrap(), 1);
 
         assert_eq!(md(&dir).lines().filter(|l| l.starts_with("- ")).count(), 1);
-        assert_eq!(load_ledger(&dir).candidates.len(), 2, "the older row is kept");
+        assert_eq!(
+            load_ledger(&dir).candidates.len(),
+            2,
+            "the older row is kept"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -569,14 +617,21 @@ mod tests {
             global_recall_in(&dir, "Rule number 3 always", 5),
             vec![("Rule number 3 always holds".to_string(), 1.0)]
         );
-        assert_eq!(global_recall_in(&dir, "Rule number", 300).len(), 250, "each once");
+        assert_eq!(
+            global_recall_in(&dir, "Rule number", 300).len(),
+            250,
+            "each once"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn recall_finds_promoted_memories_containing_the_query() {
         let dir = tmp_dir("recall");
-        assert!(global_recall_in(&dir, "tabs", 5).is_empty(), "nothing promoted yet");
+        assert!(
+            global_recall_in(&dir, "tabs", 5).is_empty(),
+            "nothing promoted yet"
+        );
         std::fs::write(
             memory_md_path(&dir),
             "# Global Memory (promoted, cross-project)\n\n\
@@ -591,7 +646,10 @@ mod tests {
             vec![("Always use tabs".to_string(), 1.0)],
             "whole-query, case-sensitive substring, like the graph it replaces"
         );
-        assert_eq!(global_recall_in(&dir, "s", 1), vec![("Commit messages are conventional".to_string(), 1.0)]);
+        assert_eq!(
+            global_recall_in(&dir, "s", 1),
+            vec![("Commit messages are conventional".to_string(), 1.0)]
+        );
         assert!(global_recall_in(&dir, "tabs", 0).is_empty());
 
         std::fs::remove_dir_all(&dir).ok();

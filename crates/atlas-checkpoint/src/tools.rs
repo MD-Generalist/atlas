@@ -123,7 +123,11 @@ pub fn canonical_name(
     // AND COMMITTED a file was classified as a read and never sampled for
     // writes. The argument shape outranks the title because it cannot be
     // prose.
-    if arguments.get("command").and_then(serde_json::Value::as_str).is_some() {
+    if arguments
+        .get("command")
+        .and_then(serde_json::Value::as_str)
+        .is_some()
+    {
         return ToolName::Bash;
     }
 
@@ -384,7 +388,14 @@ pub fn extract_paths(
     }
 
     if out.is_empty() {
-        for key in ["file_path", "path", "filePath", "target_file", "file", "notebook_path"] {
+        for key in [
+            "file_path",
+            "path",
+            "filePath",
+            "target_file",
+            "file",
+            "notebook_path",
+        ] {
             if let Some(path) = arguments.get(key).and_then(serde_json::Value::as_str) {
                 if !path.trim().is_empty() {
                     out.push(path.to_string());
@@ -448,7 +459,12 @@ mod tests {
             "an explicit name is the agent naming itself"
         );
         assert_eq!(
-            canonical_name(Some("Read"), Some("Read"), None, &args(serde_json::json!({}))),
+            canonical_name(
+                Some("Read"),
+                Some("Read"),
+                None,
+                &args(serde_json::json!({}))
+            ),
             ToolName::Read
         );
     }
@@ -474,12 +490,25 @@ mod tests {
     #[test]
     fn claude_code_display_titles_reduce_to_their_leading_token() {
         for (title, kind, expected) in [
-            ("Bash(cargo test --package atlas-codeindex)", "execute", ToolName::Bash),
-            ("Read /Users/nafiz/dev/atlas/src/lib.rs", "read", ToolName::Read),
+            (
+                "Bash(cargo test --package atlas-codeindex)",
+                "execute",
+                ToolName::Bash,
+            ),
+            (
+                "Read /Users/nafiz/dev/atlas/src/lib.rs",
+                "read",
+                ToolName::Read,
+            ),
             ("Edit src/rate_limit.rs", "edit", ToolName::Edit),
         ] {
             assert_eq!(
-                canonical_name(Some(title), Some(title), Some(kind), &args(serde_json::json!({}))),
+                canonical_name(
+                    Some(title),
+                    Some(title),
+                    Some(kind),
+                    &args(serde_json::json!({}))
+                ),
                 expected,
                 "title {title}"
             );
@@ -548,7 +577,12 @@ mod tests {
     #[test]
     fn an_unrecognised_call_is_other_rather_than_a_new_bucket() {
         assert_eq!(
-            canonical_name(Some("Frobnicate the widget"), None, None, &args(serde_json::json!({}))),
+            canonical_name(
+                Some("Frobnicate the widget"),
+                None,
+                None,
+                &args(serde_json::json!({}))
+            ),
             ToolName::Other
         );
     }
@@ -632,15 +666,22 @@ mod tests {
 
     #[test]
     fn the_arguments_are_the_fallback_when_no_location_arrived() {
-        let paths = extract_paths(&[], &[], &args(serde_json::json!({ "file_path": "src/b.rs" })));
+        let paths = extract_paths(
+            &[],
+            &[],
+            &args(serde_json::json!({ "file_path": "src/b.rs" })),
+        );
         assert_eq!(paths, vec!["src/b.rs"]);
     }
 
     #[test]
     fn a_call_with_no_usable_location_yields_nothing_rather_than_failing() {
-        assert!(
-            extract_paths(&[], &[], &args(serde_json::json!({ "command": "cargo test" }))).is_empty()
-        );
+        assert!(extract_paths(
+            &[],
+            &[],
+            &args(serde_json::json!({ "command": "cargo test" }))
+        )
+        .is_empty());
     }
 
     #[test]
@@ -701,7 +742,9 @@ mod tests {
     /// stop the arguments from being consulted either.
     #[test]
     fn a_blank_diff_path_is_not_a_file() {
-        assert!(extract_paths(&[], &["   ".to_string()], &args(serde_json::Value::Null)).is_empty());
+        assert!(
+            extract_paths(&[], &["   ".to_string()], &args(serde_json::Value::Null)).is_empty()
+        );
         assert_eq!(
             extract_paths(
                 &[],

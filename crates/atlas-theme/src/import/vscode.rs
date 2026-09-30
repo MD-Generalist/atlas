@@ -36,40 +36,94 @@ use serde_json::{Map, Value};
 
 use crate::import::draft::VariantDraft;
 use crate::import::report::{Fidelity, ImportReport};
-use crate::import::{finish_theme, ImportedTheme, ImportOptions};
+use crate::import::{finish_theme, ImportOptions, ImportedTheme};
 use crate::{ThemeError, ThemeKeyValue};
 
 /// Workbench colour key → Atlas theme key(s).
 const COLOR_MAP: &[(&str, &[&str])] = &[
-    ("editor.background", &["editor.background", "diff.context.background"]),
+    (
+        "editor.background",
+        &["editor.background", "diff.context.background"],
+    ),
     ("editor.foreground", &["editor.foreground"]),
-    ("editorCursor.foreground", &["editor.caret", "terminal.cursor"]),
+    (
+        "editorCursor.foreground",
+        &["editor.caret", "terminal.cursor"],
+    ),
     ("editorGutter.background", &["editor.gutter.background"]),
     ("editorLineNumber.foreground", &["editor.gutter.foreground"]),
-    ("editorLineNumber.activeForeground", &["editor.active_line.gutter_foreground"]),
-    ("editor.lineHighlightBackground", &["editor.active_line.background"]),
-    ("editor.selectionBackground", &["editor.selection.background", "selection.background"]),
-    ("editor.findMatchHighlightBackground", &["search.match.background"]),
-    ("editor.findMatchBackground", &["search.match.active_background"]),
-    ("editorBracketMatch.background", &["editor.match_bracket.background"]),
-    ("editorBracketMatch.border", &["editor.match_bracket.border"]),
-    ("scrollbarSlider.background", &["scrollbar.thumb.background"]),
-    ("scrollbarSlider.hoverBackground", &["scrollbar.thumb.hover"]),
+    (
+        "editorLineNumber.activeForeground",
+        &["editor.active_line.gutter_foreground"],
+    ),
+    (
+        "editor.lineHighlightBackground",
+        &["editor.active_line.background"],
+    ),
+    (
+        "editor.selectionBackground",
+        &["editor.selection.background", "selection.background"],
+    ),
+    (
+        "editor.findMatchHighlightBackground",
+        &["search.match.background"],
+    ),
+    (
+        "editor.findMatchBackground",
+        &["search.match.active_background"],
+    ),
+    (
+        "editorBracketMatch.background",
+        &["editor.match_bracket.background"],
+    ),
+    (
+        "editorBracketMatch.border",
+        &["editor.match_bracket.border"],
+    ),
+    (
+        "scrollbarSlider.background",
+        &["scrollbar.thumb.background"],
+    ),
+    (
+        "scrollbarSlider.hoverBackground",
+        &["scrollbar.thumb.hover"],
+    ),
     ("sideBar.background", &["panel.background"]),
     ("input.background", &["panel.input.background"]),
     ("focusBorder", &["border.strong"]),
     ("list.hoverBackground", &["element.hover"]),
-    ("list.activeSelectionBackground", &["element.selected", "element.active"]),
+    (
+        "list.activeSelectionBackground",
+        &["element.selected", "element.active"],
+    ),
     ("disabledForeground", &["text.disabled"]),
     ("editorError.foreground", &["status.error.foreground"]),
     ("editorWarning.foreground", &["status.warning.foreground"]),
     ("editorInfo.foreground", &["status.info.foreground"]),
-    ("gitDecoration.addedResourceForeground", &["diff.added.text"]),
-    ("gitDecoration.deletedResourceForeground", &["diff.removed.text"]),
-    ("diffEditor.insertedTextBackground", &["diff.added.emphasis"]),
-    ("diffEditor.removedTextBackground", &["diff.removed.emphasis"]),
-    ("diffEditor.insertedLineBackground", &["diff.added.background"]),
-    ("diffEditor.removedLineBackground", &["diff.removed.background"]),
+    (
+        "gitDecoration.addedResourceForeground",
+        &["diff.added.text"],
+    ),
+    (
+        "gitDecoration.deletedResourceForeground",
+        &["diff.removed.text"],
+    ),
+    (
+        "diffEditor.insertedTextBackground",
+        &["diff.added.emphasis"],
+    ),
+    (
+        "diffEditor.removedTextBackground",
+        &["diff.removed.emphasis"],
+    ),
+    (
+        "diffEditor.insertedLineBackground",
+        &["diff.added.background"],
+    ),
+    (
+        "diffEditor.removedLineBackground",
+        &["diff.removed.background"],
+    ),
     ("terminal.background", &["terminal.background"]),
     ("terminal.foreground", &["terminal.foreground"]),
     ("terminal.ansiBlack", &["terminal.ansi.black"]),
@@ -83,9 +137,15 @@ const COLOR_MAP: &[(&str, &[&str])] = &[
     ("terminal.ansiBrightBlack", &["terminal.ansi.bright_black"]),
     ("terminal.ansiBrightRed", &["terminal.ansi.bright_red"]),
     ("terminal.ansiBrightGreen", &["terminal.ansi.bright_green"]),
-    ("terminal.ansiBrightYellow", &["terminal.ansi.bright_yellow"]),
+    (
+        "terminal.ansiBrightYellow",
+        &["terminal.ansi.bright_yellow"],
+    ),
     ("terminal.ansiBrightBlue", &["terminal.ansi.bright_blue"]),
-    ("terminal.ansiBrightMagenta", &["terminal.ansi.bright_magenta"]),
+    (
+        "terminal.ansiBrightMagenta",
+        &["terminal.ansi.bright_magenta"],
+    ),
     ("terminal.ansiBrightCyan", &["terminal.ansi.bright_cyan"]),
     ("terminal.ansiBrightWhite", &["terminal.ansi.bright_white"]),
 ];
@@ -119,21 +179,81 @@ const BASE_MAP: &[(&str, &str)] = &[
 /// VS Code's own "longest matching selector, last rule wins" rule against the
 /// theme's `tokenColors`.
 const SCOPE_TABLE: &[(&str, &[&str])] = &[
-    ("syntax.comment", &["comment", "comment.line", "punctuation.definition.comment"]),
-    ("syntax.keyword", &["keyword.control", "keyword", "storage.type", "storage.modifier"]),
-    ("syntax.operator", &["keyword.operator", "keyword.operator.arithmetic"]),
+    (
+        "syntax.comment",
+        &["comment", "comment.line", "punctuation.definition.comment"],
+    ),
+    (
+        "syntax.keyword",
+        &[
+            "keyword.control",
+            "keyword",
+            "storage.type",
+            "storage.modifier",
+        ],
+    ),
+    (
+        "syntax.operator",
+        &["keyword.operator", "keyword.operator.arithmetic"],
+    ),
     ("syntax.string", &["string.quoted.double", "string"]),
     ("syntax.escape", &["constant.character.escape"]),
     ("syntax.regexp", &["string.regexp"]),
     ("syntax.number", &["constant.numeric"]),
-    ("syntax.constant", &["constant.other", "constant.language", "constant", "variable.language", "support.constant"]),
-    ("syntax.type", &["entity.name.type", "entity.name.class", "support.type", "support.class", "storage.type.class"]),
-    ("syntax.function", &["entity.name.function", "support.function", "meta.function-call"]),
-    ("syntax.definition", &["entity.name.function.definition", "entity.name", "entity.name.namespace"]),
+    (
+        "syntax.constant",
+        &[
+            "constant.other",
+            "constant.language",
+            "constant",
+            "variable.language",
+            "support.constant",
+        ],
+    ),
+    (
+        "syntax.type",
+        &[
+            "entity.name.type",
+            "entity.name.class",
+            "support.type",
+            "support.class",
+            "storage.type.class",
+        ],
+    ),
+    (
+        "syntax.function",
+        &[
+            "entity.name.function",
+            "support.function",
+            "meta.function-call",
+        ],
+    ),
+    (
+        "syntax.definition",
+        &[
+            "entity.name.function.definition",
+            "entity.name",
+            "entity.name.namespace",
+        ],
+    ),
     ("syntax.variable", &["variable.other.readwrite", "variable"]),
-    ("syntax.property", &["variable.other.property", "support.type.property-name", "meta.object-literal.key"]),
+    (
+        "syntax.property",
+        &[
+            "variable.other.property",
+            "support.type.property-name",
+            "meta.object-literal.key",
+        ],
+    ),
     ("syntax.tag", &["entity.name.tag"]),
-    ("syntax.attribute", &["entity.other.attribute-name", "meta.preprocessor", "keyword.control.directive"]),
+    (
+        "syntax.attribute",
+        &[
+            "entity.other.attribute-name",
+            "meta.preprocessor",
+            "keyword.control.directive",
+        ],
+    ),
 ];
 
 /// `semanticTokenColors` type → Atlas syntax key. Only bare type names are
@@ -164,55 +284,211 @@ const SEMANTIC_MAP: &[(&str, &str)] = &[
 
 /// Ignored `colors` keys, grouped by the widget family they belong to.
 const IGNORED_PREFIXES: &[(&str, &str, &str)] = &[
-    ("editor.foldBackground", "editor furniture", "Atlas draws the fold placeholder from the secondary surface"),
-    ("activityBar", "app chrome", "Atlas's project rail follows the panel tokens"),
-    ("tab.", "app chrome", "Atlas's tab strip follows the accent and sidebar tokens"),
-    ("input.placeholderForeground", "text roles", "Atlas's placeholder follows muted-foreground"),
-    ("terminal.selectionBackground", "terminal", "Atlas derives the terminal selection from `primary`"),
+    (
+        "editor.foldBackground",
+        "editor furniture",
+        "Atlas draws the fold placeholder from the secondary surface",
+    ),
+    (
+        "activityBar",
+        "app chrome",
+        "Atlas's project rail follows the panel tokens",
+    ),
+    (
+        "tab.",
+        "app chrome",
+        "Atlas's tab strip follows the accent and sidebar tokens",
+    ),
+    (
+        "input.placeholderForeground",
+        "text roles",
+        "Atlas's placeholder follows muted-foreground",
+    ),
+    (
+        "terminal.selectionBackground",
+        "terminal",
+        "Atlas derives the terminal selection from `primary`",
+    ),
     ("minimap", "editor furniture", "Atlas has no minimap"),
-    ("editorOverviewRuler", "editor furniture", "Atlas has no overview ruler"),
-    ("editorIndentGuide", "editor furniture", "Atlas draws no indent guides"),
+    (
+        "editorOverviewRuler",
+        "editor furniture",
+        "Atlas has no overview ruler",
+    ),
+    (
+        "editorIndentGuide",
+        "editor furniture",
+        "Atlas draws no indent guides",
+    ),
     ("editorRuler", "editor furniture", "Atlas draws no rulers"),
-    ("editorWhitespace", "editor furniture", "Atlas does not render whitespace"),
-    ("editorCodeLens", "editor furniture", "Atlas has no code lens"),
-    ("editorInlayHint", "editor furniture", "Atlas has no inlay hints"),
-    ("editorLightBulb", "editor furniture", "Atlas has no light-bulb affordance"),
-    ("editorGhostText", "editor furniture", "Atlas has no ghost text"),
-    ("editorSuggestWidget", "widget", "Atlas's completions follow the popover tokens"),
-    ("editorHoverWidget", "widget", "Atlas's hovers follow the popover tokens"),
+    (
+        "editorWhitespace",
+        "editor furniture",
+        "Atlas does not render whitespace",
+    ),
+    (
+        "editorCodeLens",
+        "editor furniture",
+        "Atlas has no code lens",
+    ),
+    (
+        "editorInlayHint",
+        "editor furniture",
+        "Atlas has no inlay hints",
+    ),
+    (
+        "editorLightBulb",
+        "editor furniture",
+        "Atlas has no light-bulb affordance",
+    ),
+    (
+        "editorGhostText",
+        "editor furniture",
+        "Atlas has no ghost text",
+    ),
+    (
+        "editorSuggestWidget",
+        "widget",
+        "Atlas's completions follow the popover tokens",
+    ),
+    (
+        "editorHoverWidget",
+        "widget",
+        "Atlas's hovers follow the popover tokens",
+    ),
     ("peekView", "widget", "Atlas has no peek view"),
-    ("notification", "widget", "Atlas's toasts follow the popover tokens"),
-    ("quickInput", "widget", "Atlas's palettes follow the popover tokens"),
+    (
+        "notification",
+        "widget",
+        "Atlas's toasts follow the popover tokens",
+    ),
+    (
+        "quickInput",
+        "widget",
+        "Atlas's palettes follow the popover tokens",
+    ),
     ("menu", "widget", "Atlas's menus follow the popover tokens"),
     ("breadcrumb", "widget", "Atlas has no breadcrumb bar"),
     ("debug", "widget", "Atlas has no debugger"),
     ("debugToolBar", "widget", "Atlas has no debugger"),
     ("debugConsole", "widget", "Atlas has no debugger"),
     ("testing", "widget", "Atlas has no test explorer"),
-    ("merge", "vcs", "Atlas resolves conflicts through its own diff tokens"),
-    ("mergeEditor", "vcs", "Atlas resolves conflicts through its own diff tokens"),
-    ("gitDecoration", "vcs", "only added and deleted have an Atlas equivalent"),
-    ("scm", "vcs", "Atlas's source-control panel follows the panel tokens"),
-    ("statusBar", "app chrome", "Atlas's status bar follows the panel tokens"),
-    ("titleBar", "app chrome", "Atlas's title bar follows the panel tokens"),
-    ("activityBarBadge", "app chrome", "Atlas badges follow the status tokens"),
-    ("badge", "app chrome", "Atlas badges follow the status tokens"),
-    ("panelTitle", "app chrome", "Atlas panel titles follow the text tokens"),
-    ("panelSection", "app chrome", "Atlas panel sections follow the panel tokens"),
-    ("sideBarSectionHeader", "app chrome", "Atlas section headers follow the panel tokens"),
-    ("sideBarTitle", "app chrome", "Atlas section titles follow the text tokens"),
-    ("welcomePage", "app chrome", "Atlas has its own welcome screen"),
+    (
+        "merge",
+        "vcs",
+        "Atlas resolves conflicts through its own diff tokens",
+    ),
+    (
+        "mergeEditor",
+        "vcs",
+        "Atlas resolves conflicts through its own diff tokens",
+    ),
+    (
+        "gitDecoration",
+        "vcs",
+        "only added and deleted have an Atlas equivalent",
+    ),
+    (
+        "scm",
+        "vcs",
+        "Atlas's source-control panel follows the panel tokens",
+    ),
+    (
+        "statusBar",
+        "app chrome",
+        "Atlas's status bar follows the panel tokens",
+    ),
+    (
+        "titleBar",
+        "app chrome",
+        "Atlas's title bar follows the panel tokens",
+    ),
+    (
+        "activityBarBadge",
+        "app chrome",
+        "Atlas badges follow the status tokens",
+    ),
+    (
+        "badge",
+        "app chrome",
+        "Atlas badges follow the status tokens",
+    ),
+    (
+        "panelTitle",
+        "app chrome",
+        "Atlas panel titles follow the text tokens",
+    ),
+    (
+        "panelSection",
+        "app chrome",
+        "Atlas panel sections follow the panel tokens",
+    ),
+    (
+        "sideBarSectionHeader",
+        "app chrome",
+        "Atlas section headers follow the panel tokens",
+    ),
+    (
+        "sideBarTitle",
+        "app chrome",
+        "Atlas section titles follow the text tokens",
+    ),
+    (
+        "welcomePage",
+        "app chrome",
+        "Atlas has its own welcome screen",
+    ),
     ("walkThrough", "app chrome", "Atlas has no walkthroughs"),
-    ("settings", "app chrome", "Atlas's settings follow the app tokens"),
-    ("keybindingLabel", "app chrome", "Atlas's Kbd primitive follows the base tokens"),
-    ("notebook", "editor furniture", "Atlas has no notebook editor"),
-    ("charts", "widget", "Atlas charts use the chart-1…chart-5 base tokens"),
-    ("symbolIcon", "icon roles", "Atlas icons take their colour from the text roles"),
-    ("icon", "icon roles", "Atlas icons take their colour from the text roles"),
-    ("problemsErrorIcon", "icon roles", "Atlas icons take their colour from the text roles"),
-    ("terminalCommandDecoration", "terminal", "Atlas's terminal draws no command decorations"),
-    ("terminalOverviewRuler", "terminal", "Atlas's terminal has no overview ruler"),
-    ("terminalStickyScroll", "terminal", "Atlas's terminal has no sticky scroll"),
+    (
+        "settings",
+        "app chrome",
+        "Atlas's settings follow the app tokens",
+    ),
+    (
+        "keybindingLabel",
+        "app chrome",
+        "Atlas's Kbd primitive follows the base tokens",
+    ),
+    (
+        "notebook",
+        "editor furniture",
+        "Atlas has no notebook editor",
+    ),
+    (
+        "charts",
+        "widget",
+        "Atlas charts use the chart-1…chart-5 base tokens",
+    ),
+    (
+        "symbolIcon",
+        "icon roles",
+        "Atlas icons take their colour from the text roles",
+    ),
+    (
+        "icon",
+        "icon roles",
+        "Atlas icons take their colour from the text roles",
+    ),
+    (
+        "problemsErrorIcon",
+        "icon roles",
+        "Atlas icons take their colour from the text roles",
+    ),
+    (
+        "terminalCommandDecoration",
+        "terminal",
+        "Atlas's terminal draws no command decorations",
+    ),
+    (
+        "terminalOverviewRuler",
+        "terminal",
+        "Atlas's terminal has no overview ruler",
+    ),
+    (
+        "terminalStickyScroll",
+        "terminal",
+        "Atlas's terminal has no sticky scroll",
+    ),
 ];
 
 /// A VS Code theme file, after `include` has been resolved.
@@ -224,11 +500,26 @@ pub(crate) struct Resolved {
     pub unresolved: Vec<String>,
 }
 
-pub(crate) fn import(resolved: Resolved, options: &ImportOptions) -> Result<Vec<ImportedTheme>, ThemeError> {
+pub(crate) fn import(
+    resolved: Resolved,
+    options: &ImportOptions,
+) -> Result<Vec<ImportedTheme>, ThemeError> {
     let root = resolved.value;
-    let colors = root.get("colors").and_then(Value::as_object).cloned().unwrap_or_default();
-    let token_colors = root.get("tokenColors").and_then(Value::as_array).cloned().unwrap_or_default();
-    let semantic = root.get("semanticTokenColors").and_then(Value::as_object).cloned().unwrap_or_default();
+    let colors = root
+        .get("colors")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let token_colors = root
+        .get("tokenColors")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let semantic = root
+        .get("semanticTokenColors")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
     if colors.is_empty() && token_colors.is_empty() {
         return Err(crate::validation(
             &options.origin,
@@ -236,13 +527,21 @@ pub(crate) fn import(resolved: Resolved, options: &ImportOptions) -> Result<Vec<
         ));
     }
 
-    let name = root.get("name").and_then(Value::as_str).unwrap_or("VS Code theme").to_string();
+    let name = root
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("VS Code theme")
+        .to_string();
     let appearance: &'static str = match root.get("type").and_then(Value::as_str) {
         Some("light") | Some("hc-light") => "light",
         Some(_) => "dark",
         // No `type` at all: judge it by the editor background, which is the one
         // colour every theme sets.
-        None => match colors.get("editor.background").and_then(Value::as_str).and_then(crate::color::is_dark) {
+        None => match colors
+            .get("editor.background")
+            .and_then(Value::as_str)
+            .and_then(crate::color::is_dark)
+        {
             Some(false) => "light",
             _ => "dark",
         },
@@ -258,13 +557,17 @@ pub(crate) fn import(resolved: Resolved, options: &ImportOptions) -> Result<Vec<
         ));
     }
     if root.get("type").is_none() {
-        report.note(format!("no `type` field; the appearance was judged from editor.background as {appearance}"));
+        report.note(format!(
+            "no `type` field; the appearance was judged from editor.background as {appearance}"
+        ));
     }
 
     let mut draft = VariantDraft::new(appearance);
     let mut used: BTreeSet<String> = BTreeSet::new();
     for (source, targets) in COLOR_MAP {
-        let Some(value) = colors.get(*source).and_then(Value::as_str) else { continue };
+        let Some(value) = colors.get(*source).and_then(Value::as_str) else {
+            continue;
+        };
         let mut landed = false;
         for target in *targets {
             landed |= draft.map_color_key(target, source, value);
@@ -318,13 +621,20 @@ fn map_semantic(
 ) -> usize {
     let mut used = 0;
     for (selector, value) in semantic {
-        let Some(target) = SEMANTIC_MAP.iter().find(|(name, _)| name == selector).map(|(_, key)| *key) else {
+        let Some(target) = SEMANTIC_MAP
+            .iter()
+            .find(|(name, _)| name == selector)
+            .map(|(_, key)| *key)
+        else {
             continue;
         };
         let (color, italic) = match value {
             Value::String(color) => (Some(color.clone()), false),
             Value::Object(entry) => (
-                entry.get("foreground").and_then(Value::as_str).map(str::to_string),
+                entry
+                    .get("foreground")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
                 entry
                     .get("fontStyle")
                     .and_then(Value::as_str)
@@ -333,7 +643,11 @@ fn map_semantic(
             _ => (None, false),
         };
         let Some(color) = color else { continue };
-        if draft.map_key(target, &format!("semanticTokenColors.{selector}"), ThemeKeyValue::Color(color)) {
+        if draft.map_key(
+            target,
+            &format!("semanticTokenColors.{selector}"),
+            ThemeKeyValue::Color(color),
+        ) {
             used += 1;
             if italic {
                 report.ignore(
@@ -367,9 +681,11 @@ fn map_token_colors(token_colors: &[Value], draft: &mut VariantDraft, report: &m
         .enumerate()
         .map(|(order, entry)| Rule {
             scopes: match entry.get("scope") {
-                Some(Value::String(scope)) => {
-                    scope.split(',').map(|part| part.trim().to_string()).filter(|part| !part.is_empty()).collect()
-                }
+                Some(Value::String(scope)) => scope
+                    .split(',')
+                    .map(|part| part.trim().to_string())
+                    .filter(|part| !part.is_empty())
+                    .collect(),
                 Some(Value::Array(list)) => list
                     .iter()
                     .filter_map(Value::as_str)
@@ -397,9 +713,17 @@ fn map_token_colors(token_colors: &[Value], draft: &mut VariantDraft, report: &m
     let mut italicised = BTreeSet::new();
     for (target, candidates) in SCOPE_TABLE {
         for candidate in *candidates {
-            let Some(rule) = best_rule(&rules, candidate) else { continue };
-            let Some(color) = rule.foreground.clone() else { continue };
-            if draft.map_key(target, &format!("tokenColors[{candidate}]"), ThemeKeyValue::Color(color)) {
+            let Some(rule) = best_rule(&rules, candidate) else {
+                continue;
+            };
+            let Some(color) = rule.foreground.clone() else {
+                continue;
+            };
+            if draft.map_key(
+                target,
+                &format!("tokenColors[{candidate}]"),
+                ThemeKeyValue::Color(color),
+            ) {
                 matched_scopes.insert((*candidate).to_string());
                 if rule.italic {
                     italicised.insert((*candidate).to_string());
@@ -409,7 +733,11 @@ fn map_token_colors(token_colors: &[Value], draft: &mut VariantDraft, report: &m
         }
     }
     for scope in &italicised {
-        report.ignore(format!("tokenColors[{scope}].fontStyle"), "font styles", FONT_STYLE_REASON);
+        report.ignore(
+            format!("tokenColors[{scope}].fontStyle"),
+            "font styles",
+            FONT_STYLE_REASON,
+        );
     }
 
     // A rule whose every selector is a markup/diff/plain-text scope has no
@@ -420,7 +748,9 @@ fn map_token_colors(token_colors: &[Value], draft: &mut VariantDraft, report: &m
         .filter(|rule| !rule.scopes.is_empty())
         .filter(|rule| {
             !rule.scopes.iter().any(|scope| {
-                matched_scopes.iter().any(|matched| matched == scope || matched.starts_with(&format!("{scope}.")))
+                matched_scopes
+                    .iter()
+                    .any(|matched| matched == scope || matched.starts_with(&format!("{scope}.")))
             })
         })
         .count();

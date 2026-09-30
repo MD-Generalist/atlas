@@ -64,7 +64,14 @@ fn a_session_with_several_turns_produces_one_session_and_one_message_per_turn() 
     capture.finish_turn(&session_id, 1).unwrap();
 
     capture
-        .record_prompt(&key("sess-1"), "Now cover the burst case", 2, None, None, None)
+        .record_prompt(
+            &key("sess-1"),
+            "Now cover the burst case",
+            2,
+            None,
+            None,
+            None,
+        )
         .unwrap();
     capture
         .record_turn(&session_id, assistant(2, "Added a burst allowance."))
@@ -77,7 +84,10 @@ fn a_session_with_several_turns_produces_one_session_and_one_message_per_turn() 
     let messages = store.messages_for_session(&session_id).unwrap();
     // Two prompts and two responses.
     assert_eq!(messages.len(), 4);
-    assert!(messages.windows(2).all(|w| w[0].seq < w[1].seq), "seq must be ordered");
+    assert!(
+        messages.windows(2).all(|w| w[0].seq < w[1].seq),
+        "seq must be ordered"
+    );
 }
 
 #[test]
@@ -101,12 +111,19 @@ fn the_session_row_carries_its_identifying_facts() {
             &session_id,
             1,
             None,
-            &TokenTotals { input_tokens: 1200, output_tokens: 340, ..Default::default() },
+            &TokenTotals {
+                input_tokens: 1200,
+                output_tokens: 340,
+                ..Default::default()
+            },
         )
         .unwrap();
 
     let session = store.session(&session_id).unwrap().expect("session");
-    assert_eq!(session.title.as_deref(), Some("Fix the flaky auth test in CI"));
+    assert_eq!(
+        session.title.as_deref(),
+        Some("Fix the flaky auth test in CI")
+    );
     assert_eq!(session.source, Source::Acp);
     assert_eq!(session.native_session_id, "sess-abc");
     assert_eq!(session.agent.as_deref(), Some("claude-code"));
@@ -129,7 +146,14 @@ fn the_title_derives_from_the_user_prompt_which_is_not_on_the_delta_stream() {
     let mut capture = Capture::new(&mut store, ProjectMode::Local);
 
     let session_id = capture
-        .record_prompt(&key("s"), "Investigate why the watcher misses renames", 1, None, None, None)
+        .record_prompt(
+            &key("s"),
+            "Investigate why the watcher misses renames",
+            1,
+            None,
+            None,
+            None,
+        )
         .unwrap();
 
     let session = store.session(&session_id).unwrap().unwrap();
@@ -144,7 +168,10 @@ fn the_title_derives_from_the_user_prompt_which_is_not_on_the_delta_stream() {
         .into_iter()
         .filter(|m| m.role == Role::User)
         .count();
-    assert_eq!(prompts, 1, "the prompt itself is stored, not only its title");
+    assert_eq!(
+        prompts, 1,
+        "the prompt itself is stored, not only its title"
+    );
 }
 
 #[test]
@@ -174,7 +201,12 @@ fn a_later_prompt_does_not_rewrite_the_title() {
         .unwrap();
 
     assert_eq!(
-        store.session(&session_id).unwrap().unwrap().title.as_deref(),
+        store
+            .session(&session_id)
+            .unwrap()
+            .unwrap()
+            .title
+            .as_deref(),
         Some("First question")
     );
 }
@@ -190,7 +222,9 @@ fn role_and_mode_are_columns_so_the_sidebar_counts_need_no_body_read() {
     let session_id = capture
         .record_prompt(&key("s"), "Add rate limiting", 1, None, None, None)
         .unwrap();
-    capture.record_turn(&session_id, assistant(1, "Here is the plan.")).unwrap();
+    capture
+        .record_turn(&session_id, assistant(1, "Here is the plan."))
+        .unwrap();
     capture
         .record_turn(
             &session_id,
@@ -204,7 +238,9 @@ fn role_and_mode_are_columns_so_the_sidebar_counts_need_no_body_read() {
             },
         )
         .unwrap();
-    capture.record_turn(&session_id, assistant(1, "Done.")).unwrap();
+    capture
+        .record_turn(&session_id, assistant(1, "Done."))
+        .unwrap();
 
     let counts = store.facet_counts(&session_id).unwrap();
     let lookup = |role, mode| {
@@ -217,7 +253,11 @@ fn role_and_mode_are_columns_so_the_sidebar_counts_need_no_body_read() {
 
     assert_eq!(lookup(Role::User, Mode::Text), 1, "Prompts");
     assert_eq!(lookup(Role::Assistant, Mode::Text), 2, "Responses");
-    assert_eq!(lookup(Role::Assistant, Mode::Thinking), 1, "Intermediate steps");
+    assert_eq!(
+        lookup(Role::Assistant, Mode::Thinking),
+        1,
+        "Intermediate steps"
+    );
 }
 
 #[test]
@@ -258,7 +298,10 @@ fn a_secret_in_a_turn_is_absent_from_the_database() {
     let messages = store.messages_for_session(&session_id).unwrap();
     let stored = messages.iter().find(|m| m.role == Role::Assistant).unwrap();
     let body = store.message_body(stored).unwrap();
-    assert!(!body.contains("supersecretvalue123"), "secret stored: {body}");
+    assert!(
+        !body.contains("supersecretvalue123"),
+        "secret stored: {body}"
+    );
     assert!(body.contains("[REDACTED]"));
     assert!(!stored.preview.contains("supersecretvalue123"));
 }
@@ -310,7 +353,11 @@ fn the_redaction_tally_accumulates_on_the_session() {
 
     // This is what the promotion and import confirmations show a developer
     // before a bulk disclosure.
-    let counts = store.session(&session_id).unwrap().unwrap().redaction_counts;
+    let counts = store
+        .session(&session_id)
+        .unwrap()
+        .unwrap()
+        .redaction_counts;
     let total: u64 = counts
         .as_object()
         .unwrap()
@@ -335,14 +382,19 @@ fn a_body_over_the_threshold_is_spilled_and_referenced_with_a_preview_retained()
     // The measured corpus's largest single message is 2.02 MB.
     let huge = "log line with some content\n".repeat(90_000);
     assert!(huge.len() > SPILL_THRESHOLD_BYTES);
-    capture.record_turn(&session_id, assistant(1, &huge)).unwrap();
+    capture
+        .record_turn(&session_id, assistant(1, &huge))
+        .unwrap();
 
     let messages = store.messages_for_session(&session_id).unwrap();
     let stored = messages.iter().find(|m| m.role == Role::Assistant).unwrap();
 
     assert!(stored.is_spilled(), "large body should not sit on the row");
     assert!(stored.body.is_none());
-    assert!(!stored.preview.is_empty(), "a preview is what a list renders");
+    assert!(
+        !stored.preview.is_empty(),
+        "a preview is what a list renders"
+    );
     assert!(stored.preview.len() <= atlas_checkpoint::PREVIEW_BYTES);
     // Round-trips in full: the detail view must show what actually happened.
     assert_eq!(store.message_body(stored).unwrap().len(), huge.len());
@@ -354,8 +406,12 @@ fn a_small_body_stays_inline() {
     let mut store = store_in(dir.path());
     let mut capture = Capture::new(&mut store, ProjectMode::Local);
 
-    let session_id = capture.record_prompt(&key("s"), "hi", 1, None, None, None).unwrap();
-    capture.record_turn(&session_id, assistant(1, "hello")).unwrap();
+    let session_id = capture
+        .record_prompt(&key("s"), "hi", 1, None, None, None)
+        .unwrap();
+    capture
+        .record_turn(&session_id, assistant(1, "hello"))
+        .unwrap();
 
     let messages = store.messages_for_session(&session_id).unwrap();
     let stored = messages.iter().find(|m| m.role == Role::Assistant).unwrap();
@@ -379,8 +435,12 @@ fn two_concurrent_sessions_in_one_project_stay_separate() {
         .unwrap();
     assert_ne!(first, second);
 
-    capture.record_turn(&first, assistant(1, "parser change")).unwrap();
-    capture.record_turn(&second, assistant(1, "watcher change")).unwrap();
+    capture
+        .record_turn(&first, assistant(1, "parser change"))
+        .unwrap();
+    capture
+        .record_turn(&second, assistant(1, "watcher change"))
+        .unwrap();
 
     assert_eq!(store.sessions_for_project(WORKSPACE).unwrap().len(), 2);
     assert_eq!(store.messages_for_session(&first).unwrap().len(), 2);
@@ -449,7 +509,9 @@ fn a_turn_recorded_with_its_own_timestamp_keeps_it() {
     let mut store = store_in(dir.path());
     let mut capture = Capture::new(&mut store, ProjectMode::Local);
 
-    let session_id = capture.record_prompt(&key("s"), "hi", 1, None, None, None).unwrap();
+    let session_id = capture
+        .record_prompt(&key("s"), "hi", 1, None, None, None)
+        .unwrap();
     let then = chrono::DateTime::parse_from_rfc3339("2025-03-04T05:06:07Z")
         .unwrap()
         .with_timezone(&chrono::Utc);
@@ -482,7 +544,9 @@ fn re_processing_the_same_turn_does_not_duplicate_the_message() {
     let mut store = store_in(dir.path());
     let mut capture = Capture::new(&mut store, ProjectMode::Local);
 
-    let session_id = capture.record_prompt(&key("s"), "hi", 1, None, None, None).unwrap();
+    let session_id = capture
+        .record_prompt(&key("s"), "hi", 1, None, None, None)
+        .unwrap();
     let content = TurnContent {
         turn_seq: 1,
         native_message_id: Some("msg-from-the-agent".into()),
@@ -492,7 +556,10 @@ fn re_processing_the_same_turn_does_not_duplicate_the_message() {
         created_at: None,
     };
 
-    assert!(capture.record_turn(&session_id, content.clone()).unwrap().is_some());
+    assert!(capture
+        .record_turn(&session_id, content.clone())
+        .unwrap()
+        .is_some());
     assert!(
         capture.record_turn(&session_id, content).unwrap().is_none(),
         "a second sighting of the same message is a no-op"
@@ -513,8 +580,12 @@ fn the_same_conversation_seen_twice_reuses_its_session_row() {
     let mut store = store_in(dir.path());
     let mut capture = Capture::new(&mut store, ProjectMode::Local);
 
-    let first = capture.record_prompt(&key("sess-1"), "one", 1, None, None, None).unwrap();
-    let second = capture.record_prompt(&key("sess-1"), "two", 2, None, None, None).unwrap();
+    let first = capture
+        .record_prompt(&key("sess-1"), "one", 1, None, None, None)
+        .unwrap();
+    let second = capture
+        .record_prompt(&key("sess-1"), "two", 2, None, None, None)
+        .unwrap();
     assert_eq!(first, second, "identity is (project, source, native id)");
     assert_eq!(store.sessions_for_project(WORKSPACE).unwrap().len(), 1);
 }
@@ -528,7 +599,9 @@ fn the_same_native_id_under_a_different_source_is_a_different_row() {
     let mut store = store_in(dir.path());
     let mut capture = Capture::new(&mut store, ProjectMode::Local);
 
-    capture.record_prompt(&key("shared-id"), "live", 1, None, None, None).unwrap();
+    capture
+        .record_prompt(&key("shared-id"), "live", 1, None, None, None)
+        .unwrap();
     capture
         .record_prompt(
             &SessionKey {
@@ -557,8 +630,12 @@ fn every_row_starts_local_in_a_local_project_and_nothing_is_uploaded() {
     let mut store = store_in(dir.path());
     let mut capture = Capture::new(&mut store, ProjectMode::Local);
 
-    let session_id = capture.record_prompt(&key("s"), "hi", 1, None, None, None).unwrap();
-    capture.record_turn(&session_id, assistant(1, "hello")).unwrap();
+    let session_id = capture
+        .record_prompt(&key("s"), "hi", 1, None, None, None)
+        .unwrap();
+    capture
+        .record_turn(&session_id, assistant(1, "hello"))
+        .unwrap();
 
     assert_eq!(
         store.session(&session_id).unwrap().unwrap().sync_state,
@@ -575,8 +652,12 @@ fn a_cloud_project_starts_rows_pending_for_the_drain() {
     let mut store = store_in(dir.path());
     let mut capture = Capture::new(&mut store, ProjectMode::Cloud);
 
-    let session_id = capture.record_prompt(&key("s"), "hi", 1, None, None, None).unwrap();
-    capture.record_turn(&session_id, assistant(1, "hello")).unwrap();
+    let session_id = capture
+        .record_prompt(&key("s"), "hi", 1, None, None, None)
+        .unwrap();
+    capture
+        .record_turn(&session_id, assistant(1, "hello"))
+        .unwrap();
 
     assert_eq!(
         store.session(&session_id).unwrap().unwrap().sync_state,
@@ -595,14 +676,21 @@ fn completed_turns_survive_reopening_the_store() {
         let session_id = capture
             .record_prompt(&key("s"), "Add rate limiting", 1, None, None, None)
             .unwrap();
-        capture.record_turn(&session_id, assistant(1, "done")).unwrap();
+        capture
+            .record_turn(&session_id, assistant(1, "done"))
+            .unwrap();
         capture.finish_turn(&session_id, 1).unwrap();
         session_id
     };
 
     let reopened = store_in(dir.path());
     assert_eq!(reopened.messages_for_session(&session_id).unwrap().len(), 2);
-    assert!(reopened.session(&session_id).unwrap().unwrap().title.is_some());
+    assert!(reopened
+        .session(&session_id)
+        .unwrap()
+        .unwrap()
+        .title
+        .is_some());
 }
 
 #[test]
@@ -614,7 +702,9 @@ fn a_turn_left_open_is_reconciled_as_aborted_rather_than_read_as_finished() {
         let session_id = capture
             .record_prompt(&key("s"), "long running task", 1, None, None, None)
             .unwrap();
-        capture.record_turn(&session_id, assistant(1, "partial")).unwrap();
+        capture
+            .record_turn(&session_id, assistant(1, "partial"))
+            .unwrap();
         // No `finish_turn` — the agent died mid-turn.
         session_id
     };
@@ -633,7 +723,9 @@ fn a_completed_turn_stays_completed_across_a_reopen() {
     let session_id = {
         let mut store = store_in(dir.path());
         let mut capture = Capture::new(&mut store, ProjectMode::Local);
-        let session_id = capture.record_prompt(&key("s"), "task", 1, None, None, None).unwrap();
+        let session_id = capture
+            .record_prompt(&key("s"), "task", 1, None, None, None)
+            .unwrap();
         capture.finish_turn(&session_id, 1).unwrap();
         session_id
     };
@@ -656,7 +748,10 @@ fn a_second_store_on_the_same_project_cannot_become_a_second_writer() {
     assert!(first.is_writer());
 
     let second = store_in(dir.path());
-    assert!(!second.is_writer(), "second window must not become a writer");
+    assert!(
+        !second.is_writer(),
+        "second window must not become a writer"
+    );
 
     // …but it can still read, so the timeline browses in both windows.
     assert!(second.sessions_for_project(WORKSPACE).is_ok());
@@ -692,7 +787,9 @@ fn a_storage_failure_flags_the_session_and_does_not_panic() {
     let mut store = store_in(dir.path());
     let mut capture = Capture::new(&mut store, ProjectMode::Local);
 
-    let session_id = capture.record_prompt(&key("s"), "hi", 1, None, None, None).unwrap();
+    let session_id = capture
+        .record_prompt(&key("s"), "hi", 1, None, None, None)
+        .unwrap();
 
     // Make the blob directory unwritable, so spilling a large body fails the
     // way a full disk or a permissions problem would.
@@ -745,13 +842,17 @@ fn capture_adds_no_perceptible_latency_to_a_turn() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store_in(dir.path());
     let mut capture = Capture::new(&mut store, ProjectMode::Local);
-    let session_id = capture.record_prompt(&key("s"), "go", 1, None, None, None).unwrap();
+    let session_id = capture
+        .record_prompt(&key("s"), "go", 1, None, None, None)
+        .unwrap();
 
     // A realistic assistant turn, recorded a hundred times.
     let body = "I've added a token bucket keyed on org_id.\n".repeat(40);
     let started = std::time::Instant::now();
     for turn in 0..100 {
-        capture.record_turn(&session_id, assistant(turn, &body)).unwrap();
+        capture
+            .record_turn(&session_id, assistant(turn, &body))
+            .unwrap();
     }
     let per_turn = started.elapsed() / 100;
 
@@ -767,7 +868,11 @@ fn capture_adds_no_perceptible_latency_to_a_turn() {
 // ── The per-turn usage ledger ───────────────────────────────────────────────
 
 fn usage(input: u64, output: u64) -> TokenTotals {
-    TokenTotals { input_tokens: input, output_tokens: output, ..Default::default() }
+    TokenTotals {
+        input_tokens: input,
+        output_tokens: output,
+        ..Default::default()
+    }
 }
 
 fn ledger_sum(rows: &[atlas_checkpoint::UsageDeltaRow]) -> [u64; 5] {
@@ -785,25 +890,46 @@ fn cumulative_reports_ledger_one_row_per_turn_and_sum_to_the_session_totals() {
     let mut store = store_in(dir.path());
     let mut capture = Capture::new(&mut store, ProjectMode::Local);
     let session_id = capture
-        .record_prompt(&key("s"), "go", 1, Some("claude-code"), Some("opus-5"), None)
+        .record_prompt(
+            &key("s"),
+            "go",
+            1,
+            Some("claude-code"),
+            Some("opus-5"),
+            None,
+        )
         .unwrap();
 
     // Turn 1 reports twice (two model calls), turn 2 once — all cumulative.
-    capture.record_usage(&session_id, 1, None, &usage(100, 10)).unwrap();
-    capture.record_usage(&session_id, 1, None, &usage(250, 30)).unwrap();
-    capture.record_usage(&session_id, 2, None, &usage(400, 50)).unwrap();
+    capture
+        .record_usage(&session_id, 1, None, &usage(100, 10))
+        .unwrap();
+    capture
+        .record_usage(&session_id, 1, None, &usage(250, 30))
+        .unwrap();
+    capture
+        .record_usage(&session_id, 2, None, &usage(400, 50))
+        .unwrap();
 
     let rows = store.usage_deltas_for_project(WORKSPACE).unwrap();
     assert_eq!(rows.len(), 2, "one row per turn, not per report");
     assert_eq!(rows[0].turn_seq, 1);
-    assert_eq!(rows[0].totals.split(), [250, 30, 0, 0, 0], "turn 1 summed in place");
+    assert_eq!(
+        rows[0].totals.split(),
+        [250, 30, 0, 0, 0],
+        "turn 1 summed in place"
+    );
     assert_eq!(rows[1].turn_seq, 2);
     assert_eq!(rows[1].totals.split(), [150, 20, 0, 0, 0]);
     assert_eq!(rows[0].session_id, session_id);
 
     let session = store.session(&session_id).unwrap().unwrap();
     assert_eq!(session.token_totals.split(), [400, 50, 0, 0, 0]);
-    assert_eq!(ledger_sum(&rows), session.token_totals.split(), "Σ ledger == totals");
+    assert_eq!(
+        ledger_sum(&rows),
+        session.token_totals.split(),
+        "Σ ledger == totals"
+    );
 }
 
 #[test]
@@ -811,11 +937,17 @@ fn a_lower_report_grows_the_totals_instead_of_shrinking_them() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store_in(dir.path());
     let mut capture = Capture::new(&mut store, ProjectMode::Local);
-    let session_id = capture.record_prompt(&key("s"), "go", 1, None, None, None).unwrap();
+    let session_id = capture
+        .record_prompt(&key("s"), "go", 1, None, None, None)
+        .unwrap();
 
-    capture.record_usage(&session_id, 1, None, &usage(400, 50)).unwrap();
+    capture
+        .record_usage(&session_id, 1, None, &usage(400, 50))
+        .unwrap();
     // The counter restarted — a resumed conversation reporting from zero.
-    capture.record_usage(&session_id, 2, None, &usage(120, 5)).unwrap();
+    capture
+        .record_usage(&session_id, 2, None, &usage(120, 5))
+        .unwrap();
 
     let session = store.session(&session_id).unwrap().unwrap();
     assert_eq!(session.token_totals.input_tokens, 520);
@@ -829,23 +961,39 @@ fn a_gauge_only_report_writes_no_ledger_row_but_keeps_the_gauge() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store_in(dir.path());
     let mut capture = Capture::new(&mut store, ProjectMode::Local);
-    let session_id = capture.record_prompt(&key("s"), "go", 1, None, None, None).unwrap();
+    let session_id = capture
+        .record_prompt(&key("s"), "go", 1, None, None, None)
+        .unwrap();
 
-    capture.record_usage(&session_id, 1, None, &usage(100, 10)).unwrap();
+    capture
+        .record_usage(&session_id, 1, None, &usage(100, 10))
+        .unwrap();
     capture
         .record_usage(
             &session_id,
             1,
             None,
-            &TokenTotals { context_used: Some(8_000), context_size: Some(200_000), ..Default::default() },
+            &TokenTotals {
+                context_used: Some(8_000),
+                context_size: Some(200_000),
+                ..Default::default()
+            },
         )
         .unwrap();
 
     let rows = store.usage_deltas_for_project(WORKSPACE).unwrap();
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].totals.split(), [100, 10, 0, 0, 0], "the gauge added nothing");
+    assert_eq!(
+        rows[0].totals.split(),
+        [100, 10, 0, 0, 0],
+        "the gauge added nothing"
+    );
     let session = store.session(&session_id).unwrap().unwrap();
-    assert_eq!(session.token_totals.split(), [100, 10, 0, 0, 0], "split untouched");
+    assert_eq!(
+        session.token_totals.split(),
+        [100, 10, 0, 0, 0],
+        "split untouched"
+    );
     assert_eq!(session.token_totals.context_used, Some(8_000));
     assert_eq!(session.token_totals.context_size, Some(200_000));
     assert!(store.ledger_since().unwrap().is_some());
@@ -857,20 +1005,30 @@ fn an_importer_overwrite_between_live_reports_does_not_disturb_the_live_baseline
     let mut store = store_in(dir.path());
     let session_id = {
         let mut capture = Capture::new(&mut store, ProjectMode::Local);
-        let id = capture.record_prompt(&key("s"), "go", 1, None, None, None).unwrap();
+        let id = capture
+            .record_prompt(&key("s"), "go", 1, None, None, None)
+            .unwrap();
         capture.record_usage(&id, 1, None, &usage(100, 10)).unwrap();
         id
     };
     // The importer re-parsed the transcript and replaced the total wholesale.
-    store.replace_usage_totals(&session_id, &usage(5_000, 500)).unwrap();
+    store
+        .replace_usage_totals(&session_id, &usage(5_000, 500))
+        .unwrap();
     {
         let mut capture = Capture::new(&mut store, ProjectMode::Local);
-        capture.record_usage(&session_id, 2, None, &usage(150, 20)).unwrap();
+        capture
+            .record_usage(&session_id, 2, None, &usage(150, 20))
+            .unwrap();
     }
 
     let rows = store.usage_deltas_for_project(WORKSPACE).unwrap();
     assert_eq!(rows.len(), 2);
-    assert_eq!(rows[1].totals.split(), [50, 10, 0, 0, 0], "delta against the LIVE cursor");
+    assert_eq!(
+        rows[1].totals.split(),
+        [50, 10, 0, 0, 0],
+        "delta against the LIVE cursor"
+    );
     let session = store.session(&session_id).unwrap().unwrap();
     assert_eq!(session.token_totals.input_tokens, 5_050);
     assert_eq!(session.token_totals.output_tokens, 510);
@@ -882,14 +1040,29 @@ fn the_ledger_records_the_turns_model_and_falls_back_to_the_sessions() {
     let mut store = store_in(dir.path());
     let mut capture = Capture::new(&mut store, ProjectMode::Local);
     let session_id = capture
-        .record_prompt(&key("s"), "go", 1, Some("claude-code"), Some("opus-5"), None)
+        .record_prompt(
+            &key("s"),
+            "go",
+            1,
+            Some("claude-code"),
+            Some("opus-5"),
+            None,
+        )
         .unwrap();
 
-    capture.record_usage(&session_id, 1, None, &usage(100, 10)).unwrap();
-    capture.record_usage(&session_id, 2, Some("sonnet-5"), &usage(200, 20)).unwrap();
+    capture
+        .record_usage(&session_id, 1, None, &usage(100, 10))
+        .unwrap();
+    capture
+        .record_usage(&session_id, 2, Some("sonnet-5"), &usage(200, 20))
+        .unwrap();
 
     let rows = store.usage_deltas_for_project(WORKSPACE).unwrap();
-    assert_eq!(rows[0].model.as_deref(), Some("opus-5"), "None falls back to the Session's model");
+    assert_eq!(
+        rows[0].model.as_deref(),
+        Some("opus-5"),
+        "None falls back to the Session's model"
+    );
     assert_eq!(rows[1].model.as_deref(), Some("sonnet-5"));
 }
 
@@ -900,11 +1073,18 @@ fn ledger_since_is_none_until_the_first_ledgered_turn() {
     assert_eq!(store.ledger_since().unwrap(), None);
 
     let mut capture = Capture::new(&mut store, ProjectMode::Local);
-    let session_id = capture.record_prompt(&key("s"), "go", 1, None, None, None).unwrap();
+    let session_id = capture
+        .record_prompt(&key("s"), "go", 1, None, None, None)
+        .unwrap();
     let before = chrono::Utc::now();
-    capture.record_usage(&session_id, 1, None, &usage(1, 1)).unwrap();
+    capture
+        .record_usage(&session_id, 1, None, &usage(1, 1))
+        .unwrap();
 
-    let since = store.ledger_since().unwrap().expect("a ledger row exists now");
+    let since = store
+        .ledger_since()
+        .unwrap()
+        .expect("a ledger row exists now");
     assert!(since >= before - chrono::Duration::seconds(1));
     assert!(since <= chrono::Utc::now() + chrono::Duration::seconds(1));
 }
@@ -916,7 +1096,9 @@ fn turn_message_counts_group_by_turn_with_the_earliest_stamp() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store_in(dir.path());
     let mut capture = Capture::new(&mut store, ProjectMode::Local);
-    let session_id = capture.record_prompt(&key("s"), "go", 1, None, None, None).unwrap();
+    let session_id = capture
+        .record_prompt(&key("s"), "go", 1, None, None, None)
+        .unwrap();
 
     let t1a = Utc.with_ymd_and_hms(2026, 8, 20, 9, 0, 0).unwrap();
     let t1b = Utc.with_ymd_and_hms(2026, 8, 20, 9, 5, 0).unwrap();
@@ -925,7 +1107,10 @@ fn turn_message_counts_group_by_turn_with_the_earliest_stamp() {
         capture
             .record_turn(
                 &session_id,
-                TurnContent { created_at: Some(stamp), ..assistant(turn, body) },
+                TurnContent {
+                    created_at: Some(stamp),
+                    ..assistant(turn, body)
+                },
             )
             .unwrap();
     }
@@ -937,7 +1122,10 @@ fn turn_message_counts_group_by_turn_with_the_earliest_stamp() {
     assert_eq!(turns[0].turn_seq, 1);
     // The prompt on turn 1 plus the two assistant rows.
     assert_eq!(turns[0].messages, 3);
-    assert!(turns[0].first_at <= t1a, "earliest stamp on the turn, not the latest");
+    assert!(
+        turns[0].first_at <= t1a,
+        "earliest stamp on the turn, not the latest"
+    );
     assert_eq!(turns[1].turn_seq, 2);
     assert_eq!(turns[1].messages, 1);
     assert_eq!(turns[1].first_at, t2);

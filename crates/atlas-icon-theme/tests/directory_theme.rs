@@ -61,9 +61,15 @@ fn seti_like_vsix() -> Vec<u8> {
             ("extension/icons/seti.json", document.as_bytes()),
             // Not a real WOFF; the crate only moves the bytes.
             ("extension/icons/seti.woff", b"wOFF-pretend".as_slice()),
-            ("extension/images/logo.png", b"\x89PNG\r\n\x1a\n-pretend".as_slice()),
+            (
+                "extension/images/logo.png",
+                b"\x89PNG\r\n\x1a\n-pretend".as_slice(),
+            ),
             // Dropped on unpack: an extension host Atlas never runs.
-            ("extension/dist/extension.js", b"module.exports={}".as_slice()),
+            (
+                "extension/dist/extension.js",
+                b"module.exports={}".as_slice(),
+            ),
             ("extension.vsixmanifest", b"<PackageManifest/>".as_slice()),
         ] {
             writer.start_file(name, options).expect("start_file");
@@ -84,7 +90,10 @@ fn a_vsix_unpacks_into_a_loadable_theme() {
     unpack(dir.path());
     let theme = load_from_directory("atlas-tests.pretend-seti", dir.path()).expect("loads");
 
-    assert_eq!(theme.summary.name, "Pretend Seti", "the contribution's label wins");
+    assert_eq!(
+        theme.summary.name, "Pretend Seti",
+        "the contribution's label wins"
+    );
     assert_eq!(theme.summary.author, "Atlas Tests");
     assert_eq!(theme.summary.license, "MIT");
     assert!(!theme.summary.built_in);
@@ -99,18 +108,33 @@ fn a_glyph_icon_arrives_with_its_character_and_colour_inline() {
     let theme = load_from_directory("pretend-seti", dir.path()).expect("loads");
 
     let requests = vec![
-        IconRequest { path: "/p/a.ts".into(), kind: IconKind::File, language_id: None },
-        IconRequest { path: "/p/a.unknown".into(), kind: IconKind::File, language_id: None },
+        IconRequest {
+            path: "/p/a.ts".into(),
+            kind: IconKind::File,
+            language_id: None,
+        },
+        IconRequest {
+            path: "/p/a.unknown".into(),
+            kind: IconKind::File,
+            language_id: None,
+        },
     ];
     let resolved = resolve_icons(&theme, &requests, Appearance::Dark);
 
-    let ResolvedIcon::Glyph { definition, character, color, .. } =
-        resolved[0].clone().expect("the .ts file resolves")
+    let ResolvedIcon::Glyph {
+        definition,
+        character,
+        color,
+        ..
+    } = resolved[0].clone().expect("the .ts file resolves")
     else {
         panic!("expected a glyph");
     };
     assert_eq!(definition, "_ts");
-    assert_eq!(character, "\u{E002}", "decoded from the theme's `\\E002` escape");
+    assert_eq!(
+        character, "\u{E002}",
+        "decoded from the theme's `\\E002` escape"
+    );
     assert_eq!(color.as_deref(), Some("#519aba"));
 
     let ResolvedIcon::Glyph { definition, .. } = resolved[1].clone().expect("falls back") else {
@@ -124,8 +148,11 @@ fn the_light_section_of_a_directory_theme_is_honoured() {
     let dir = tempfile::tempdir().expect("tempdir");
     unpack(dir.path());
     let theme = load_from_directory("pretend-seti", dir.path()).expect("loads");
-    let requests =
-        vec![IconRequest { path: "/p/a.ts".into(), kind: IconKind::File, language_id: None }];
+    let requests = vec![IconRequest {
+        path: "/p/a.ts".into(),
+        kind: IconKind::File,
+        language_id: None,
+    }];
 
     let dark = resolve_icons(&theme, &requests, Appearance::Dark);
     let light = resolve_icons(&theme, &requests, Appearance::Light);
@@ -146,7 +173,11 @@ fn the_theme_font_comes_back_inlined_as_a_data_url() {
     assert_eq!(fonts.len(), 1);
     assert_eq!(fonts[0].id, "seti");
     assert_eq!(fonts[0].size.as_deref(), Some("115%"));
-    assert_eq!(fonts[0].src.len(), 1, "the font file was found through two relative hops");
+    assert_eq!(
+        fonts[0].src.len(),
+        1,
+        "the font file was found through two relative hops"
+    );
     assert_eq!(fonts[0].src[0].format, "woff");
     assert_eq!(
         fonts[0].src[0].url, "data:font/woff;base64,d09GRi1wcmV0ZW5k",
@@ -173,7 +204,10 @@ fn a_binary_icon_comes_back_as_a_data_url_and_an_svg_as_source() {
     .expect("write");
 
     let theme = load_from_directory("pretend-seti", dir.path()).expect("loads");
-    let assets = icon_assets(&theme, &["_png".to_string(), "_svg".to_string(), "_ts".to_string()]);
+    let assets = icon_assets(
+        &theme,
+        &["_png".to_string(), "_svg".to_string(), "_ts".to_string()],
+    );
 
     assert_eq!(assets.len(), 2, "a glyph definition has no asset to fetch");
     match assets.get("_png").expect("png") {

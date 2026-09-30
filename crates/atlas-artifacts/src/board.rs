@@ -172,7 +172,10 @@ impl CloudBoard {
         self.orgs
             .read()
             .ok()
-            .and_then(|orgs| orgs.get(org_id).map(|board| board.attempted && !board.loaded))
+            .and_then(|orgs| {
+                orgs.get(org_id)
+                    .map(|board| board.attempted && !board.loaded)
+            })
             .unwrap_or(false)
     }
 
@@ -251,7 +254,12 @@ mod tests {
         // A Session deleted server-side has to leave the board. Merging would
         // keep it forever, because nothing ever announces a deletion.
         let board = CloudBoard::new();
-        board.replace("org_1", vec![session("a", "ws_1", "t1"), session("b", "ws_1", "t1")], vec![], vec![]);
+        board.replace(
+            "org_1",
+            vec![session("a", "ws_1", "t1"), session("b", "ws_1", "t1")],
+            vec![],
+            vec![],
+        );
         board.replace("org_1", vec![session("b", "ws_1", "t2")], vec![], vec![]);
 
         let snap = board.snapshot("org_1");
@@ -349,7 +357,12 @@ mod tests {
     #[test]
     fn clearing_leaves_nothing_for_the_next_organisation() {
         let board = CloudBoard::new();
-        board.replace("org_1", vec![session("a", "ws_1", "t1")], vec![], vec!["a note".into()]);
+        board.replace(
+            "org_1",
+            vec![session("a", "ws_1", "t1")],
+            vec![],
+            vec!["a note".into()],
+        );
         board.clear();
         assert!(board.snapshot("org_1").sessions.is_empty());
     }
@@ -362,8 +375,16 @@ mod tests {
             "org_1",
             vec![session("a", "ws_1", "t1"), session("b", "ws_2", "t1")],
             vec![
-                RemoteProject { id: "ws_1".into(), slug: None, name: None },
-                RemoteProject { id: "ws_2".into(), slug: None, name: None },
+                RemoteProject {
+                    id: "ws_1".into(),
+                    slug: None,
+                    name: None,
+                },
+                RemoteProject {
+                    id: "ws_2".into(),
+                    slug: None,
+                    name: None,
+                },
             ],
             vec![],
         );

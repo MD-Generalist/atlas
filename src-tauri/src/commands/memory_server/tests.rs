@@ -16,14 +16,22 @@ use rmcp::{RoleClient, ServiceExt};
 use serde_json::{json, Value};
 
 use super::briefing::{rank_index, score, SessionClocks, SessionReads, INDEX_MAX_ENTRIES};
-use super::tools::{tool_names, tools_list, Bootstrap, BootstrapSource, IndexDoc, IndexEvict, IndexSearch, TOOLS_LIST_TTL_MS};
+use super::tools::{
+    tool_names, tools_list, Bootstrap, BootstrapSource, IndexDoc, IndexEvict, IndexSearch,
+    TOOLS_LIST_TTL_MS,
+};
 use super::*;
 use crate::commands::agent_host::SessionLifecycle;
 use crate::commands::memory_pack::{Handoff, PackEntry};
-use crate::commands::shared_memory::{store_for, EventKind, MemoryChanged, RawEvent, SharedMemoryStore};
+use crate::commands::shared_memory::{
+    store_for, EventKind, MemoryChanged, RawEvent, SharedMemoryStore,
+};
 
 fn temp_project(label: &str) -> String {
-    let dir = std::env::temp_dir().join(format!("atlas-memory-server-{label}-{}", uuid::Uuid::new_v4()));
+    let dir = std::env::temp_dir().join(format!(
+        "atlas-memory-server-{label}-{}",
+        uuid::Uuid::new_v4()
+    ));
     std::fs::create_dir_all(&dir).unwrap();
     dir.to_string_lossy().into_owned()
 }
@@ -39,7 +47,12 @@ fn always_on() -> SharingGate {
     Arc::new(|_| true)
 }
 
-async fn serve(memory: SharedMemoryStore, tokens: Arc<MemoryTokens>, gate: SharingGate, sources: Sources) -> MemoryServer {
+async fn serve(
+    memory: SharedMemoryStore,
+    tokens: Arc<MemoryTokens>,
+    gate: SharingGate,
+    sources: Sources,
+) -> MemoryServer {
     MemoryServer::start(
         memory,
         tokens,
@@ -54,13 +67,20 @@ async fn serve(memory: SharedMemoryStore, tokens: Arc<MemoryTokens>, gate: Shari
 
 async fn connect(url: &str, token: &str) -> Result<RunningService<RoleClient, ()>, String> {
     let transport = StreamableHttpClientTransport::from_config(
-        StreamableHttpClientTransportConfig::with_uri(url.to_string()).auth_header(token.to_string()),
+        StreamableHttpClientTransportConfig::with_uri(url.to_string())
+            .auth_header(token.to_string()),
     );
     ().serve(transport).await.map_err(|e| format!("{e:?}"))
 }
 
-async fn call(client: &RunningService<RoleClient, ()>, name: &'static str, args: Value) -> (bool, Value) {
-    let Value::Object(args) = args else { panic!("object args") };
+async fn call(
+    client: &RunningService<RoleClient, ()>,
+    name: &'static str,
+    args: Value,
+) -> (bool, Value) {
+    let Value::Object(args) = args else {
+        panic!("object args")
+    };
     let result = client
         .call_tool(CallToolRequestParams::new(name).with_arguments(args))
         .await
@@ -75,9 +95,26 @@ async fn call(client: &RunningService<RoleClient, ()>, name: &'static str, args:
 }
 
 /// A captured event, as the delta path appends it for a session.
-fn capture(memory: &SharedMemoryStore, p: &str, agent: &str, session: &str, kind: EventKind, key: &str, payload: Value) {
+fn capture(
+    memory: &SharedMemoryStore,
+    p: &str,
+    agent: &str,
+    session: &str,
+    kind: EventKind,
+    key: &str,
+    payload: Value,
+) {
     memory
-        .append_event(p, RawEvent { agent: agent.into(), session_id: session.into(), kind, key: key.into(), payload })
+        .append_event(
+            p,
+            RawEvent {
+                agent: agent.into(),
+                session_id: session.into(),
+                kind,
+                key: key.into(),
+                payload,
+            },
+        )
         .unwrap();
 }
 
@@ -88,13 +125,30 @@ async fn a_session_token_exercises_every_tool_over_loopback() {
     let project = temp_project("tools");
     let memory = ticking_memory();
     let tokens = Arc::new(MemoryTokens::default());
-    let server = serve(memory.clone(), tokens.clone(), always_on(), Sources::default()).await;
-    assert!(server.url().starts_with("http://127.0.0.1:"), "{}", server.url());
+    let server = serve(
+        memory.clone(),
+        tokens.clone(),
+        always_on(),
+        Sources::default(),
+    )
+    .await;
+    assert!(
+        server.url().starts_with("http://127.0.0.1:"),
+        "{}",
+        server.url()
+    );
     let token = tokens.mint("s1", "claude", &project);
-    let client = connect(&server.url(), &token).await.expect("a live token connects");
+    let client = connect(&server.url(), &token)
+        .await
+        .expect("a live token connects");
 
-    let names: Vec<String> =
-        client.list_all_tools().await.unwrap().into_iter().map(|t| t.name.to_string()).collect();
+    let names: Vec<String> = client
+        .list_all_tools()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|t| t.name.to_string())
+        .collect();
     assert_eq!(names, tool_names());
 
     let (err, remembered) = call(
@@ -140,11 +194,46 @@ async fn a_session_token_exercises_every_tool_over_loopback() {
 async fn the_briefing_carries_working_memory_the_index_and_the_first_look_extras() {
     let p = temp_project("briefing");
     let memory = ticking_memory();
-    capture(&memory, &p, "claude-code", "earlier", EventKind::PlanSet, "plan", json!({"text": "Migrate auth to JWT"}));
-    capture(&memory, &p, "codex", "earlier", EventKind::FileChanged, "src/auth.rs", json!({"path": "src/auth.rs", "summary": "sign with RS256"}));
-    capture(&memory, &p, "codex", "earlier", EventKind::FileChanged, "src/token.rs", json!({"path": "src/token.rs"}));
-    capture(&memory, &p, "codex", "earlier", EventKind::Decision, "auth.alg", json!({"text": "Use RS256 for JWT signing"}));
-    let long = "The staging database resets nightly, ".repeat(8).trim().to_string();
+    capture(
+        &memory,
+        &p,
+        "claude-code",
+        "earlier",
+        EventKind::PlanSet,
+        "plan",
+        json!({"text": "Migrate auth to JWT"}),
+    );
+    capture(
+        &memory,
+        &p,
+        "codex",
+        "earlier",
+        EventKind::FileChanged,
+        "src/auth.rs",
+        json!({"path": "src/auth.rs", "summary": "sign with RS256"}),
+    );
+    capture(
+        &memory,
+        &p,
+        "codex",
+        "earlier",
+        EventKind::FileChanged,
+        "src/token.rs",
+        json!({"path": "src/token.rs"}),
+    );
+    capture(
+        &memory,
+        &p,
+        "codex",
+        "earlier",
+        EventKind::Decision,
+        "auth.alg",
+        json!({"text": "Use RS256 for JWT signing"}),
+    );
+    let long = "The staging database resets nightly, "
+        .repeat(8)
+        .trim()
+        .to_string();
     store_for(&p)
         .unwrap()
         .upsert(NewEntry {
@@ -165,30 +254,67 @@ async fn the_briefing_carries_working_memory_the_index_and_the_first_look_extras
         seen.lock().push((cwd, session));
         Box::pin(async move {
             Bootstrap {
-                project_memory: vec![PackEntry { kind: "feedback".into(), title: "tooling".into(), text: "Prefer bun over npm".into() }],
-                recent_session: Some(Handoff { text: "User: hi\nAssistant: yo".into(), turns: 2, attribution: "raw".into() }),
+                project_memory: vec![PackEntry {
+                    kind: "feedback".into(),
+                    title: "tooling".into(),
+                    text: "Prefer bun over npm".into(),
+                }],
+                recent_session: Some(Handoff {
+                    text: "User: hi\nAssistant: yo".into(),
+                    turns: 2,
+                    attribution: "raw".into(),
+                }),
             }
         })
     });
     let tokens = Arc::new(MemoryTokens::default());
-    let server = serve(memory.clone(), tokens.clone(), always_on(), Sources { index: None, bootstrap: Some(bootstrap), evict: None }).await;
-    let client = connect(&server.url(), &tokens.mint("s-new", "gemini", &p)).await.unwrap();
+    let server = serve(
+        memory.clone(),
+        tokens.clone(),
+        always_on(),
+        Sources {
+            index: None,
+            bootstrap: Some(bootstrap),
+            evict: None,
+        },
+    )
+    .await;
+    let client = connect(&server.url(), &tokens.mint("s-new", "gemini", &p))
+        .await
+        .unwrap();
 
     let (err, briefing) = call(&client, "memory_briefing", json!({})).await;
     assert!(!err, "{briefing}");
     assert_eq!(briefing["plan"]["content"], "Migrate auth to JWT");
     assert_eq!(briefing["plan"]["by"], "claude-code");
-    let files: Vec<&str> = briefing["filesChanged"].as_array().unwrap().iter().map(|f| f["path"].as_str().unwrap()).collect();
+    let files: Vec<&str> = briefing["filesChanged"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["path"].as_str().unwrap())
+        .collect();
     assert_eq!(files, ["src/token.rs", "src/auth.rs"], "newest first");
     assert_eq!(briefing["filesChanged"][1]["summary"], "sign with RS256");
-    assert_eq!(briefing["index"]["decision"][0]["content"], "Use RS256 for JWT signing");
+    assert_eq!(
+        briefing["index"]["decision"][0]["content"],
+        "Use RS256 for JWT signing"
+    );
     assert_eq!(briefing["index"]["decision"][0]["by"], "codex");
     let fact = &briefing["index"]["fact"][0];
     assert_eq!(fact["by"], "import:memdir");
     assert_eq!(fact["truncated"], true);
-    assert!(fact["content"].as_str().unwrap().chars().count() <= 161, "{fact}");
-    assert_eq!(briefing["projectMemory"], json!([{ "kind": "feedback", "title": "tooling", "text": "Prefer bun over npm" }]));
-    assert_eq!(briefing["recentSession"], json!({ "text": "User: hi\nAssistant: yo", "turns": 2, "attribution": "raw" }));
+    assert!(
+        fact["content"].as_str().unwrap().chars().count() <= 161,
+        "{fact}"
+    );
+    assert_eq!(
+        briefing["projectMemory"],
+        json!([{ "kind": "feedback", "title": "tooling", "text": "Prefer bun over npm" }])
+    );
+    assert_eq!(
+        briefing["recentSession"],
+        json!({ "text": "User: hi\nAssistant: yo", "turns": 2, "attribution": "raw" })
+    );
     assert_eq!(*asked.lock(), vec![(p.clone(), "s-new".to_string())]);
 
     // The index line was capped; the entry is a get away, in full.
@@ -207,11 +333,29 @@ async fn the_briefing_carries_working_memory_the_index_and_the_first_look_extras
 async fn changes_are_what_other_sessions_recorded_since_the_last_look() {
     let p = temp_project("changes");
     let memory = ticking_memory();
-    capture(&memory, &p, "codex", "earlier", EventKind::Decision, "auth.alg", json!({"text": "Use RS256"}));
+    capture(
+        &memory,
+        &p,
+        "codex",
+        "earlier",
+        EventKind::Decision,
+        "auth.alg",
+        json!({"text": "Use RS256"}),
+    );
     let tokens = Arc::new(MemoryTokens::default());
-    let server = serve(memory.clone(), tokens.clone(), always_on(), Sources::default()).await;
-    let mine = connect(&server.url(), &tokens.mint("s-mine", "claude", &p)).await.unwrap();
-    let theirs = connect(&server.url(), &tokens.mint("s-theirs", "codex", &p)).await.unwrap();
+    let server = serve(
+        memory.clone(),
+        tokens.clone(),
+        always_on(),
+        Sources::default(),
+    )
+    .await;
+    let mine = connect(&server.url(), &tokens.mint("s-mine", "claude", &p))
+        .await
+        .unwrap();
+    let theirs = connect(&server.url(), &tokens.mint("s-theirs", "codex", &p))
+        .await
+        .unwrap();
 
     // Before any look, everything is new.
     let (_, first) = call(&mine, "memory_changes", json!({})).await;
@@ -223,13 +367,40 @@ async fn changes_are_what_other_sessions_recorded_since_the_last_look() {
     assert_eq!(none["since"], first["syncedTo"]);
 
     // Another session records a failure; this session records a fact.
-    let (_, _) = call(&theirs, "memory_remember", json!({ "kind": "failure", "content": "HS256 keys leaked" })).await;
-    let (_, _) = call(&mine, "memory_remember", json!({ "kind": "fact", "content": "My own note" })).await;
-    capture(&memory, &p, "codex", "s-theirs", EventKind::PlanSet, "plan", json!({"text": "Rotate the keys"}));
+    let (_, _) = call(
+        &theirs,
+        "memory_remember",
+        json!({ "kind": "failure", "content": "HS256 keys leaked" }),
+    )
+    .await;
+    let (_, _) = call(
+        &mine,
+        "memory_remember",
+        json!({ "kind": "fact", "content": "My own note" }),
+    )
+    .await;
+    capture(
+        &memory,
+        &p,
+        "codex",
+        "s-theirs",
+        EventKind::PlanSet,
+        "plan",
+        json!({"text": "Rotate the keys"}),
+    );
 
     let (_, delta) = call(&mine, "memory_changes", json!({})).await;
-    let contents: Vec<&str> = delta["entries"].as_array().unwrap().iter().map(|e| e["content"].as_str().unwrap()).collect();
-    assert_eq!(contents, ["Rotate the keys", "HS256 keys leaked"], "{delta}");
+    let contents: Vec<&str> = delta["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["content"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        contents,
+        ["Rotate the keys", "HS256 keys leaked"],
+        "{delta}"
+    );
     assert_eq!(delta["entries"][0]["kind"], "plan");
     assert_eq!(delta["entries"][1]["by"], "codex");
 
@@ -248,14 +419,25 @@ async fn an_unknown_or_revoked_token_is_refused() {
     let project = temp_project("auth");
     let memory = ticking_memory();
     let tokens = Arc::new(MemoryTokens::default());
-    let server = serve(memory.clone(), tokens.clone(), always_on(), Sources::default()).await;
+    let server = serve(
+        memory.clone(),
+        tokens.clone(),
+        always_on(),
+        Sources::default(),
+    )
+    .await;
 
-    assert!(connect(&server.url(), "not-a-token").await.is_err(), "an unknown token connects");
+    assert!(
+        connect(&server.url(), "not-a-token").await.is_err(),
+        "an unknown token connects"
+    );
 
     // Revoked through the session lifecycle, while the MCP session is open.
     tokens.session_started("s1", "codex", &project);
     let token = tokens.token_for("s1").expect("minted at session start");
-    let client = connect(&server.url(), &token).await.expect("a live token connects");
+    let client = connect(&server.url(), &token)
+        .await
+        .expect("a live token connects");
     let (err, _) = call(&client, "memory_list", json!({})).await;
     assert!(!err);
     tokens.session_ended("s1");
@@ -263,8 +445,14 @@ async fn an_unknown_or_revoked_token_is_refused() {
     let refused = client
         .call_tool(CallToolRequestParams::new("memory_list").with_arguments(JsonObject::new()))
         .await;
-    assert!(refused.is_err(), "a revoked token still calls tools: {refused:?}");
-    assert!(connect(&server.url(), &token).await.is_err(), "a revoked token reconnects");
+    assert!(
+        refused.is_err(),
+        "a revoked token still calls tools: {refused:?}"
+    );
+    assert!(
+        connect(&server.url(), &token).await.is_err(),
+        "a revoked token reconnects"
+    );
     let _ = std::fs::remove_dir_all(&project);
 }
 
@@ -277,7 +465,10 @@ impl Embedder for TwoPhrasings {
             "The only database is Postgres" => vec![0.96, 0.28],
             _ => return None,
         };
-        Some(Embedding { model: "test-2".into(), vector })
+        Some(Embedding {
+            model: "test-2".into(),
+            vector,
+        })
     }
 }
 
@@ -286,28 +477,59 @@ async fn remember_replaces_by_key_merges_near_duplicates_and_rejects_working_mem
     let project = temp_project("remember");
     let memory = ticking_memory();
     let tokens = Arc::new(MemoryTokens::default());
-    let server = serve(memory.clone(), tokens.clone(), always_on(), Sources::default()).await;
-    let client = connect(&server.url(), &tokens.mint("s1", "gemini", &project)).await.unwrap();
-    store_for(&project).unwrap().set_embedder(Some(Arc::new(TwoPhrasings)));
+    let server = serve(
+        memory.clone(),
+        tokens.clone(),
+        always_on(),
+        Sources::default(),
+    )
+    .await;
+    let client = connect(&server.url(), &tokens.mint("s1", "gemini", &project))
+        .await
+        .unwrap();
+    store_for(&project)
+        .unwrap()
+        .set_embedder(Some(Arc::new(TwoPhrasings)));
 
-    let (_, first) =
-        call(&client, "memory_remember", json!({ "kind": "decision", "key": "alg", "content": "HS256" })).await;
-    let (_, second) =
-        call(&client, "memory_remember", json!({ "kind": "decision", "key": "alg", "content": "RS256" })).await;
+    let (_, first) = call(
+        &client,
+        "memory_remember",
+        json!({ "kind": "decision", "key": "alg", "content": "HS256" }),
+    )
+    .await;
+    let (_, second) = call(
+        &client,
+        "memory_remember",
+        json!({ "kind": "decision", "key": "alg", "content": "RS256" }),
+    )
+    .await;
     assert_eq!(second["outcome"], "replaced");
     assert_eq!(second["entry"]["id"], first["entry"]["id"]);
     assert_eq!(second["entry"]["content"], "RS256");
 
-    let (_, fact) =
-        call(&client, "memory_remember", json!({ "kind": "fact", "content": "Postgres is the only database" })).await;
-    let (_, near) =
-        call(&client, "memory_remember", json!({ "kind": "fact", "content": "The only database is Postgres" })).await;
+    let (_, fact) = call(
+        &client,
+        "memory_remember",
+        json!({ "kind": "fact", "content": "Postgres is the only database" }),
+    )
+    .await;
+    let (_, near) = call(
+        &client,
+        "memory_remember",
+        json!({ "kind": "fact", "content": "The only database is Postgres" }),
+    )
+    .await;
     assert_eq!(near["outcome"], "merged", "{near}");
     assert_eq!(near["entry"]["id"], fact["entry"]["id"]);
     assert_eq!(near["entry"]["uses"], 1);
 
     for kind in ["plan", "file_changed"] {
-        let (err, refused) = call(&client, "memory_remember", json!({ "kind": kind, "content": "do the thing" })).await;
+        let (err, refused) = call(
+            &client,
+            "memory_remember",
+            json!({ "kind": kind, "content": "do the thing" }),
+        )
+        .await;
         assert!(err, "{kind} was remembered: {refused}");
     }
     let (_, plans) = call(&client, "memory_list", json!({ "kind": "plan" })).await;
@@ -325,8 +547,16 @@ async fn a_write_through_the_server_shows_in_the_shared_tab_and_is_announced() {
         Arc::new(move |c: &MemoryChanged| announced.lock().push(c.clone()))
     });
     let tokens = Arc::new(MemoryTokens::default());
-    let server = serve(memory.clone(), tokens.clone(), always_on(), Sources::default()).await;
-    let client = connect(&server.url(), &tokens.mint("s9", "codex", &project)).await.unwrap();
+    let server = serve(
+        memory.clone(),
+        tokens.clone(),
+        always_on(),
+        Sources::default(),
+    )
+    .await;
+    let client = connect(&server.url(), &tokens.mint("s9", "codex", &project))
+        .await
+        .unwrap();
 
     let secret = "sk-proj-AbCdEf0123456789GhIjKlMnOpQrStUv";
     let (err, _) = call(
@@ -341,7 +571,11 @@ async fn a_write_through_the_server_shows_in_the_shared_tab_and_is_announced() {
     let state = memory.get_state(&project);
     assert_eq!(state.failures.len(), 1, "{state:?}");
     assert_eq!(state.failures[0].agent, "codex");
-    assert!(!state.failures[0].text.contains(secret), "{}", state.failures[0].text);
+    assert!(
+        !state.failures[0].text.contains(secret),
+        "{}",
+        state.failures[0].text
+    );
     let events = memory.list_events(&project);
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].session_id, "s9");
@@ -358,9 +592,22 @@ async fn with_sharing_off_the_tools_hold_no_memory() {
     let project = temp_project("gated");
     let memory = ticking_memory();
     let tokens = Arc::new(MemoryTokens::default());
-    let server = serve(memory.clone(), tokens.clone(), Arc::new(|_| false), Sources::default()).await;
-    let client = connect(&server.url(), &tokens.mint("s1", "claude", &project)).await.unwrap();
-    let (err, _) = call(&client, "memory_remember", json!({ "kind": "fact", "content": "x" })).await;
+    let server = serve(
+        memory.clone(),
+        tokens.clone(),
+        Arc::new(|_| false),
+        Sources::default(),
+    )
+    .await;
+    let client = connect(&server.url(), &tokens.mint("s1", "claude", &project))
+        .await
+        .unwrap();
+    let (err, _) = call(
+        &client,
+        "memory_remember",
+        json!({ "kind": "fact", "content": "x" }),
+    )
+    .await;
     assert!(err);
     for read in ["memory_briefing", "memory_changes", "memory_list"] {
         let (err, found) = call(&client, read, json!({})).await;
@@ -391,20 +638,45 @@ async fn memory_search_also_returns_indexed_project_documents() {
             }]
         })
     });
-    let server = serve(ticking_memory(), tokens.clone(), always_on(), Sources { index: Some(index), bootstrap: None, evict: None }).await;
-    let client = connect(&server.url(), &tokens.mint("s1", "atlas-agent", &project)).await.unwrap();
+    let server = serve(
+        ticking_memory(),
+        tokens.clone(),
+        always_on(),
+        Sources {
+            index: Some(index),
+            bootstrap: None,
+            evict: None,
+        },
+    )
+    .await;
+    let client = connect(&server.url(), &tokens.mint("s1", "atlas-agent", &project))
+        .await
+        .unwrap();
 
-    let (err, found) = call(&client, "memory_search", json!({ "query": "the engine fork" })).await;
+    let (err, found) = call(
+        &client,
+        "memory_search",
+        json!({ "query": "the engine fork" }),
+    )
+    .await;
     assert!(!err, "{found}");
     assert_eq!(found["entries"], json!([]));
     assert_eq!(
         found["documents"],
         json!([{ "title": "ADR-0003", "source": "docs/adr/0003.md", "text": "about the engine fork" }]),
     );
-    assert_eq!(*asked.lock(), vec![(project.clone(), "the engine fork".to_string(), 6)]);
+    assert_eq!(
+        *asked.lock(),
+        vec![(project.clone(), "the engine fork".to_string(), 6)]
+    );
 
     // A working-memory search is a search of the record alone.
-    let (_, found) = call(&client, "memory_search", json!({ "query": "x", "kinds": ["plan"] })).await;
+    let (_, found) = call(
+        &client,
+        "memory_search",
+        json!({ "query": "x", "kinds": ["plan"] }),
+    )
+    .await;
     assert_eq!(found.get("documents"), None, "{found}");
     client.cancel().await.ok();
     let _ = std::fs::remove_dir_all(&project);
@@ -428,10 +700,16 @@ async fn forgetting_through_the_tool_evicts_the_document_before_returning() {
         ticking_memory(),
         tokens.clone(),
         always_on(),
-        Sources { index: None, bootstrap: None, evict: Some(evict) },
+        Sources {
+            index: None,
+            bootstrap: None,
+            evict: Some(evict),
+        },
     )
     .await;
-    let client = connect(&server.url(), &tokens.mint("s1", "atlas-agent", &project)).await.unwrap();
+    let client = connect(&server.url(), &tokens.mint("s1", "atlas-agent", &project))
+        .await
+        .unwrap();
 
     let (err, remembered) = call(
         &client,
@@ -448,12 +726,19 @@ async fn forgetting_through_the_tool_evicts_the_document_before_returning() {
 
     // The document went with the record, addressed by its corpus id, and the
     // eviction had already happened by the time the tool answered.
-    assert_eq!(*evicted.lock(), vec![(project.clone(), format!("shared:fact:{id}"))]);
+    assert_eq!(
+        *evicted.lock(),
+        vec![(project.clone(), format!("shared:fact:{id}"))]
+    );
 
     // Forgetting something that is not there evicts nothing and says so.
     let (_, missing) = call(&client, "memory_forget", json!({ "id": id })).await;
     assert_eq!(missing["forgotten"], json!(false));
-    assert_eq!(evicted.lock().len(), 1, "no eviction for an entry that was not there");
+    assert_eq!(
+        evicted.lock().len(),
+        1,
+        "no eviction for an entry that was not there"
+    );
 
     client.cancel().await.ok();
     let _ = std::fs::remove_dir_all(&project);
@@ -475,7 +760,13 @@ async fn search_never_returns_a_shared_document_whose_entry_is_gone() {
         session_id: "s1".to_string(),
     };
     let live = memory
-        .remember(&project, &writer, EntryKind::Fact, "a fact worth keeping", "")
+        .remember(
+            &project,
+            &writer,
+            EntryKind::Fact,
+            "a fact worth keeping",
+            "",
+        )
         .expect("remembered")
         .entry
         .id;
@@ -509,12 +800,23 @@ async fn search_never_returns_a_shared_document_whose_entry_is_gone() {
         memory,
         tokens.clone(),
         always_on(),
-        Sources { index: Some(index), bootstrap: None, evict: None },
+        Sources {
+            index: Some(index),
+            bootstrap: None,
+            evict: None,
+        },
     )
     .await;
-    let client = connect(&server.url(), &tokens.mint("s1", "atlas-agent", &project)).await.unwrap();
+    let client = connect(&server.url(), &tokens.mint("s1", "atlas-agent", &project))
+        .await
+        .unwrap();
 
-    let (err, found) = call(&client, "memory_search", json!({ "query": "anything at all" })).await;
+    let (err, found) = call(
+        &client,
+        "memory_search",
+        json!({ "query": "anything at all" }),
+    )
+    .await;
     assert!(!err, "{found}");
     let titles: Vec<&str> = found["documents"]
         .as_array()
@@ -552,7 +854,9 @@ async fn a_search_counts_as_consulting_memory_even_though_it_moves_no_clock() {
     )
     .await
     .unwrap();
-    let client = connect(&server.url(), &tokens.mint("s1", "atlas-agent", &project)).await.unwrap();
+    let client = connect(&server.url(), &tokens.mint("s1", "atlas-agent", &project))
+        .await
+        .unwrap();
 
     assert!(!reads.has_read("s1"), "nothing read yet");
 
@@ -583,7 +887,9 @@ async fn remembering_something_is_not_consulting_memory() {
     )
     .await
     .unwrap();
-    let client = connect(&server.url(), &tokens.mint("s1", "atlas-agent", &project)).await.unwrap();
+    let client = connect(&server.url(), &tokens.mint("s1", "atlas-agent", &project))
+        .await
+        .unwrap();
 
     let (err, _) = call(
         &client,
@@ -628,9 +934,20 @@ fn every_read_tool_is_a_real_tool_and_no_write_is_in_the_list() {
 /// the engine as the tool namespace's description).
 #[test]
 fn the_instructions_tell_the_agent_to_pull_memory_first_and_when_to_write() {
-    let first_step = INSTRUCTIONS.find("memory_briefing").expect("names the briefing");
-    for later in ["memory_search", "memory_changes", "memory_remember", "memory_get", "memory_forget"] {
-        assert!(INSTRUCTIONS.find(later).unwrap() > first_step, "{later} comes after the briefing");
+    let first_step = INSTRUCTIONS
+        .find("memory_briefing")
+        .expect("names the briefing");
+    for later in [
+        "memory_search",
+        "memory_changes",
+        "memory_remember",
+        "memory_get",
+        "memory_forget",
+    ] {
+        assert!(
+            INSTRUCTIONS.find(later).unwrap() > first_step,
+            "{later} comes after the briefing"
+        );
     }
     assert!(INSTRUCTIONS.contains("Nothing from it is pushed"));
     assert!(INSTRUCTIONS.contains("do not copy it into your own memory files"));
@@ -641,7 +958,12 @@ fn the_tool_list_carries_the_cache_fields_the_2026_07_28_spec_requires() {
     let wire = serde_json::to_value(tools_list()).expect("serializes");
     assert_eq!(wire["ttlMs"], json!(TOOLS_LIST_TTL_MS));
     assert_eq!(wire["cacheScope"], json!("private"));
-    let names: Vec<&str> = wire["tools"].as_array().into_iter().flatten().filter_map(|t| t["name"].as_str()).collect();
+    let names: Vec<&str> = wire["tools"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|t| t["name"].as_str())
+        .collect();
     assert_eq!(names, tool_names());
 }
 
@@ -650,7 +972,15 @@ fn the_tool_list_carries_the_cache_fields_the_2026_07_28_spec_requires() {
 const NOW: i64 = 1_800_000_000_000;
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 
-fn entry(id: i64, kind: EntryKind, content: &str, confidence: f64, uses: u32, updated_at: i64, last_used_at: Option<i64>) -> Entry {
+fn entry(
+    id: i64,
+    kind: EntryKind,
+    content: &str,
+    confidence: f64,
+    uses: u32,
+    updated_at: i64,
+    last_used_at: Option<i64>,
+) -> Entry {
     Entry {
         id,
         kind,
@@ -674,10 +1004,29 @@ fn entry(id: i64, kind: EntryKind, content: &str, confidence: f64, uses: u32, up
 /// the old one was written later than the recent one was.
 #[test]
 fn ranking_prefers_recently_used_high_confidence() {
-    let old_unused = entry(1, EntryKind::Decision, "Old unused", 0.5, 0, NOW - 90 * DAY_MS, None);
-    let used = entry(2, EntryKind::Decision, "Recently used", 1.0, 4, NOW - 200 * DAY_MS, Some(NOW - DAY_MS));
+    let old_unused = entry(
+        1,
+        EntryKind::Decision,
+        "Old unused",
+        0.5,
+        0,
+        NOW - 90 * DAY_MS,
+        None,
+    );
+    let used = entry(
+        2,
+        EntryKind::Decision,
+        "Recently used",
+        1.0,
+        4,
+        NOW - 200 * DAY_MS,
+        Some(NOW - DAY_MS),
+    );
     assert!(score(&used, NOW) > score(&old_unused, NOW));
-    let index: Vec<String> = rank_index(&[old_unused, used], NOW).into_iter().map(|e| e.content).collect();
+    let index: Vec<String> = rank_index(&[old_unused, used], NOW)
+        .into_iter()
+        .map(|e| e.content)
+        .collect();
     assert_eq!(index, ["Recently used", "Old unused"]);
 }
 
@@ -688,14 +1037,36 @@ fn caps_are_respected_per_kind() {
     let mut entries = Vec::new();
     for i in 0..60 {
         // Higher i = more recent = better.
-        entries.push(entry(i, EntryKind::Decision, &format!("d{i}"), 1.0, 0, NOW - (60 - i) * DAY_MS, None));
+        entries.push(entry(
+            i,
+            EntryKind::Decision,
+            &format!("d{i}"),
+            1.0,
+            0,
+            NOW - (60 - i) * DAY_MS,
+            None,
+        ));
     }
     for i in 0..40 {
-        entries.push(entry(100 + i, EntryKind::Failure, &format!("f{i}"), 1.0, 0, NOW - (40 - i) * DAY_MS, None));
+        entries.push(entry(
+            100 + i,
+            EntryKind::Failure,
+            &format!("f{i}"),
+            1.0,
+            0,
+            NOW - (40 - i) * DAY_MS,
+            None,
+        ));
     }
     let index = rank_index(&entries, NOW);
-    let decisions = index.iter().filter(|e| e.kind == EntryKind::Decision).count();
-    let failures = index.iter().filter(|e| e.kind == EntryKind::Failure).count();
+    let decisions = index
+        .iter()
+        .filter(|e| e.kind == EntryKind::Decision)
+        .count();
+    let failures = index
+        .iter()
+        .filter(|e| e.kind == EntryKind::Failure)
+        .count();
     assert_eq!((decisions, failures), (50, 30));
     let contents: Vec<&str> = index.iter().map(|e| e.content.as_str()).collect();
     assert!(contents.contains(&"d59") && !contents.contains(&"d9"));
@@ -769,25 +1140,45 @@ async fn an_http_agent_is_offered_the_server_with_a_token_that_binds_to_its_sess
     let offers = MemorySessionOffers::new(host.clone(), always_on());
 
     let offer = offers.offer(&request(true, &project, None));
-    let (name, url, token) = offered(&offer).expect("an HTTP agent with sharing on gets the server");
+    let (name, url, token) =
+        offered(&offer).expect("an HTTP agent with sharing on gets the server");
     assert_eq!(name, MEMORY_SERVER_NAME);
     assert_eq!(Some(url.clone()), host.url());
-    let client = connect(&url, &token).await.expect("the offered token is live before the id exists");
+    let client = connect(&url, &token)
+        .await
+        .expect("the offered token is live before the id exists");
     client.cancel().await.ok();
 
     offer.bind(&acp::SessionId::new("s1"));
-    assert_eq!(host.tokens().token_for("s1").as_deref(), Some(token.as_str()));
+    assert_eq!(
+        host.tokens().token_for("s1").as_deref(),
+        Some(token.as_str())
+    );
     let grant = host.tokens().grant(&token).unwrap();
-    assert_eq!((grant.session_id.as_str(), grant.agent.as_str(), grant.cwd.as_str()), ("s1", "claude-code", project.as_str()));
+    assert_eq!(
+        (
+            grant.session_id.as_str(),
+            grant.agent.as_str(),
+            grant.cwd.as_str()
+        ),
+        ("s1", "claude-code", project.as_str())
+    );
 
     // The session start the host reports next keeps the token the agent
     // holds, however the directory is spelled.
-    host.tokens().session_started("s1", "claude-code", &format!("{project}/"));
-    assert_eq!(host.tokens().token_for("s1").as_deref(), Some(token.as_str()));
+    host.tokens()
+        .session_started("s1", "claude-code", &format!("{project}/"));
+    assert_eq!(
+        host.tokens().token_for("s1").as_deref(),
+        Some(token.as_str())
+    );
 
     // And the session's end revokes it.
     host.tokens().session_ended("s1");
-    assert!(connect(&url, &token).await.is_err(), "a revoked token is refused");
+    assert!(
+        connect(&url, &token).await.is_err(),
+        "a revoked token is refused"
+    );
     let _ = std::fs::remove_dir_all(&project);
 }
 
@@ -824,10 +1215,22 @@ async fn an_offer_that_never_binds_leaves_no_live_token() {
 
 #[test]
 fn the_decision_says_whether_the_server_is_included_and_why_not() {
-    assert_eq!(OfferDecision::decide(true, true, true), OfferDecision::Included);
-    assert_eq!(OfferDecision::decide(false, true, true), OfferDecision::Omitted("agent did not advertise mcpCapabilities.http"));
-    assert_eq!(OfferDecision::decide(true, false, true), OfferDecision::Omitted("shared memory is off for this project"));
-    assert_eq!(OfferDecision::decide(true, true, false), OfferDecision::Omitted("memory tool server is not running"));
+    assert_eq!(
+        OfferDecision::decide(true, true, true),
+        OfferDecision::Included
+    );
+    assert_eq!(
+        OfferDecision::decide(false, true, true),
+        OfferDecision::Omitted("agent did not advertise mcpCapabilities.http")
+    );
+    assert_eq!(
+        OfferDecision::decide(true, false, true),
+        OfferDecision::Omitted("shared memory is off for this project")
+    );
+    assert_eq!(
+        OfferDecision::decide(true, true, false),
+        OfferDecision::Omitted("memory tool server is not running")
+    );
 }
 
 #[test]

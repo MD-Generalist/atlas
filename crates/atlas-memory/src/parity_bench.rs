@@ -95,7 +95,11 @@ fn retrieved_doc_maps_cleanly_onto_memdoc() {
         assert_eq!(m.text, d.text, "text must carry through the seam");
         // The mapping is a pure function of the doc — re-mapping is identical,
         // i.e. it cannot depend on any hidden agent/global state.
-        assert_eq!(to_memdoc(d), m, "mapping must be deterministic / agent-agnostic");
+        assert_eq!(
+            to_memdoc(d),
+            m,
+            "mapping must be deterministic / agent-agnostic"
+        );
     }
 }
 
@@ -115,7 +119,8 @@ fn retrieve_signature_has_no_agent_parameter() {
         &'a str,
         usize,
         &'a MiniLmProvider,
-    ) -> Pin<Box<dyn Future<Output = Vec<RetrievedDoc>> + Send + 'a>>;
+    )
+        -> Pin<Box<dyn Future<Output = Vec<RetrievedDoc>> + Send + 'a>>;
 
     // Coercing the real method to this signature is the assertion. (Never called.)
     fn _coerce() -> RetrieveFn {
@@ -154,7 +159,8 @@ fn retrieve_is_agent_agnostic_and_well_formed_when_model_available() {
         },
         CorpusDoc {
             id: "d2".into(),
-            text: "Indexing: a background MemoryIndexer rebuilds the HNSW off the chat turn.".into(),
+            text: "Indexing: a background MemoryIndexer rebuilds the HNSW off the chat turn."
+                .into(),
             content_hash: "h2".into(),
             corpus: "codebase".into(),
         },
@@ -165,7 +171,8 @@ fn retrieve_is_agent_agnostic_and_well_formed_when_model_available() {
             corpus: "codebase".into(),
         },
     ];
-    rt.block_on(engine.index_corpus(&corpus, &provider)).unwrap();
+    rt.block_on(engine.index_corpus(&corpus, &provider))
+        .unwrap();
 
     let query = "how does authentication work in this project";
     // Two retrievals standing in for two different agents on the same project/query.
@@ -179,7 +186,10 @@ fn retrieve_is_agent_agnostic_and_well_formed_when_model_available() {
         "the same query must return the same count regardless of caller"
     );
     for (a, b) in as_claude.iter().zip(as_codex.iter()) {
-        assert_eq!(a.id, b.id, "agent-agnostic: identical ordering/ids per caller");
+        assert_eq!(
+            a.id, b.id,
+            "agent-agnostic: identical ordering/ids per caller"
+        );
         // Well-formed + maps cleanly onto MemDoc.
         assert!(!a.title.trim().is_empty(), "title must be non-empty");
         assert!(!a.source.trim().is_empty(), "source must be non-empty");
@@ -278,17 +288,28 @@ fn bench_hnsw_vs_brute_force() {
     let brute_us = brute_total.as_micros() as f64 / N_QUERIES as f64;
     let speedup = brute_us / hnsw_us.max(f64::MIN_POSITIVE);
 
-    eprintln!("\n=== HNSW vs brute-force ({N_VECTORS} vecs × {DIM}d, {N_QUERIES} queries, k={K}) ===");
+    eprintln!(
+        "\n=== HNSW vs brute-force ({N_VECTORS} vecs × {DIM}d, {N_QUERIES} queries, k={K}) ==="
+    );
     eprintln!("HNSW build:        {hnsw_build:?}");
     eprintln!("HNSW search:       {hnsw_us:.1} µs/query  (total {hnsw_total:?})");
     eprintln!("Brute-force search:{brute_us:.1} µs/query  (total {brute_total:?})");
     eprintln!("Speedup (brute/HNSW): {speedup:.1}×");
-    eprintln!("Top-1 agreement:   {:.1}% ({agree}/{N_QUERIES})\n", agreement * 100.0);
+    eprintln!(
+        "Top-1 agreement:   {:.1}% ({agree}/{N_QUERIES})\n",
+        agreement * 100.0
+    );
 
     // Sanity assertions (loose — this is a benchmark, not a correctness gate):
     // both engines return a hit for every query, and HNSW recall is non-trivial.
-    assert!(hnsw_top1.iter().all(|k| *k != u64::MAX), "HNSW returned a hit per query");
-    assert!(brute_top1.iter().all(|k| *k != u64::MAX), "brute returned a hit per query");
+    assert!(
+        hnsw_top1.iter().all(|k| *k != u64::MAX),
+        "HNSW returned a hit per query"
+    );
+    assert!(
+        brute_top1.iter().all(|k| *k != u64::MAX),
+        "brute returned a hit per query"
+    );
     assert!(
         agreement >= 0.5,
         "HNSW top-1 recall vs exact unexpectedly low: {agreement:.2}"

@@ -64,6 +64,9 @@ export interface AppSettings {
   /** Inline Git blame in the code editor — dim author/age/summary annotation
    *  trailing the active line. Off = the CodeMirror extension isn't loaded. */
   gitBlameInline: boolean;
+  /** Background `git fetch` of the open project (on open, on window focus,
+   *  every few minutes) so the Pull badge reflects the remote. Never pulls. */
+  gitAutoFetch: boolean;
   /** Auto-update master switch. ON (default) → every startup checks PostHog
    *  remote config and prompts when a newer signed DMG is available. */
   autoUpdate: boolean;
@@ -145,6 +148,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   appIcon: DEFAULT_APP_ICON,
   adaptiveSuggestions: "agent",
   gitBlameInline: true,
+  gitAutoFetch: true,
   autoUpdate: true,
   curatedPluginSync: false,
   updaterIgnoredVersion: null,

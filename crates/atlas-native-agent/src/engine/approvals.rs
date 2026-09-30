@@ -79,13 +79,15 @@ pub fn decision_for(outcome: &RequestPermissionOutcome) -> Decision {
         // Dismissed, or the turn went away underneath it. Not a decline: the
         // user did not answer, and the engine's `Cancel` is the arm that says
         // "stop the turn too".
-        RequestPermissionOutcome::Cancelled
-        | RequestPermissionOutcome::InterruptedByFollowUp => Decision::Cancel,
+        RequestPermissionOutcome::Cancelled | RequestPermissionOutcome::InterruptedByFollowUp => {
+            Decision::Cancel
+        }
         RequestPermissionOutcome::Selected(selected) => match selected.option_kind {
             acp::PermissionOptionKind::AllowOnce => Decision::Accept,
             acp::PermissionOptionKind::AllowAlways => Decision::AcceptForSession,
-            acp::PermissionOptionKind::RejectOnce
-            | acp::PermissionOptionKind::RejectAlways => Decision::Decline,
+            acp::PermissionOptionKind::RejectOnce | acp::PermissionOptionKind::RejectAlways => {
+                Decision::Decline
+            }
             _ => Decision::Decline,
         },
     }
@@ -181,7 +183,10 @@ mod tests {
             Decision::Accept,
         );
         assert_eq!(
-            decision_for(&selected(acp::PermissionOptionKind::AllowAlways, ALLOW_ALWAYS)),
+            decision_for(&selected(
+                acp::PermissionOptionKind::AllowAlways,
+                ALLOW_ALWAYS
+            )),
             Decision::AcceptForSession,
         );
         assert_eq!(
@@ -203,9 +208,18 @@ mod tests {
         let decline = decision_for(&selected(acp::PermissionOptionKind::RejectOnce, REJECT));
         let cancel = decision_for(&RequestPermissionOutcome::Cancelled);
         assert_ne!(decline, cancel);
-        assert_eq!(decline.for_command(), CommandExecutionApprovalDecision::Decline);
-        assert_eq!(cancel.for_command(), CommandExecutionApprovalDecision::Cancel);
-        assert_eq!(decline.for_file_change(), FileChangeApprovalDecision::Decline);
+        assert_eq!(
+            decline.for_command(),
+            CommandExecutionApprovalDecision::Decline
+        );
+        assert_eq!(
+            cancel.for_command(),
+            CommandExecutionApprovalDecision::Cancel
+        );
+        assert_eq!(
+            decline.for_file_change(),
+            FileChangeApprovalDecision::Decline
+        );
         assert_eq!(cancel.for_file_change(), FileChangeApprovalDecision::Cancel);
     }
 
@@ -224,7 +238,10 @@ mod tests {
         // The id is ours to choose; the kind is what the dialog rendered. If
         // these ever disagree, the button the user actually saw wins.
         assert_eq!(
-            decision_for(&selected(acp::PermissionOptionKind::AllowOnce, "something-else")),
+            decision_for(&selected(
+                acp::PermissionOptionKind::AllowOnce,
+                "something-else"
+            )),
             Decision::Accept,
         );
     }

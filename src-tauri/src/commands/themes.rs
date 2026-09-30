@@ -49,7 +49,9 @@ pub fn start_watcher(app: &AppHandle) {
     let watcher = atlas_theme::watch_user_themes(move || {
         let _ = app_for_event.emit(
             THEMES_CHANGED_EVENT,
-            ThemesChangedEvent { kind: "themes-changed" },
+            ThemesChangedEvent {
+                kind: "themes-changed",
+            },
         );
     });
     match watcher {

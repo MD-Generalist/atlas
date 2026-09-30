@@ -84,9 +84,7 @@ impl HttpClient for FakeHttp {
                 tokio::time::sleep(delay).await;
             }
             let chunks: Vec<Vec<u8>> = match chunk_size {
-                Some(size) if !body.is_empty() => {
-                    body.chunks(size).map(<[u8]>::to_vec).collect()
-                }
+                Some(size) if !body.is_empty() => body.chunks(size).map(<[u8]>::to_vec).collect(),
                 _ => vec![body],
             };
             Ok(HttpResponse {

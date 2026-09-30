@@ -297,12 +297,11 @@ impl MemoryRegistry {
                 // The persisted codebase index, when it exists.
                 let codebase_index = Path::new(cwd).join(".atlas").join("codebase-index");
                 if codebase_index.is_dir()
-                    && w
-                        .watch(&codebase_index, notify::RecursiveMode::Recursive)
+                    && w.watch(&codebase_index, notify::RecursiveMode::Recursive)
                         .is_ok()
-                    {
-                        watched_any = true;
-                    }
+                {
+                    watched_any = true;
+                }
 
                 if watched_any {
                     self.watchers.insert(cwd.to_string(), w);
@@ -337,11 +336,7 @@ fn is_corpus_path(path: &Path) -> bool {
     if path.extension().and_then(|e| e.to_str()) == Some("md") {
         return true;
     }
-    if name == "docs.json"
-        && path
-            .components()
-            .any(|c| c.as_os_str() == "codebase-index")
-    {
+    if name == "docs.json" && path.components().any(|c| c.as_os_str() == "codebase-index") {
         return true;
     }
     false
@@ -518,8 +513,12 @@ async fn extract(
 fn reindex_after(registry: &MemoryRegistry, cwd: &str, stored: usize) {
     if stored > 0 {
         tracing::info!(target: "atlas::memory_indexer", "extracted {stored} memories; reindexing {cwd}");
-        let _ = registry.enqueue(Job::IndexCorpus { cwd: cwd.to_string() });
-        let _ = registry.enqueue(Job::Compact { cwd: cwd.to_string() });
+        let _ = registry.enqueue(Job::IndexCorpus {
+            cwd: cwd.to_string(),
+        });
+        let _ = registry.enqueue(Job::Compact {
+            cwd: cwd.to_string(),
+        });
     }
 }
 
@@ -571,7 +570,9 @@ pub(crate) async fn indexed_vectors(
     docs.iter()
         .filter_map(|d| {
             let c = to_corpus_doc(d);
-            guard.cached_vector(&c.id, &c.content_hash).map(|v| (c.id, v))
+            guard
+                .cached_vector(&c.id, &c.content_hash)
+                .map(|v| (c.id, v))
         })
         .collect()
 }
@@ -738,12 +739,7 @@ mod tests {
         let (job_tx, mut job_rx) = mpsc::channel::<Job>(16);
         let window = Duration::from_millis(80);
 
-        let handle = tokio::spawn(debounce_loop(
-            sig_rx,
-            job_tx,
-            "/proj/a".to_string(),
-            window,
-        ));
+        let handle = tokio::spawn(debounce_loop(sig_rx, job_tx, "/proj/a".to_string(), window));
 
         // Fire a burst well within the window.
         for _ in 0..20 {
@@ -847,8 +843,14 @@ mod tests {
         // Each engine's memory dir is under its own cwd, never the other's.
         let dir_a = engine_a.read().await.memory_dir().to_path_buf();
         let dir_b = engine_b.read().await.memory_dir().to_path_buf();
-        assert!(dir_a.starts_with(&root_a), "A dir {dir_a:?} not under {root_a:?}");
-        assert!(dir_b.starts_with(&root_b), "B dir {dir_b:?} not under {root_b:?}");
+        assert!(
+            dir_a.starts_with(&root_a),
+            "A dir {dir_a:?} not under {root_a:?}"
+        );
+        assert!(
+            dir_b.starts_with(&root_b),
+            "B dir {dir_b:?} not under {root_b:?}"
+        );
         assert!(!dir_a.starts_with(&root_b));
         assert!(!dir_b.starts_with(&root_a));
 

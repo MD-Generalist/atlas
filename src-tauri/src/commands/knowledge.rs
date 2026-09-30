@@ -65,7 +65,11 @@ fn walk_knowledge(dir: &Path, root: &Path, entries: &mut Vec<KnowledgeEntry>) {
         let rel = path.strip_prefix(root).unwrap_or(&path);
         let id = rel.with_extension("").to_string_lossy().to_string();
 
-        let filename = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
+        let filename = path
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
 
         // Use only the filename as the wire-side title fallback. The
         // user-edited page-header title lives in `_meta.json` and is
@@ -75,17 +79,24 @@ fn walk_knowledge(dir: &Path, root: &Path, entries: &mut Vec<KnowledgeEntry>) {
         // which was confusing and inconsistent with the page header.
         let title = filename.clone();
 
-        let source = if filename.starts_with("paper-") { "paper" }
-            else if filename.starts_with("chat-") { "chat" }
-            else { "note" };
+        let source = if filename.starts_with("paper-") {
+            "paper"
+        } else if filename.starts_with("chat-") {
+            "chat"
+        } else {
+            "note"
+        };
 
-        let updated_at = fs::metadata(&path).ok()
+        let updated_at = fs::metadata(&path)
+            .ok()
             .and_then(|m| m.modified().ok())
             .map(|t| {
                 let d = t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
                 chrono::DateTime::from_timestamp(d.as_secs() as i64, 0)
-                    .map(|dt| dt.to_rfc3339()).unwrap_or_default()
-            }).unwrap_or_default();
+                    .map(|dt| dt.to_rfc3339())
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default();
 
         entries.push(KnowledgeEntry {
             id,
@@ -156,9 +167,15 @@ fn unique_dest(dest: &Path) -> std::path::PathBuf {
     if !dest.exists() {
         return dest.to_path_buf();
     }
-    let stem = dest.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+    let stem = dest
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
     let ext = dest.extension().map(|e| e.to_string_lossy().to_string());
-    let parent = dest.parent().map(std::path::Path::to_path_buf).unwrap_or_default();
+    let parent = dest
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_default();
     for n in 1.. {
         let name = match &ext {
             Some(e) => format!("{stem}-{n}.{e}"),
@@ -231,10 +248,7 @@ pub async fn import_into_knowledge(
 
 /// Delete a knowledge note
 #[tauri::command]
-pub async fn delete_knowledge_note(
-    project_path: String,
-    id: String,
-) -> Result<(), String> {
+pub async fn delete_knowledge_note(project_path: String, id: String) -> Result<(), String> {
     let id = kb_rel(&id)?.to_string();
     tokio::task::spawn_blocking(move || {
         let filepath = Path::new(&project_path)
@@ -399,10 +413,7 @@ pub async fn log_interaction(
 
 /// Save editor state (open tabs, active file) per project
 #[tauri::command]
-pub async fn save_editor_state(
-    project_path: String,
-    state_json: String,
-) -> Result<(), String> {
+pub async fn save_editor_state(project_path: String, state_json: String) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
         let atlas_dir = Path::new(&project_path).join(".atlas");
         fs::create_dir_all(&atlas_dir).map_err(|e| e.to_string())?;
@@ -418,7 +429,9 @@ pub async fn save_editor_state(
 #[tauri::command]
 pub async fn load_editor_state(project_path: String) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
-        let state_path = Path::new(&project_path).join(".atlas").join("editor-state.json");
+        let state_path = Path::new(&project_path)
+            .join(".atlas")
+            .join("editor-state.json");
         if state_path.exists() {
             fs::read_to_string(&state_path).map_err(|e| e.to_string())
         } else {
@@ -537,7 +550,9 @@ pub async fn fetch_readable(url: String) -> Result<ReadableContent, String> {
     let response = response.ok_or_else(|| "too many redirects".to_string())?;
 
     let final_url = response.url().to_string();
-    let html = response.text().await
+    let html = response
+        .text()
+        .await
         .map_err(|e| format!("Read failed: {e}"))?;
 
     let title = extract_html_title(&html).unwrap_or_else(|| url.clone());
@@ -579,11 +594,53 @@ fn sanitize_html(html: &str, base_url: &str) -> String {
     // links against the page URL, and rejects every scheme but the two named.
     use std::collections::HashSet;
     let tags: HashSet<&str> = [
-        "a", "abbr", "b", "blockquote", "br", "code", "dd", "del", "details",
-        "div", "dl", "dt", "em", "h1", "h2", "h3", "h4", "h5", "h6", "hr",
-        "i", "ins", "kbd", "li", "main", "mark", "ol", "p", "pre", "q", "s",
-        "section", "small", "span", "strong", "sub", "summary", "sup",
-        "table", "tbody", "td", "tfoot", "th", "thead", "time", "tr", "u",
+        "a",
+        "abbr",
+        "b",
+        "blockquote",
+        "br",
+        "code",
+        "dd",
+        "del",
+        "details",
+        "div",
+        "dl",
+        "dt",
+        "em",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "hr",
+        "i",
+        "ins",
+        "kbd",
+        "li",
+        "main",
+        "mark",
+        "ol",
+        "p",
+        "pre",
+        "q",
+        "s",
+        "section",
+        "small",
+        "span",
+        "strong",
+        "sub",
+        "summary",
+        "sup",
+        "table",
+        "tbody",
+        "td",
+        "tfoot",
+        "th",
+        "thead",
+        "time",
+        "tr",
+        "u",
         "ul",
     ]
     .into();
@@ -620,18 +677,33 @@ mod sanitize_tests {
         let base = "https://example.com/a/";
         for (input, must_not_contain) in [
             (r#"<p onclick="fetch('https://evil/x')">hi</p>"#, "onclick"),
-            (r#"<img src='x' onerror='alert(1)' onload=alert(2)>"#, "onerror"),
+            (
+                r#"<img src='x' onerror='alert(1)' onload=alert(2)>"#,
+                "onerror",
+            ),
             (r#"<body ONLOAD="evil()">x</body>"#, "onload"),
-            (r#"<meta http-equiv="refresh" content="0;url=https://evil/">"#, "http-equiv"),
+            (
+                r#"<meta http-equiv="refresh" content="0;url=https://evil/">"#,
+                "http-equiv",
+            ),
             (r#"<base href="https://evil/">"#, "<base"),
             (r#"<link rel="stylesheet" href="//evil/x.css">"#, "<link"),
             (r#"<a href=javascript:alert(1)>x</a>"#, "javascript:"),
-            (r#"<a href="data:text/html,<script>alert(1)</script>">x</a>"#, "data:"),
+            (
+                r#"<a href="data:text/html,<script>alert(1)</script>">x</a>"#,
+                "data:",
+            ),
             (r#"<script>alert(1)</script >leftover"#, "<script"),
             (r#"<svg><script>alert(1)</script></svg>"#, "<script"),
-            (r#"<math><mi xlink:href="javascript:alert(1)">x</mi></math>"#, "javascript:"),
+            (
+                r#"<math><mi xlink:href="javascript:alert(1)">x</mi></math>"#,
+                "javascript:",
+            ),
             (r#"<iframe src="https://evil/"></iframe>"#, "<iframe"),
-            (r#"<p style="background:url(https://evil/beacon)">x</p>"#, "style="),
+            (
+                r#"<p style="background:url(https://evil/beacon)">x</p>"#,
+                "style=",
+            ),
         ] {
             let out = sanitize_html(input, base).to_lowercase();
             assert!(
@@ -646,7 +718,12 @@ mod sanitize_tests {
         let html = "<html><body><h1>Title</h1><p>let one = 1; only = 5 café</p>\
             <ul><li>a</li></ul><pre><code>x</code></pre></body></html>";
         let out = sanitize_html(html, "https://example.com/");
-        for keep in ["Title", "let one = 1; only = 5 café", "<li>a</li>", "<code>x</code>"] {
+        for keep in [
+            "Title",
+            "let one = 1; only = 5 café",
+            "<li>a</li>",
+            "<code>x</code>",
+        ] {
             assert!(out.contains(keep), "lost `{keep}`: {out}");
         }
     }
@@ -712,10 +789,20 @@ mod ssrf_tests {
             "::ffff:127.0.0.1", // v4-mapped loopback
         ];
         for a in private {
-            assert!(!ip_is_public(&a.parse::<IpAddr>().unwrap()), "{a} should be refused");
+            assert!(
+                !ip_is_public(&a.parse::<IpAddr>().unwrap()),
+                "{a} should be refused"
+            );
         }
-        for a in ["93.184.216.34", "140.82.112.3", "2606:2800:220:1:248:1893:25c8:1946"] {
-            assert!(ip_is_public(&a.parse::<IpAddr>().unwrap()), "{a} should pass");
+        for a in [
+            "93.184.216.34",
+            "140.82.112.3",
+            "2606:2800:220:1:248:1893:25c8:1946",
+        ] {
+            assert!(
+                ip_is_public(&a.parse::<IpAddr>().unwrap()),
+                "{a} should pass"
+            );
         }
     }
 }
@@ -731,24 +818,32 @@ mod cover_guard_tests {
         std::fs::write(dir.join(".atlas/knowledge/covers/c.png"), b"png").unwrap();
         let root = dir.to_string_lossy().to_string();
 
-        let ok = knowledge_cover_data_url(root.clone(), "covers/c.png".into()).await.unwrap();
+        let ok = knowledge_cover_data_url(root.clone(), "covers/c.png".into())
+            .await
+            .unwrap();
         assert!(ok.starts_with("data:image/png;base64,"));
 
         // Gradient refs pass through untouched — CSS, not files.
         assert_eq!(
-            knowledge_cover_data_url(root.clone(), "gradient:a,b".into()).await.unwrap(),
+            knowledge_cover_data_url(root.clone(), "gradient:a,b".into())
+                .await
+                .unwrap(),
             "gradient:a,b"
         );
 
         // The audit's exfil shape.
-        assert!(knowledge_cover_data_url(root.clone(), "../../../.ssh/id_rsa".into())
-            .await
-            .is_err());
+        assert!(
+            knowledge_cover_data_url(root.clone(), "../../../.ssh/id_rsa".into())
+                .await
+                .is_err()
+        );
 
         // Size cap: decorative images do not get to be 8MB IPC strings.
         let big = vec![0u8; 3 * 1024 * 1024];
         std::fs::write(dir.join(".atlas/knowledge/covers/big.png"), &big).unwrap();
-        let err = knowledge_cover_data_url(root, "covers/big.png".into()).await.unwrap_err();
+        let err = knowledge_cover_data_url(root, "covers/big.png".into())
+            .await
+            .unwrap_err();
         assert!(err.contains("too large"), "{err}");
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -329,8 +329,11 @@ fn undated(model: &str) -> &str {
 
 /// Epoch milliseconds → the local calendar day, `YYYY-MM-DD`.
 pub(crate) fn local_day(epoch_ms: i64) -> Option<String> {
-    chrono::DateTime::<chrono::Utc>::from_timestamp_millis(epoch_ms)
-        .map(|dt| dt.with_timezone(&chrono::Local).format("%Y-%m-%d").to_string())
+    chrono::DateTime::<chrono::Utc>::from_timestamp_millis(epoch_ms).map(|dt| {
+        dt.with_timezone(&chrono::Local)
+            .format("%Y-%m-%d")
+            .to_string()
+    })
 }
 
 /// The project's display name, for the surfaces that list several.
@@ -347,12 +350,22 @@ mod tests {
     use chrono::{TimeZone, Utc};
 
     fn price(input: f64, output: f64) -> ModelPrice {
-        ModelPrice { input, output, cache_read: 0.0, cache_write: 0.0 }
+        ModelPrice {
+            input,
+            output,
+            cache_read: 0.0,
+            cache_write: 0.0,
+        }
     }
 
     /// A model whose provider publishes cache rates, the way Anthropic does.
     fn cached_price(input: f64, output: f64, read: f64, write: f64) -> ModelPrice {
-        ModelPrice { input, output, cache_read: read, cache_write: write }
+        ModelPrice {
+            input,
+            output,
+            cache_read: read,
+            cache_write: write,
+        }
     }
 
     fn prices() -> BTreeMap<String, ModelPrice> {
@@ -360,7 +373,10 @@ mod tests {
             ("anthropic/claude-opus-4".to_string(), price(15.0, 75.0)),
             ("claude-opus-4".to_string(), price(15.0, 75.0)),
             ("gpt-5".to_string(), price(1.25, 10.0)),
-            ("claude-opus-5".to_string(), cached_price(5.0, 25.0, 0.5, 6.25)),
+            (
+                "claude-opus-5".to_string(),
+                cached_price(5.0, 25.0, 0.5, 6.25),
+            ),
         ])
     }
 
@@ -452,11 +468,19 @@ mod tests {
     fn every_agent_is_summarized_the_same_way() {
         let prices = prices();
         let sessions = vec![
-            session("ses-1", "claude-code", Some("claude-opus-4"), totals(1_000_000, 0)),
+            session(
+                "ses-1",
+                "claude-code",
+                Some("claude-opus-4"),
+                totals(1_000_000, 0),
+            ),
             session("ses-2", "codex", Some("gpt-5"), totals(1_000_000, 0)),
             session("ses-3", "atlas-agent", Some("gpt-5"), totals(0, 100_000)),
         ];
-        let message_counts = HashMap::from([("row-ses-1".to_string(), 4i64), ("row-ses-2".to_string(), 2)]);
+        let message_counts = HashMap::from([
+            ("row-ses-1".to_string(), 4i64),
+            ("row-ses-2".to_string(), 2),
+        ]);
 
         let usage = summarize(&sessions, &message_counts, &prices);
 
@@ -469,7 +493,11 @@ mod tests {
         // Costliest first, whichever agent ran it.
         assert_eq!(usage.sessions[0].session_id, "ses-1");
         assert_eq!(
-            usage.sessions.iter().filter_map(|s| s.agent.clone()).count(),
+            usage
+                .sessions
+                .iter()
+                .filter_map(|s| s.agent.clone())
+                .count(),
             3,
             "every row says which agent produced it"
         );
@@ -481,7 +509,10 @@ mod tests {
     #[test]
     fn reasoning_tokens_are_carried_but_never_priced() {
         let prices = prices();
-        let with = TokenTotals { reasoning_tokens: 500_000, ..totals(1_000_000, 200_000) };
+        let with = TokenTotals {
+            reasoning_tokens: 500_000,
+            ..totals(1_000_000, 200_000)
+        };
         let without = totals(1_000_000, 200_000);
         let price = price_for(Some("claude-opus-4"), &prices);
         assert_eq!(cost_usd(&with, price), cost_usd(&without, price));
@@ -493,8 +524,14 @@ mod tests {
         );
         assert_eq!(usage.sessions[0].reasoning_tokens, 500_000);
         assert_eq!(usage.totals.reasoning_tokens, 500_000);
-        assert_eq!(usage.totals.output_tokens, 200_000, "reasoning is not added to output");
-        assert!((usage.totals.total_cost_usd - 30.0).abs() < 1e-9, "15 in + 15 out");
+        assert_eq!(
+            usage.totals.output_tokens, 200_000,
+            "reasoning is not added to output"
+        );
+        assert!(
+            (usage.totals.total_cost_usd - 30.0).abs() < 1e-9,
+            "15 in + 15 out"
+        );
     }
 
     #[test]
@@ -509,14 +546,22 @@ mod tests {
         let days = day_buckets(&usage.sessions);
 
         assert_eq!(days.len(), 2);
-        assert_eq!(days.values().map(|d| d.input_tokens).sum::<u64>(), 3_000_000);
+        assert_eq!(
+            days.values().map(|d| d.input_tokens).sum::<u64>(),
+            3_000_000
+        );
     }
 
     #[test]
     fn a_session_that_recorded_nothing_at_all_does_not_invent_a_day() {
         let prices = prices();
         let usage = summarize(
-            &[session("ses-1", "atlas-agent", None, TokenTotals::default())],
+            &[session(
+                "ses-1",
+                "atlas-agent",
+                None,
+                TokenTotals::default(),
+            )],
             &HashMap::new(),
             &prices,
         );

@@ -84,14 +84,22 @@ fn a_git_repository_stores_its_fingerprint_and_normalised_origin() {
     commit(dir.path(), "a.rs", "one", "initial");
     git(
         dir.path(),
-        &["remote", "add", "origin", "git@github.com:tryatlas/atlas.git"],
+        &[
+            "remote",
+            "add",
+            "origin",
+            "git@github.com:tryatlas/atlas.git",
+        ],
     );
 
     let store = store_in(dir.path());
     let binding = bind(&store, WORKSPACE, dir.path(), ProjectMode::Local).unwrap();
 
     assert!(binding.root_commit_sha.is_some());
-    assert_eq!(binding.git_url.as_deref(), Some("github.com/tryatlas/atlas"));
+    assert_eq!(
+        binding.git_url.as_deref(),
+        Some("github.com/tryatlas/atlas")
+    );
     assert!(!binding.fingerprint_is_shallow);
 }
 
@@ -116,7 +124,12 @@ fn a_shallow_clone_binds_and_its_fingerprint_is_flagged_as_not_authoritative() {
     let origin = tempfile::tempdir().unwrap();
     init_repo(origin.path());
     for i in 0..3 {
-        commit(origin.path(), "a.rs", &format!("v{i}"), &format!("commit {i}"));
+        commit(
+            origin.path(),
+            "a.rs",
+            &format!("v{i}"),
+            &format!("commit {i}"),
+        );
     }
 
     let clone_dir = tempfile::tempdir().unwrap();
@@ -140,7 +153,10 @@ fn a_shallow_clone_binds_and_its_fingerprint_is_flagged_as_not_authoritative() {
     let store = store_in(&target);
     let binding = bind(&store, WORKSPACE, &target, ProjectMode::Local).unwrap();
 
-    assert!(binding.is_capturing(), "a shallow clone must not be blocked");
+    assert!(
+        binding.is_capturing(),
+        "a shallow clone must not be blocked"
+    );
     assert!(
         binding.fingerprint_is_shallow,
         "the fingerprint must be marked as a graft boundary"
@@ -283,7 +299,12 @@ fn a_remote_added_after_binding_is_picked_up_by_a_refresh() {
 
     git(
         dir.path(),
-        &["remote", "add", "origin", "https://github.com/tryatlas/atlas.git"],
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/tryatlas/atlas.git",
+        ],
     );
     assert_eq!(
         refresh_detection(&store, dir.path())
@@ -364,14 +385,22 @@ fn detection_reports_everything_the_popover_shows() {
     commit(dir.path(), "a.rs", "one", "initial");
     git(
         dir.path(),
-        &["remote", "add", "origin", "git@github.com:tryatlas/atlas.git"],
+        &[
+            "remote",
+            "add",
+            "origin",
+            "git@github.com:tryatlas/atlas.git",
+        ],
     );
 
     let detection = detect(dir.path());
     assert!(detection.is_git_repository);
     assert!(detection.has_commits);
     assert!(detection.root_commit_sha.is_some());
-    assert_eq!(detection.git_url.as_deref(), Some("github.com/tryatlas/atlas"));
+    assert_eq!(
+        detection.git_url.as_deref(),
+        Some("github.com/tryatlas/atlas")
+    );
     assert!(!detection.suggested_slug.is_empty());
 }
 
@@ -412,13 +441,19 @@ fn connecting_a_local_project_to_an_existing_cloud_project_queues_its_history() 
             },
         )
         .unwrap();
-    assert_eq!(store.session(&session).unwrap().unwrap().sync_state, SyncState::Local);
+    assert_eq!(
+        store.session(&session).unwrap().unwrap().sync_state,
+        SyncState::Local
+    );
 
     // What `capture_connect` does once the server has bound the pick.
     let moved = store
         .promote_to_cloud(WORKSPACE, "org-1", "atlas", Some("remote-atlas"))
         .unwrap();
-    assert!(moved >= 2, "the session and its messages were queued, got {moved}");
+    assert!(
+        moved >= 2,
+        "the session and its messages were queued, got {moved}"
+    );
 
     let binding = store.binding().unwrap().unwrap();
     assert_eq!(binding.mode, ProjectMode::Cloud);
@@ -426,7 +461,10 @@ fn connecting_a_local_project_to_an_existing_cloud_project_queues_its_history() 
     assert_eq!(binding.org_id.as_deref(), Some("org-1"));
     assert_eq!(binding.remote_workspace_id.as_deref(), Some("remote-atlas"));
 
-    assert_eq!(store.session(&session).unwrap().unwrap().sync_state, SyncState::Pending);
+    assert_eq!(
+        store.session(&session).unwrap().unwrap().sync_state,
+        SyncState::Pending
+    );
     for message in store.messages_for_session(&session).unwrap() {
         assert_eq!(message.sync_state, SyncState::Pending);
     }
@@ -456,7 +494,9 @@ fn switching_cloud_project_requeues_every_row_for_the_new_destination() {
         source: Source::Acp,
         native_session_id: "s1".into(),
     };
-    let session = capture.record_prompt(&key, "hello", 1, None, None, None).unwrap();
+    let session = capture
+        .record_prompt(&key, "hello", 1, None, None, None)
+        .unwrap();
     capture
         .record_turn(
             &session,
@@ -474,7 +514,10 @@ fn switching_cloud_project_requeues_every_row_for_the_new_destination() {
     store.mark_sent(&session).unwrap();
     let message_id = store.messages_for_session(&session).unwrap()[0].id.clone();
     store.mark_failed(&message_id).unwrap();
-    assert_eq!(store.session(&session).unwrap().unwrap().sync_state, SyncState::Sent);
+    assert_eq!(
+        store.session(&session).unwrap().unwrap().sync_state,
+        SyncState::Sent
+    );
     assert_eq!(
         store.messages_for_session(&session).unwrap()[0].sync_state,
         SyncState::Failed
@@ -489,13 +532,31 @@ fn switching_cloud_project_requeues_every_row_for_the_new_destination() {
     assert_eq!(binding.mode, ProjectMode::Cloud);
     assert_eq!(binding.slug.as_deref(), Some("project2"));
     assert_eq!(binding.remote_workspace_id.as_deref(), Some("remote-2"));
-    assert_eq!(store.session(&session).unwrap().unwrap().sync_state, SyncState::Pending);
+    assert_eq!(
+        store.session(&session).unwrap().unwrap().sync_state,
+        SyncState::Pending
+    );
     assert_eq!(
         store.messages_for_session(&session).unwrap()[0].sync_state,
         SyncState::Pending
     );
     // Nothing is left in a state the new destination will never see.
-    assert_eq!(store.row_count_in_state(WORKSPACE, SyncState::Sent).unwrap(), 0);
-    assert_eq!(store.row_count_in_state(WORKSPACE, SyncState::Failed).unwrap(), 0);
-    assert_eq!(store.row_count_in_state(WORKSPACE, SyncState::Local).unwrap(), 0);
+    assert_eq!(
+        store
+            .row_count_in_state(WORKSPACE, SyncState::Sent)
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        store
+            .row_count_in_state(WORKSPACE, SyncState::Failed)
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        store
+            .row_count_in_state(WORKSPACE, SyncState::Local)
+            .unwrap(),
+        0
+    );
 }

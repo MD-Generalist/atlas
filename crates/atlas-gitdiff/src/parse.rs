@@ -375,10 +375,7 @@ mod tests {
                 (P, "from_theirs"),
             ]
         );
-        assert_eq!(
-            kinds(&parsed.hunks[1]),
-            [(M, "gone"), (P, "here")]
-        );
+        assert_eq!(kinds(&parsed.hunks[1]), [(M, "gone"), (P, "here")]);
     }
 
     /// Once a hunk is open, the next file's `--- a/…` and `+++ b/…` headers

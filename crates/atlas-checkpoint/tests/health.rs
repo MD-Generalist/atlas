@@ -129,7 +129,10 @@ fn a_flagged_session_moves_the_project_to_degraded() {
     assert_eq!(health.state, HealthState::Degraded);
     assert_eq!(health.flagged_sessions, 1);
     assert!(
-        health.issues.iter().any(|i| i.reason.contains("could not be fully recorded")),
+        health
+            .issues
+            .iter()
+            .any(|i| i.reason.contains("could not be fully recorded")),
         "{:?}",
         health.issues
     );
@@ -188,12 +191,17 @@ fn a_recovered_commit_cursor_surfaces_as_degraded_with_a_note() {
     init_repo(dir.path());
     let store = bound(dir.path());
 
-    store.set_commit_cursor(WORKSPACE, "deadbeef", true).unwrap();
+    store
+        .set_commit_cursor(WORKSPACE, "deadbeef", true)
+        .unwrap();
 
     let health = health(&store, watching());
     assert_eq!(health.state, HealthState::Degraded);
     assert!(
-        health.issues.iter().any(|i| i.reason.contains("lost this Project's place")),
+        health
+            .issues
+            .iter()
+            .any(|i| i.reason.contains("lost this Project's place")),
         "{:?}",
         health.issues
     );
@@ -204,7 +212,9 @@ fn a_normal_cursor_is_not_degraded() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());
     let store = bound(dir.path());
-    store.set_commit_cursor(WORKSPACE, "deadbeef", false).unwrap();
+    store
+        .set_commit_cursor(WORKSPACE, "deadbeef", false)
+        .unwrap();
     assert_eq!(health(&store, watching()).state, HealthState::Ok);
 }
 
@@ -230,7 +240,10 @@ fn a_dead_watcher_moves_the_project_to_stopped() {
 
     assert_eq!(health.state, HealthState::Stopped);
     assert!(
-        health.issues.iter().any(|i| i.reason.contains("Git watcher")),
+        health
+            .issues
+            .iter()
+            .any(|i| i.reason.contains("Git watcher")),
         "{:?}",
         health.issues
     );
@@ -288,7 +301,10 @@ fn a_second_window_reports_stopped_rather_than_silently_not_recording() {
     );
     assert_eq!(health.state, HealthState::Stopped);
     assert!(
-        health.issues.iter().any(|i| i.reason.contains("Another Atlas window")),
+        health
+            .issues
+            .iter()
+            .any(|i| i.reason.contains("Another Atlas window")),
         "{:?}",
         health.issues
     );
@@ -314,7 +330,10 @@ fn a_project_never_opened_this_process_is_not_another_window() {
     );
     assert_eq!(health.state, HealthState::Ok, "{:?}", health.issues);
     assert!(
-        !health.issues.iter().any(|i| i.reason.contains("Another Atlas window")),
+        !health
+            .issues
+            .iter()
+            .any(|i| i.reason.contains("Another Atlas window")),
         "{:?}",
         health.issues
     );
@@ -338,7 +357,10 @@ fn a_dead_capture_worker_reports_stopped() {
     );
     assert_eq!(health.state, HealthState::Stopped);
     assert!(
-        health.issues.iter().any(|i| i.reason.contains("capture worker")),
+        health
+            .issues
+            .iter()
+            .any(|i| i.reason.contains("capture worker")),
         "{:?}",
         health.issues
     );
@@ -358,7 +380,10 @@ fn a_revoked_drain_authorization_surfaces_without_stopping_capture() {
     let health = health(&store, no_watcher_needed());
     assert_eq!(health.state, HealthState::Degraded);
     assert!(
-        health.issues.iter().any(|i| i.reason.contains("authorized")),
+        health
+            .issues
+            .iter()
+            .any(|i| i.reason.contains("authorized")),
         "{:?}",
         health.issues
     );
@@ -376,7 +401,10 @@ fn a_mass_orphan_reconcile_note_surfaces_as_degraded_with_the_count() {
     let health = health(&store, no_watcher_needed());
     assert_eq!(health.state, HealthState::Degraded);
     assert!(
-        health.issues.iter().any(|i| i.reason.contains("12 Checkpoint")),
+        health
+            .issues
+            .iter()
+            .any(|i| i.reason.contains("12 Checkpoint")),
         "{:?}",
         health.issues
     );
@@ -406,7 +434,10 @@ fn a_partly_failed_reconcile_pass_surfaces_as_degraded() {
     let health = health(&store, no_watcher_needed());
     assert_eq!(health.state, HealthState::Degraded);
     assert!(
-        health.issues.iter().any(|i| i.reason.contains("reconciliation")),
+        health
+            .issues
+            .iter()
+            .any(|i| i.reason.contains("reconciliation")),
         "{:?}",
         health.issues
     );
@@ -416,7 +447,9 @@ fn a_partly_failed_reconcile_pass_surfaces_as_degraded() {
 fn an_unreadable_reconcile_note_never_breaks_the_signal() {
     let dir = tempfile::tempdir().unwrap();
     let store = bound(dir.path());
-    store.set_reconcile_note(WORKSPACE, "not json at all").unwrap();
+    store
+        .set_reconcile_note(WORKSPACE, "not json at all")
+        .unwrap();
 
     // Tolerant parse: the health signal must never itself become the failure.
     assert_eq!(health(&store, no_watcher_needed()).state, HealthState::Ok);
@@ -448,7 +481,10 @@ fn an_unwritable_store_reports_stopped_with_the_cause() {
 
         assert_eq!(result.state, HealthState::Stopped);
         assert!(
-            result.issues.iter().any(|i| i.reason.contains("cannot be written")),
+            result
+                .issues
+                .iter()
+                .any(|i| i.reason.contains("cannot be written")),
             "{:?}",
             result.issues
         );
@@ -463,7 +499,9 @@ fn stopped_outranks_degraded_in_the_summary() {
     init_repo(dir.path());
     let mut store = bound(dir.path());
     let session = record_session(&mut store, "s1");
-    store.flag_needs_attention(&session, "redaction failed").unwrap();
+    store
+        .flag_needs_attention(&session, "redaction failed")
+        .unwrap();
 
     let both = HealthSignalsBoth(&store);
     let health = both.evaluate();

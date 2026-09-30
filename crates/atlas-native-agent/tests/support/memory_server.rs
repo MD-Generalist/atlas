@@ -48,7 +48,9 @@ impl ServerHandler for Tools {
             "properties": { "query": { "type": "string" } },
             "required": ["query"]
         });
-        let serde_json::Value::Object(schema) = schema else { unreachable!() };
+        let serde_json::Value::Object(schema) = schema else {
+            unreachable!()
+        };
         Ok(ListToolsResult::with_all_items(vec![Tool::new(
             self.name,
             "Search shared memory.",
@@ -70,11 +72,14 @@ impl ServerHandler for Tools {
             .to_string();
         let args = serde_json::Value::Object(request.arguments.unwrap_or_default());
         if self.gate.as_ref().is_some_and(|gate| !gate(&args)) {
-            return Ok(CallToolResult::error(vec![ContentBlock::text("not approved by the user")]).into());
+            return Ok(
+                CallToolResult::error(vec![ContentBlock::text("not approved by the user")]).into(),
+            );
         }
         self.calls.lock().unwrap().push((auth, args));
         Ok(CallToolResult::success(vec![ContentBlock::text(
-            json!({ "entries": [{ "kind": "decision", "content": "Sign JWTs with RS256" }] }).to_string(),
+            json!({ "entries": [{ "kind": "decision", "content": "Sign JWTs with RS256" }] })
+                .to_string(),
         )])
         .into())
     }
@@ -101,14 +106,20 @@ pub async fn start_gated(name: &'static str, gate: Gate) -> (String, Calls) {
 
 async fn serve(name: &'static str, gate: Option<Gate>) -> (String, Calls) {
     let calls: Calls = Arc::default();
-    let tools = Tools { calls: calls.clone(), name, gate };
+    let tools = Tools {
+        calls: calls.clone(),
+        name,
+        gate,
+    };
     let service = StreamableHttpService::new(
         move || Ok(tools.clone()),
         Arc::new(LocalSessionManager::default()),
         StreamableHttpServerConfig::default(),
     );
     let router = axum::Router::new().nest_service("/mcp", service);
-    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
         let _ = axum::serve(listener, router).await;
@@ -134,8 +145,9 @@ impl atlas_agent_servers::SessionMcpServers for OfferingMemory {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .push(request.clone());
         let server = acp::McpServer::Http(
-            acp::McpServerHttp::new("atlas_memory", self.url.clone())
-                .headers(vec![acp::HttpHeader::new("Authorization", "Bearer session-token")]),
+            acp::McpServerHttp::new("atlas_memory", self.url.clone()).headers(vec![
+                acp::HttpHeader::new("Authorization", "Bearer session-token"),
+            ]),
         );
         let settled = self.settled.clone();
         atlas_agent_servers::SessionMcpOffer::new(vec![server], move |session| {

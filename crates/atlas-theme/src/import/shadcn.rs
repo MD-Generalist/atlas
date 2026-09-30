@@ -32,7 +32,7 @@ use serde_json::Value;
 use crate::color;
 use crate::import::draft::VariantDraft;
 use crate::import::report::{Fidelity, ImportReport};
-use crate::import::{css, finish_theme, ImportedTheme, ImportOptions};
+use crate::import::{css, finish_theme, ImportOptions, ImportedTheme};
 use crate::{ThemeError, BASE_TOKENS};
 
 /// tweakcn emits the ingredients of its shadow ramp alongside the ramp itself.
@@ -57,8 +57,14 @@ const CSS_DEFAULT_ROOT_PX: f64 = 16.0;
 /// other unit, or anything that is not a plain number, is left as written.
 fn radius_in_px(value: &str) -> Option<String> {
     let value = value.trim();
-    let number = value.strip_suffix("rem").or_else(|| value.strip_suffix("em"))?;
-    let number: f64 = number.trim().parse().ok().filter(|n: &f64| n.is_finite() && *n >= 0.0)?;
+    let number = value
+        .strip_suffix("rem")
+        .or_else(|| value.strip_suffix("em"))?;
+    let number: f64 = number
+        .trim()
+        .parse()
+        .ok()
+        .filter(|n: &f64| n.is_finite() && *n >= 0.0)?;
     let px = (number * CSS_DEFAULT_ROOT_PX * 1000.0).round() / 1000.0;
     Some(format!("{px}px"))
 }
@@ -75,7 +81,9 @@ pub(crate) fn from_registry_item(
             .map(|map| {
                 map.iter()
                     .filter_map(|(key, value)| {
-                        value.as_str().map(|value| (key.trim_start_matches("--").to_string(), value.to_string()))
+                        value.as_str().map(|value| {
+                            (key.trim_start_matches("--").to_string(), value.to_string())
+                        })
                     })
                     .collect()
             })
@@ -104,13 +112,20 @@ pub(crate) fn from_registry_item(
         }
     }
     if value.get("css").is_some() {
-        report.ignore("css", "raw css", "a registry item's raw CSS block is not a theme value");
+        report.ignore(
+            "css",
+            "raw css",
+            "a registry item's raw CSS block is not a theme value",
+        );
     }
     build(&theme, &light, &dark, report, options)
 }
 
 /// A pasted `globals.css`.
-pub(crate) fn from_css(source: &str, options: &ImportOptions) -> Result<Vec<ImportedTheme>, ThemeError> {
+pub(crate) fn from_css(
+    source: &str,
+    options: &ImportOptions,
+) -> Result<Vec<ImportedTheme>, ThemeError> {
     let sheet = css::parse(source);
     if sheet.is_empty() {
         return Err(crate::validation(
@@ -118,7 +133,10 @@ pub(crate) fn from_css(source: &str, options: &ImportOptions) -> Result<Vec<Impo
             "no CSS custom properties found in :root, .dark or @theme",
         ));
     }
-    let source_name = options.name_hint.clone().unwrap_or_else(|| "Pasted CSS".to_string());
+    let source_name = options
+        .name_hint
+        .clone()
+        .unwrap_or_else(|| "Pasted CSS".to_string());
     let mut report = ImportReport::new("shadcn-css", source_name, Fidelity::Native);
 
     // `:root` is shadcn's LIGHT variant by convention — but only when a `.dark`
@@ -126,7 +144,10 @@ pub(crate) fn from_css(source: &str, options: &ImportOptions) -> Result<Vec<Impo
     // `:root` and labelling that "light" would file a black theme under the
     // appearance the user never sees.
     let root_is_light = if sheet.dark.is_empty() {
-        let dark_root = sheet.root.get("background").and_then(|value| color::is_dark(value));
+        let dark_root = sheet
+            .root
+            .get("background")
+            .and_then(|value| color::is_dark(value));
         match dark_root {
             Some(true) => {
                 report.note(":root has a dark background and there is no .dark block, so it was imported as the dark variant");
@@ -143,7 +164,11 @@ pub(crate) fn from_css(source: &str, options: &ImportOptions) -> Result<Vec<Impo
         (BTreeMap::new(), sheet.root.clone())
     };
     for selector in &sheet.other_selectors {
-        report.ignore(selector.clone(), "css rule", "not a :root, .dark or @theme block");
+        report.ignore(
+            selector.clone(),
+            "css rule",
+            "not a :root, .dark or @theme block",
+        );
     }
     build(&sheet.theme, &light, &dark, report, options)
 }
@@ -168,8 +193,14 @@ fn build(
             let found = vars
                 .get(*token)
                 .map(|value| (format!("--{token} ({appearance})"), value))
-                .or_else(|| theme_vars.get(*token).map(|value| (format!("--{token} (@theme)"), value)));
-            let Some((source, value)) = found else { continue };
+                .or_else(|| {
+                    theme_vars
+                        .get(*token)
+                        .map(|value| (format!("--{token} (@theme)"), value))
+                });
+            let Some((source, value)) = found else {
+                continue;
+            };
             if *token == "radius" {
                 if let Some(px) = radius_in_px(value) {
                     if draft.map_base(token, &source, &px) {
@@ -182,7 +213,10 @@ fn build(
         }
         // tweakcn writes the tracking token under Tailwind's own name.
         if draft.base_value("tracking-normal").is_none() {
-            if let Some(value) = vars.get("letter-spacing").or_else(|| theme_vars.get("letter-spacing")) {
+            if let Some(value) = vars
+                .get("letter-spacing")
+                .or_else(|| theme_vars.get("letter-spacing"))
+            {
                 draft.map_base("tracking-normal", "--letter-spacing", value);
             }
         }
@@ -191,7 +225,10 @@ fn build(
         drafts.push(draft);
     }
     if drafts.is_empty() {
-        return Err(crate::validation(&options.origin, "no usable colours found"));
+        return Err(crate::validation(
+            &options.origin,
+            "no usable colours found",
+        ));
     }
 
     // Everything the source said that did not land anywhere.
@@ -229,7 +266,10 @@ fn build(
         ));
     }
 
-    if drafts.iter().any(|draft| draft.base_value("spacing").is_some()) {
+    if drafts
+        .iter()
+        .any(|draft| draft.base_value("spacing").is_some())
+    {
         // Decision 20: kept in the file, honoured by nothing.
         report.warn(
             "`spacing` was kept in the theme file but Atlas ignores it — spacing and the type scale are app-owned (decision 20)",
@@ -252,8 +292,19 @@ mod tests {
         assert_eq!(radius_in_px(" 0.625rem ").as_deref(), Some("10px"));
         assert_eq!(radius_in_px("0.5em").as_deref(), Some("8px"));
         assert_eq!(radius_in_px("0rem").as_deref(), Some("0px"));
-        for kept in ["8px", "0", "calc(1rem - 2px)", "remrem", "-1rem", "1.2.3rem"] {
-            assert_eq!(radius_in_px(kept), None, "{kept:?} should be left as written");
+        for kept in [
+            "8px",
+            "0",
+            "calc(1rem - 2px)",
+            "remrem",
+            "-1rem",
+            "1.2.3rem",
+        ] {
+            assert_eq!(
+                radius_in_px(kept),
+                None,
+                "{kept:?} should be left as written"
+            );
         }
     }
 }

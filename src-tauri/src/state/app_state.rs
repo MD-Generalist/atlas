@@ -507,12 +507,10 @@ impl AppState {
             std::fs::create_dir_all(dir)?;
         }
         let tmp = path.with_extension(format!("json.tmp.{}", uuid::Uuid::new_v4()));
-        let merged = Self::merged_for_save(&path, state).map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
-        })?;
-        let raw = serde_json::to_string_pretty(&merged).map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
-        })?;
+        let merged = Self::merged_for_save(&path, state)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+        let raw = serde_json::to_string_pretty(&merged)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
         let written = (|| -> std::io::Result<()> {
             let mut f = std::fs::File::create(&tmp)?;
             f.write_all(raw.as_bytes())?;
@@ -567,7 +565,10 @@ mod tests {
         let (_dir, path) = tmp_state_path();
         state_file_with_legacy_settings(&path);
 
-        let state = AppState { settings_config_migrated: false, ..AppState::default() };
+        let state = AppState {
+            settings_config_migrated: false,
+            ..AppState::default()
+        };
         let merged = AppState::merged_for_save(&path, &state).unwrap();
 
         assert_eq!(
@@ -585,10 +586,16 @@ mod tests {
         let (_dir, path) = tmp_state_path();
         state_file_with_legacy_settings(&path);
 
-        let state = AppState { settings_config_migrated: true, ..AppState::default() };
+        let state = AppState {
+            settings_config_migrated: true,
+            ..AppState::default()
+        };
         let merged = AppState::merged_for_save(&path, &state).unwrap();
 
-        assert!(merged.get("settings").is_none(), "a migrated state.json keeps no settings shadow");
+        assert!(
+            merged.get("settings").is_none(),
+            "a migrated state.json keeps no settings shadow"
+        );
     }
 
     /// Merging must not resurrect stale values for keys the struct owns — the
@@ -605,7 +612,10 @@ mod tests {
         )
         .unwrap();
 
-        let state = AppState { settings_config_migrated: true, ..AppState::default() };
+        let state = AppState {
+            settings_config_migrated: true,
+            ..AppState::default()
+        };
         let merged = AppState::merged_for_save(&path, &state).unwrap();
 
         assert_eq!(merged["settingsConfigMigrated"], serde_json::json!(true));
@@ -638,7 +648,10 @@ mod tests {
     /// payload deserializes to `None` and this fails instead of passing quietly.
     #[test]
     fn frontend_payload_carries_the_frozen_active_project_key() {
-        assert_eq!(frontend_payload().active_workspace_id.as_deref(), Some("proj-1"));
+        assert_eq!(
+            frontend_payload().active_workspace_id.as_deref(),
+            Some("proj-1")
+        );
     }
 
     /// The same freeze, one level down. `Organisation::active_workspace_id` is
@@ -711,7 +724,11 @@ mod tests {
     fn a_first_run_still_gets_the_default_organisation() {
         let (state, legacy) = AppState::from_raw(None);
 
-        assert_eq!(state.organisations.len(), 1, "no default org on a fresh install");
+        assert_eq!(
+            state.organisations.len(),
+            1,
+            "no default org on a fresh install"
+        );
         assert_eq!(state.organisations[0].name, "Personal");
         assert_eq!(
             state.active_organisation_id.as_deref(),

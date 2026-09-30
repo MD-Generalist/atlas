@@ -174,7 +174,9 @@ impl std::fmt::Display for FetchError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NoToken(why) => write!(f, "not authenticated: {why}"),
-            Self::Unauthorized(_) => write!(f, "the gateway rejected the account token (unauthorized)"),
+            Self::Unauthorized(_) => {
+                write!(f, "the gateway rejected the account token (unauthorized)")
+            }
             Self::Http { status, .. } => write!(f, "the gateway answered HTTP {status}"),
             Self::Transport(why) => write!(f, "could not reach the gateway: {why}"),
             Self::Shape(why) => write!(f, "the gateway's catalogue did not parse: {why}"),
@@ -206,7 +208,11 @@ pub struct GatewayCatalogueFetcher {
 }
 
 impl GatewayCatalogueFetcher {
-    pub fn new(base_url: impl Into<String>, token: Arc<dyn AtlasTokenSource>, org: OrgSource) -> Self {
+    pub fn new(
+        base_url: impl Into<String>,
+        token: Arc<dyn AtlasTokenSource>,
+        org: OrgSource,
+    ) -> Self {
         Self {
             base_url: base_url.into(),
             token: Some(token),
@@ -320,9 +326,12 @@ pub async fn write_cache(home: &Path, cache: &CatalogueCache) -> Result<()> {
     tokio::fs::write(&tmp, body)
         .await
         .with_context(|| format!("writing {}", tmp.display()))?;
-    tokio::fs::rename(&tmp, &path)
-        .await
-        .with_context(|| format!("moving the model catalogue cache into place at {}", path.display()))?;
+    tokio::fs::rename(&tmp, &path).await.with_context(|| {
+        format!(
+            "moving the model catalogue cache into place at {}",
+            path.display()
+        )
+    })?;
     Ok(())
 }
 
@@ -339,7 +348,10 @@ pub enum Resolved {
     /// The gateway answered and the cache was rewritten.
     Fetched(CatalogueCache),
     /// The gateway did not answer and an older cache carried the connection.
-    Stale { cache: CatalogueCache, error: FetchError },
+    Stale {
+        cache: CatalogueCache,
+        error: FetchError,
+    },
 }
 
 impl Resolved {
@@ -509,7 +521,9 @@ pub fn project(cache: &CatalogueCache) -> Option<ProjectedCatalogue> {
             )
         })
         .collect();
-    let response: ModelsResponse = match serde_json::from_value(serde_json::json!({ "models": rows })) {
+    let response: ModelsResponse = match serde_json::from_value(
+        serde_json::json!({ "models": rows }),
+    ) {
         Ok(response) => response,
         Err(err) => {
             // The row builder and the engine's record are both in this
@@ -540,7 +554,11 @@ pub fn project(cache: &CatalogueCache) -> Option<ProjectedCatalogue> {
         response,
         picker,
         default_model: default.id.clone(),
-        fingerprint: fingerprint(entitled.iter().map(|row| (row.id.as_str(), row.context_window))),
+        fingerprint: fingerprint(
+            entitled
+                .iter()
+                .map(|row| (row.id.as_str(), row.context_window)),
+        ),
     })
 }
 
@@ -574,7 +592,10 @@ mod tests {
 
     impl FakeFetcher {
         fn ok(rows: Vec<GatewayRow>) -> Self {
-            Self::with(Ok(GatewayCatalogue { has_grant: true, rows }))
+            Self::with(Ok(GatewayCatalogue {
+                has_grant: true,
+                rows,
+            }))
         }
         fn failing(error: FetchError) -> Self {
             Self::with(Err(error))
@@ -676,11 +697,17 @@ mod tests {
         };
         let sonnet = &catalogue.rows[0];
         assert_eq!(sonnet.display_name.as_deref(), Some("Claude Sonnet 4.6"));
-        assert_eq!(sonnet.description.as_deref(), Some("Strong agentic coding at the mid tier."));
+        assert_eq!(
+            sonnet.description.as_deref(),
+            Some("Strong agentic coding at the mid tier.")
+        );
         assert_eq!(sonnet.context_window, Some(200_000));
         assert_eq!(sonnet.sort_order, Some(1));
         assert!(sonnet.is_default);
-        assert_eq!(sonnet.input_modalities.as_deref(), Some(&["text".to_string(), "image".to_string()][..]));
+        assert_eq!(
+            sonnet.input_modalities.as_deref(),
+            Some(&["text".to_string(), "image".to_string()][..])
+        );
         let glm = &catalogue.rows[1];
         assert_eq!(glm.description, None, "null is absent, not the string null");
         assert!(!glm.is_default);
@@ -697,7 +724,11 @@ mod tests {
         let projected = project(&cache).expect("rows");
         assert_eq!(projected.default_model, "claude-opus-5");
         let slugs: Vec<&str> = projected.picker.iter().map(|m| m.id.as_str()).collect();
-        assert_eq!(slugs, ["claude-sonnet-4-6", "claude-opus-5"], "the wire order is kept");
+        assert_eq!(
+            slugs,
+            ["claude-sonnet-4-6", "claude-opus-5"],
+            "the wire order is kept"
+        );
 
         // A default the gateway put on a row this caller cannot use — which
         // it never does, but a cache could carry — must not start a session
@@ -721,7 +752,11 @@ mod tests {
                 .map(|m| format!("{m:?}").to_ascii_lowercase())
                 .collect::<Vec<_>>()
         };
-        assert_eq!(modalities(0), ["text", "image"], "unstated keeps the old assumption");
+        assert_eq!(
+            modalities(0),
+            ["text", "image"],
+            "unstated keeps the old assumption"
+        );
         assert_eq!(modalities(1), ["text"], "stated is honoured");
     }
 
@@ -757,7 +792,9 @@ mod tests {
         assert_eq!(resolved.cache().rows[0].id, "b");
         assert_eq!(fetcher.calls(), 1);
 
-        let on_disk = load_cache(home.path()).await.expect("the cache was rewritten");
+        let on_disk = load_cache(home.path())
+            .await
+            .expect("the cache was rewritten");
         assert_eq!(on_disk.rows[0].id, "b");
         assert_eq!(on_disk.fetched_at, now);
     }
@@ -811,7 +848,10 @@ mod tests {
             panic!("with nothing to fall back to there must be no catalogue");
         };
         assert!(err.to_string().contains("model list"), "{err}");
-        assert!(err.to_string().contains("could not reach the gateway"), "{err}");
+        assert!(
+            err.to_string().contains("could not reach the gateway"),
+            "{err}"
+        );
     }
 
     #[tokio::test]
@@ -823,7 +863,12 @@ mod tests {
         let Err(err) = resolve(home.path(), &fetcher, &FakeClock(1), false).await else {
             panic!("no catalogue");
         };
-        assert!(err.to_string().to_ascii_lowercase().contains("unauthorized"), "{err}");
+        assert!(
+            err.to_string()
+                .to_ascii_lowercase()
+                .contains("unauthorized"),
+            "{err}"
+        );
         let no_token = FetchError::NoToken("signed out".into()).to_string();
         assert!(no_token.contains("not authenticated"), "{no_token}");
     }
@@ -831,9 +876,12 @@ mod tests {
     #[tokio::test]
     async fn a_cache_for_another_org_counts_as_missing() {
         let home = tempdir();
-        write_cache(home.path(), &cache_with(vec![row("a", true)], Some("org_1"), 1_000))
-            .await
-            .expect("write");
+        write_cache(
+            home.path(),
+            &cache_with(vec![row("a", true)], Some("org_1"), 1_000),
+        )
+        .await
+        .expect("write");
 
         // Fresh by age, wrong org: fetch.
         let fetcher = FakeFetcher::ok(vec![row("b", true)]).for_org("org_2");
@@ -845,7 +893,9 @@ mod tests {
 
         // And a failed fetch for a third org may not fall back to org_2's rows.
         let failing = FakeFetcher::failing(FetchError::Transport("down".into())).for_org("org_3");
-        assert!(resolve(home.path(), &failing, &FakeClock(1_002), false).await.is_err());
+        assert!(resolve(home.path(), &failing, &FakeClock(1_002), false)
+            .await
+            .is_err());
     }
 
     #[tokio::test]
@@ -891,10 +941,18 @@ mod tests {
             .expect("refresh");
         assert_eq!(cache.rows[0].id, "b");
         assert_eq!(fetcher.calls(), 1);
-        assert_eq!(load_cache(home.path()).await.expect("reload").rows[0].id, "b");
+        assert_eq!(
+            load_cache(home.path()).await.expect("reload").rows[0].id,
+            "b"
+        );
 
-        let failing = FakeFetcher::failing(FetchError::Http { status: 503, body: String::new() });
-        assert!(refresh_now(home.path(), &failing, &FakeClock(1_002)).await.is_err());
+        let failing = FakeFetcher::failing(FetchError::Http {
+            status: 503,
+            body: String::new(),
+        });
+        assert!(refresh_now(home.path(), &failing, &FakeClock(1_002))
+            .await
+            .is_err());
         assert_eq!(
             load_cache(home.path()).await.expect("reload").rows[0].id,
             "b",
@@ -907,18 +965,35 @@ mod tests {
     #[test]
     fn only_entitled_rows_are_offered_in_the_gateways_order() {
         let cache = cache_with(
-            vec![row("second", true), row("locked", false), row("first", true)],
+            vec![
+                row("second", true),
+                row("locked", false),
+                row("first", true),
+            ],
             None,
             0,
         );
         let projected = project(&cache).expect("two entitled rows");
-        let slugs: Vec<&str> = projected.response.models.iter().map(|m| m.slug.as_str()).collect();
+        let slugs: Vec<&str> = projected
+            .response
+            .models
+            .iter()
+            .map(|m| m.slug.as_str())
+            .collect();
         assert_eq!(slugs, ["second", "first"], "gateway order, not sorted");
         assert_eq!(
-            projected.response.models.iter().map(|m| m.priority).collect::<Vec<_>>(),
+            projected
+                .response
+                .models
+                .iter()
+                .map(|m| m.priority)
+                .collect::<Vec<_>>(),
             [1, 2],
         );
-        assert_eq!(projected.default_model, "second", "the first entitled row is the default");
+        assert_eq!(
+            projected.default_model, "second",
+            "the first entitled row is the default"
+        );
         assert_eq!(projected.picker.len(), 2);
         assert!(projected.picker.iter().all(|m| m.cost.is_none()));
     }
@@ -937,10 +1012,16 @@ mod tests {
         named.description = Some("The most capable.".into());
         let cache = cache_with(vec![row("gemini-3.6-flash", true), named], None, 0);
         let projected = project(&cache).expect("rows");
-        assert_eq!(projected.response.models[0].display_name, "gemini-3.6-flash");
+        assert_eq!(
+            projected.response.models[0].display_name,
+            "gemini-3.6-flash"
+        );
         assert_eq!(projected.response.models[0].description, None);
         assert_eq!(projected.response.models[1].display_name, "Claude Opus 5");
-        assert_eq!(projected.response.models[1].description.as_deref(), Some("The most capable."));
+        assert_eq!(
+            projected.response.models[1].description.as_deref(),
+            Some("The most capable.")
+        );
         assert_eq!(&*projected.picker[0].name, "gemini-3.6-flash");
         assert_eq!(&*projected.picker[1].name, "Claude Opus 5");
     }
@@ -954,23 +1035,41 @@ mod tests {
         // Absent: the engine has no ceiling to compact against. This is the
         // accepted interim cost until the gateway sends the number.
         assert_eq!(projected.response.models[0].context_window, None);
-        assert_eq!(projected.response.models[0].auto_compact_token_limit(), None);
+        assert_eq!(
+            projected.response.models[0].auto_compact_token_limit(),
+            None
+        );
         // Present: compaction fires at 90%.
         assert_eq!(projected.response.models[1].context_window, Some(200_000));
-        assert_eq!(projected.response.models[1].auto_compact_token_limit(), Some(180_000));
+        assert_eq!(
+            projected.response.models[1].auto_compact_token_limit(),
+            Some(180_000)
+        );
     }
 
     #[test]
     fn no_projected_row_advertises_a_control_this_wire_cannot_carry() {
         let cache = cache_with(vec![row("a", true), row("b", true)], None, 0);
         for model in project(&cache).expect("rows").response.models {
-            assert!(model.supported_reasoning_levels.is_empty(), "{}", model.slug);
+            assert!(
+                model.supported_reasoning_levels.is_empty(),
+                "{}",
+                model.slug
+            );
             assert!(!model.support_verbosity, "{}", model.slug);
-            assert!(!model.supports_reasoning_summary_parameter, "{}", model.slug);
+            assert!(
+                !model.supports_reasoning_summary_parameter,
+                "{}",
+                model.slug
+            );
             assert!(model.service_tiers.is_empty(), "{}", model.slug);
             assert!(!model.use_responses_lite, "{}", model.slug);
             assert!(!model.supports_search_tool, "{}", model.slug);
-            assert!(model.apply_patch_tool_type.is_some(), "{} lost apply_patch", model.slug);
+            assert!(
+                model.apply_patch_tool_type.is_some(),
+                "{} lost apply_patch",
+                model.slug
+            );
         }
     }
 
@@ -980,7 +1079,11 @@ mod tests {
         // with no system prompt at all.
         let cache = cache_with(vec![row("a", true)], None, 0);
         for model in project(&cache).expect("rows").response.models {
-            assert!(model.get_model_instructions(None).len() > 1_000, "{}", model.slug);
+            assert!(
+                model.get_model_instructions(None).len() > 1_000,
+                "{}",
+                model.slug
+            );
         }
     }
 
@@ -992,7 +1095,11 @@ mod tests {
         let mut relabelled = base.clone();
         relabelled.rows[0].display_name = Some("A!".into());
         relabelled.rows[1].description = Some("desc".into());
-        assert_eq!(fp(&base), fp(&relabelled), "names and descriptions swap in place");
+        assert_eq!(
+            fp(&base),
+            fp(&relabelled),
+            "names and descriptions swap in place"
+        );
 
         let mut added = base.clone();
         added.rows.push(row("c", true));

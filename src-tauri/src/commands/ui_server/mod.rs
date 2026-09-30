@@ -70,7 +70,11 @@ pub type NavigationGate = Arc<dyn Fn() -> bool + Send + Sync>;
 /// The window's answer to one UI action. An id nobody is waiting on — already
 /// answered, timed out, or never issued — is a harmless no-op.
 #[tauri::command]
-pub fn ui_action_respond(request_id: Uuid, reply: UiReply, bridge: State<'_, Arc<UiBridge>>) -> Result<(), String> {
+pub fn ui_action_respond(
+    request_id: Uuid,
+    reply: UiReply,
+    bridge: State<'_, Arc<UiBridge>>,
+) -> Result<(), String> {
     bridge.respond(request_id, reply);
     Ok(())
 }

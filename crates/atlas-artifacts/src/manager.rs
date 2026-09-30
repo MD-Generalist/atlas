@@ -116,7 +116,10 @@ pub enum ArtifactsEvent {
         comment: Box<crate::model::Comment>,
     },
     /// Who else is looking at this Project.
-    Presence { key: ProjectKey, online: Vec<String> },
+    Presence {
+        key: ProjectKey,
+        online: Vec<String>,
+    },
     /// Membership was revoked. Terminal — nothing reconnects after this.
     Revoked { key: ProjectKey },
     /// Local state has a gap it cannot see — a subscriber fell behind and
@@ -139,7 +142,10 @@ impl Slot {
     }
 
     fn follower(key: ProjectKey, session_id: &str) -> Self {
-        Self { key, session: Some(session_id.to_string()) }
+        Self {
+            key,
+            session: Some(session_id.to_string()),
+        }
     }
 
     fn label(&self) -> String {
@@ -231,7 +237,9 @@ impl ArtifactsManager {
     /// calls it on every auth, Organisation and binding change.
     pub fn retarget(self: &Arc<Self>, org_id: &str, project_ids: Vec<String>) {
         let (to_start, stopped) = {
-            let Ok(mut registry) = self.registry.lock() else { return };
+            let Ok(mut registry) = self.registry.lock() else {
+                return;
+            };
             registry.active_org = Some(org_id.to_string());
 
             // Drop the board sockets no longer wanted, and their rows with them
@@ -304,7 +312,9 @@ impl ArtifactsManager {
     /// open for it. Recorded whether or not an Organisation is known yet.
     pub fn follow(self: &Arc<Self>, project_id: &str, session_id: &str) {
         let to_start = {
-            let Ok(mut registry) = self.registry.lock() else { return };
+            let Ok(mut registry) = self.registry.lock() else {
+                return;
+            };
             let refs = registry
                 .followers
                 .entry((project_id.to_string(), session_id.to_string()))
@@ -336,9 +346,13 @@ impl ArtifactsManager {
 
     /// Stop following a Session. The socket closes when nobody is left.
     pub fn unfollow(&self, project_id: &str, session_id: &str) {
-        let Ok(mut registry) = self.registry.lock() else { return };
+        let Ok(mut registry) = self.registry.lock() else {
+            return;
+        };
         let key = (project_id.to_string(), session_id.to_string());
-        let Some(refs) = registry.followers.get_mut(&key) else { return };
+        let Some(refs) = registry.followers.get_mut(&key) else {
+            return;
+        };
         *refs = refs.saturating_sub(1);
         let remaining = *refs;
         if remaining == 0 {
@@ -364,7 +378,9 @@ impl ArtifactsManager {
         epoch: u64,
         tx: mpsc::UnboundedSender<ClientFrame>,
     ) -> bool {
-        let Ok(mut registry) = self.registry.lock() else { return false };
+        let Ok(mut registry) = self.registry.lock() else {
+            return false;
+        };
         match registry.connections.get_mut(slot) {
             Some(conn) if conn.epoch == epoch => {
                 conn.outbound = Some(tx);
@@ -376,7 +392,9 @@ impl ArtifactsManager {
 
     /// Clear the attempt's sender, but only the one this epoch installed.
     fn release_outbound(&self, slot: &Slot, epoch: u64) {
-        let Ok(mut registry) = self.registry.lock() else { return };
+        let Ok(mut registry) = self.registry.lock() else {
+            return;
+        };
         if let Some(conn) = registry.connections.get_mut(slot) {
             if conn.epoch == epoch {
                 conn.outbound = None;
@@ -387,8 +405,14 @@ impl ArtifactsManager {
     /// Remove the slot this epoch owns. A follower's refcount stays, so the
     /// next retarget dials it again.
     fn retire(&self, slot: &Slot, epoch: u64) {
-        let Ok(mut registry) = self.registry.lock() else { return };
-        if registry.connections.get(slot).is_some_and(|conn| conn.epoch == epoch) {
+        let Ok(mut registry) = self.registry.lock() else {
+            return;
+        };
+        if registry
+            .connections
+            .get(slot)
+            .is_some_and(|conn| conn.epoch == epoch)
+        {
             registry.connections.remove(slot);
         }
     }
@@ -410,12 +434,19 @@ impl ArtifactsManager {
 
     #[cfg(test)]
     fn epoch_of(&self, slot: &Slot) -> Option<u64> {
-        self.registry.lock().ok()?.connections.get(slot).map(|c| c.epoch)
+        self.registry
+            .lock()
+            .ok()?
+            .connections
+            .get(slot)
+            .map(|c| c.epoch)
     }
 
     #[cfg(test)]
     fn has_connection(&self, slot: &Slot) -> bool {
-        self.registry.lock().is_ok_and(|r| r.connections.contains_key(slot))
+        self.registry
+            .lock()
+            .is_ok_and(|r| r.connections.contains_key(slot))
     }
 
     #[cfg(test)]
@@ -423,7 +454,11 @@ impl ArtifactsManager {
         self.registry
             .lock()
             .ok()
-            .and_then(|r| r.followers.get(&(project_id.to_string(), session_id.to_string())).copied())
+            .and_then(|r| {
+                r.followers
+                    .get(&(project_id.to_string(), session_id.to_string()))
+                    .copied()
+            })
             .unwrap_or(0)
     }
 
@@ -431,9 +466,14 @@ impl ArtifactsManager {
         let epoch = self.next_epoch.fetch_add(1, Ordering::SeqCst) + 1;
         let (stop_tx, mut stop_rx) = watch::channel(());
         if let Ok(mut registry) = self.registry.lock() {
-            registry
-                .connections
-                .insert(slot.clone(), Connection { epoch, _stop: stop_tx, outbound: None });
+            registry.connections.insert(
+                slot.clone(),
+                Connection {
+                    epoch,
+                    _stop: stop_tx,
+                    outbound: None,
+                },
+            );
         }
 
         let manager = Arc::clone(self);
@@ -483,7 +523,9 @@ impl ArtifactsManager {
                 // the first frame on the wire after the 101: the server holds
                 // the subscription per socket, and this socket has none yet.
                 if let Some(session_id) = &slot.session {
-                    let _ = tx.send(ClientFrame::SessionSubscribe { session_id: session_id.clone() });
+                    let _ = tx.send(ClientFrame::SessionSubscribe {
+                        session_id: session_id.clone(),
+                    });
                 }
                 drop(tx);
 
@@ -549,7 +591,9 @@ impl ArtifactsManager {
                         if slot.session.is_none() {
                             manager.board.forget_project(&key);
                         }
-                        let _ = manager.events.send(ArtifactsEvent::Revoked { key: key.clone() });
+                        let _ = manager
+                            .events
+                            .send(ArtifactsEvent::Revoked { key: key.clone() });
                         return;
                     }
                     ExitReason::Forbidden => {
@@ -608,9 +652,15 @@ impl ArtifactsManager {
                     summary.workspace_id = key.1.clone();
                 }
                 self.board.upsert(&key.0, summary);
-                let _ = self.events.send(ArtifactsEvent::BoardChanged { key: key.clone() });
+                let _ = self
+                    .events
+                    .send(ArtifactsEvent::BoardChanged { key: key.clone() });
             }
-            ServerFrame::ArtifactUpsert { session_id, change, entry } => {
+            ServerFrame::ArtifactUpsert {
+                session_id,
+                change,
+                entry,
+            } => {
                 let _ = self.events.send(ArtifactsEvent::EntryUpsert {
                     key: key.clone(),
                     session_id,
@@ -618,7 +668,10 @@ impl ArtifactsManager {
                     entry,
                 });
             }
-            ServerFrame::CommentUpsert { session_id, comment } => {
+            ServerFrame::CommentUpsert {
+                session_id,
+                comment,
+            } => {
                 let _ = self.events.send(ArtifactsEvent::CommentUpsert {
                     key: key.clone(),
                     session_id,
@@ -626,7 +679,10 @@ impl ArtifactsManager {
                 });
             }
             ServerFrame::Presence { online } => {
-                let _ = self.events.send(ArtifactsEvent::Presence { key: key.clone(), online });
+                let _ = self.events.send(ArtifactsEvent::Presence {
+                    key: key.clone(),
+                    online,
+                });
             }
             ServerFrame::Unknown => {}
         }
@@ -696,12 +752,16 @@ mod tests {
 
     impl Loopback {
         async fn start(mode: Mode) -> Self {
-            let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind loopback");
+            let listener = TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind loopback");
             let base = format!("ws://{}", listener.local_addr().unwrap());
             let (tx, rx) = mpsc::unbounded_channel();
             tokio::spawn(async move {
                 loop {
-                    let Ok((stream, _)) = listener.accept().await else { break };
+                    let Ok((stream, _)) = listener.accept().await else {
+                        break;
+                    };
                     let tx = tx.clone();
                     tokio::spawn(async move {
                         match mode {
@@ -712,7 +772,8 @@ mod tests {
                                 let _ = tokio_tungstenite::accept_hdr_async(
                                     stream,
                                     |_req: &Request, _res: Response| {
-                                        let mut err = ErrorResponse::new(Some("no such workspace".into()));
+                                        let mut err =
+                                            ErrorResponse::new(Some("no such workspace".into()));
                                         *err.status_mut() = StatusCode::NOT_FOUND;
                                         Err(err)
                                     },
@@ -775,7 +836,9 @@ mod tests {
         let deadline = tokio::time::Instant::now() + within;
         loop {
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            let msg = timeout(remaining, ws.next()).await.expect("a frame within the window");
+            let msg = timeout(remaining, ws.next())
+                .await
+                .expect("a frame within the window");
             match msg {
                 Some(Ok(WsMessage::Text(text))) => return serde_json::from_str(&text).unwrap(),
                 Some(Ok(_)) => continue,
@@ -788,7 +851,9 @@ mod tests {
         let deadline = tokio::time::Instant::now() + within;
         loop {
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            let msg = timeout(remaining, ws.next()).await.expect("a ping within the window");
+            let msg = timeout(remaining, ws.next())
+                .await
+                .expect("a ping within the window");
             match msg {
                 Some(Ok(WsMessage::Ping(_))) => return,
                 Some(Ok(_)) => continue,
@@ -830,7 +895,10 @@ mod tests {
     /// Wait for the peer to close, skipping anything else it sends first.
     async fn expect_close(ws: &mut WebSocketStream<TcpStream>, within: Duration) {
         loop {
-            match timeout(within, ws.next()).await.expect("a close within the window") {
+            match timeout(within, ws.next())
+                .await
+                .expect("a close within the window")
+            {
                 Some(Ok(WsMessage::Close(_))) | None => break,
                 Some(Ok(_)) => continue,
                 Some(Err(_)) => break,
@@ -853,11 +921,19 @@ mod tests {
 
         manager.retarget("org_1", vec!["ws_1".into()]);
         server.none(Duration::from_millis(200)).await;
-        assert_eq!(manager.epoch_of(&board()), Some(epoch), "the live slot was replaced");
+        assert_eq!(
+            manager.epoch_of(&board()),
+            Some(epoch),
+            "the live slot was replaced"
+        );
 
         let _ = first.send(WsMessage::Close(None)).await;
         let _second = server.socket(SOON).await;
-        assert_eq!(manager.epoch_of(&board()), Some(epoch), "the redial came from a new supervisor");
+        assert_eq!(
+            manager.epoch_of(&board()),
+            Some(epoch),
+            "the redial came from a new supervisor"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -909,7 +985,10 @@ mod tests {
         assert_eq!(manager.refs("ws_1", "ses_1"), 2);
 
         manager.unfollow("ws_1", "ses_1");
-        assert!(manager.has_connection(&follower("ses_1")), "one watcher left");
+        assert!(
+            manager.has_connection(&follower("ses_1")),
+            "one watcher left"
+        );
         manager.unfollow("ws_1", "ses_1");
         expect_close(&mut ws, SOON).await;
         server.none(Duration::from_millis(300)).await;
@@ -926,11 +1005,16 @@ mod tests {
         let mut board_ws = server.socket(SOON).await;
         manager.follow("ws_1", "ses_1");
         let mut follower_ws = server.socket(SOON).await;
-        assert_eq!(next_text(&mut follower_ws, SOON).await["t"], "session.subscribe");
+        assert_eq!(
+            next_text(&mut follower_ws, SOON).await["t"],
+            "session.subscribe"
+        );
 
         // The Project drops out of the bound set: its board socket closes, the
         // follower stays exactly as it was.
-        let epoch = manager.epoch_of(&follower("ses_1")).expect("follower connected");
+        let epoch = manager
+            .epoch_of(&follower("ses_1"))
+            .expect("follower connected");
         manager.retarget("org_1", vec![]);
         expect_close(&mut board_ws, SOON).await;
         server.none(Duration::from_millis(200)).await;
@@ -952,9 +1036,16 @@ mod tests {
         let frame = r#"{"t":"comment.upsert","session_id":"ses_1","comment":{"id":"c1","sessionId":"ses_1","anchorKind":"message","anchorId":"am-1","authorId":"u1","body":"hi","createdAt":"2026-09-26T00:00:00Z"}}"#;
         let _ = ws.send(WsMessage::Text(frame.into())).await;
 
-        let event = timeout(SOON, events.recv()).await.expect("an event").expect("channel open");
+        let event = timeout(SOON, events.recv())
+            .await
+            .expect("an event")
+            .expect("channel open");
         match event {
-            ArtifactsEvent::CommentUpsert { key: k, session_id, comment } => {
+            ArtifactsEvent::CommentUpsert {
+                key: k,
+                session_id,
+                comment,
+            } => {
                 assert_eq!(k, key());
                 assert_eq!(session_id, "ses_1");
                 assert_eq!(comment.id, "c1");
@@ -974,7 +1065,10 @@ mod tests {
         let mut first = server.socket(SOON).await;
         assert_eq!(next_text(&mut first, SOON).await["t"], "session.subscribe");
         // A first open is not a reconnect: nothing was missed, nothing to reload.
-        assert!(matches!(events.try_recv(), Err(broadcast::error::TryRecvError::Empty)));
+        assert!(matches!(
+            events.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
 
         let _ = first.send(WsMessage::Close(None)).await;
         let mut second = server.socket(SOON).await;
@@ -982,7 +1076,10 @@ mod tests {
         assert_eq!(frame["t"], "session.subscribe");
         assert_eq!(frame["session_id"], "ses_1");
 
-        let event = timeout(SOON, events.recv()).await.expect("an event").expect("channel open");
+        let event = timeout(SOON, events.recv())
+            .await
+            .expect("an event")
+            .expect("channel open");
         assert!(matches!(event, ArtifactsEvent::Resync), "{event:?}");
     }
 
@@ -1042,7 +1139,10 @@ mod tests {
         manager.follow("ws_1", "ses_1");
         assert!(matches!(server.next(SOON).await, Accepted::Refused));
         assert!(matches!(server.next(SOON).await, Accepted::Refused));
-        assert!(manager.has_connection(&follower("ses_1")), "a 404 retired the follower");
+        assert!(
+            manager.has_connection(&follower("ses_1")),
+            "a 404 retired the follower"
+        );
         assert_eq!(manager.refs("ws_1", "ses_1"), 1);
     }
 

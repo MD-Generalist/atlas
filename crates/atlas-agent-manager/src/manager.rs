@@ -8,9 +8,7 @@ use std::time::{Duration, Instant};
 use agent_client_protocol::schema::v1 as acp;
 use anyhow::{anyhow, Result};
 use atlas_acp_thread::{AcpThread, AcpThreadHandle, AgentConnection, AgentId, LoadError};
-use atlas_agent_servers::{
-    AgentServer, AgentServerDelegate, ConnectOptions, CustomAgentServer,
-};
+use atlas_agent_servers::{AgentServer, AgentServerDelegate, ConnectOptions, CustomAgentServer};
 use futures::future::{BoxFuture, Shared};
 use futures::FutureExt;
 
@@ -118,7 +116,9 @@ pub enum AgentConnectionEntry {
         started_at: Instant,
     },
     Connected(AgentConnectedState),
-    Error { error: LoadError },
+    Error {
+        error: LoadError,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -159,10 +159,21 @@ impl AgentConnectionEntry {
 /// What Zed emits with `cx.emit` on the entry and on the store.
 #[derive(Clone, Debug)]
 pub enum AgentManagerEvent {
-    NewVersionAvailable { agent: Agent, version: String },
-    LoadingStatusChanged { agent: Agent, status: Option<String> },
-    Connected { agent: Agent },
-    ConnectionFailed { agent: Agent, error: LoadError },
+    NewVersionAvailable {
+        agent: Agent,
+        version: String,
+    },
+    LoadingStatusChanged {
+        agent: Agent,
+        status: Option<String>,
+    },
+    Connected {
+        agent: Agent,
+    },
+    ConnectionFailed {
+        agent: Agent,
+        error: LoadError,
+    },
     /// The set of connections changed — one was added, dropped, or uninstalled.
     ConnectionsChanged,
 }
@@ -310,7 +321,8 @@ impl AgentManager {
     /// HTTP MCP server. `None` while it is not connected: capabilities exist
     /// only once the handshake has answered.
     pub fn supports_http_mcp(&self, key: &Agent) -> Option<bool> {
-        self.connected(key).map(|connection| connection.supports_http_mcp())
+        self.connected(key)
+            .map(|connection| connection.supports_http_mcp())
     }
 
     /// The live connection an ACP agent id names.
@@ -379,7 +391,11 @@ impl AgentManager {
     /// flight is invisible to it, and is exactly the case that spawns a child
     /// moments after the app decided to leave.
     pub fn shutdown(&self) {
-        let entries: Vec<Entry> = self.lock_entries().drain().map(|(_, entry)| entry).collect();
+        let entries: Vec<Entry> = self
+            .lock_entries()
+            .drain()
+            .map(|(_, entry)| entry)
+            .collect();
         for entry in &entries {
             cancel_connect(entry);
         }
@@ -437,7 +453,12 @@ impl AgentManager {
     /// implementations build a boxed future and perform no I/O synchronously,
     /// and neither can reach back into the manager. The `emit` and `watch_*`
     /// calls stay outside it — they spawn tasks that take the same lock.
-    fn open_entry(self: &Arc<Self>, key: Agent, server: Arc<dyn AgentServer>, reuse: Reuse) -> Entry {
+    fn open_entry(
+        self: &Arc<Self>,
+        key: Agent,
+        server: Arc<dyn AgentServer>,
+        reuse: Reuse,
+    ) -> Entry {
         let (entry, connect_task, replaced, statuses) = {
             let mut entries = self.lock_entries();
             match entries.get(&key) {
@@ -634,10 +655,7 @@ impl AgentManager {
                     // holds this entry sees the error, and the next request
                     // starts fresh instead of replaying it.
                     this.lock_entries().remove(&key);
-                    this.emit(AgentManagerEvent::ConnectionFailed {
-                        agent: key,
-                        error,
-                    });
+                    this.emit(AgentManagerEvent::ConnectionFailed { agent: key, error });
                     this.emit(AgentManagerEvent::ConnectionsChanged);
                 }
             }
@@ -788,7 +806,9 @@ impl AgentManager {
     }
 
     fn lock_entries(&self) -> std::sync::MutexGuard<'_, HashMap<Agent, Entry>> {
-        self.entries.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+        self.entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     // ---- sessions -------------------------------------------------------
@@ -817,7 +837,9 @@ impl AgentManager {
         if !connection.supports_load_session() {
             return Err(anyhow!("this agent cannot load stored sessions"));
         }
-        let thread = connection.load_session(session_id, work_dirs, title).await?;
+        let thread = connection
+            .load_session(session_id, work_dirs, title)
+            .await?;
         self.register_session(agent, &thread);
         Ok(thread)
     }
@@ -924,7 +946,10 @@ impl AgentManager {
         session_id: &acp::SessionId,
     ) -> Result<bool> {
         let connection = self.connection(agent).await?;
-        let Some(list) = connection.session_list().filter(|list| list.supports_delete()) else {
+        let Some(list) = connection
+            .session_list()
+            .filter(|list| list.supports_delete())
+        else {
             return Ok(false);
         };
         list.delete_session(session_id).await?;
@@ -966,9 +991,7 @@ impl AgentManager {
     /// refuses an ambiguous id — and "two agents have it" is a different thing
     /// from "nobody does".
     fn knows_session(&self, session_id: &acp::SessionId) -> bool {
-        self.lock_sessions()
-            .keys()
-            .any(|(_, id)| id == session_id)
+        self.lock_sessions().keys().any(|(_, id)| id == session_id)
     }
 
     pub fn sessions(&self) -> Vec<acp::SessionId> {
@@ -1104,7 +1127,9 @@ impl AgentManager {
     fn lock_sessions(
         &self,
     ) -> std::sync::MutexGuard<'_, HashMap<(Agent, acp::SessionId), SessionHandle>> {
-        self.sessions.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+        self.sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 
@@ -1150,9 +1175,13 @@ fn agent_label(key: &Agent) -> String {
 }
 
 fn lock(entry: &Entry) -> std::sync::MutexGuard<'_, AgentConnectionEntry> {
-    entry.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    entry
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 fn lock_thread(thread: &AcpThreadHandle) -> std::sync::MutexGuard<'_, AcpThread> {
-    thread.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    thread
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }

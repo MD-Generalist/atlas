@@ -28,9 +28,17 @@ fn memory_category_labels_are_stable() {
 
 #[test]
 fn memory_category_from_str_accepts_every_alias() {
-    for s in ["preference", "userpreference", "user_preference", "PREFERENCE"] {
+    for s in [
+        "preference",
+        "userpreference",
+        "user_preference",
+        "PREFERENCE",
+    ] {
         assert!(
-            matches!(MemoryCategory::parse(s), Some(MemoryCategory::UserPreference)),
+            matches!(
+                MemoryCategory::parse(s),
+                Some(MemoryCategory::UserPreference)
+            ),
             "{s}"
         );
     }
@@ -70,7 +78,11 @@ trailing chatter
     let mems = parse_extraction_output(out);
     assert_eq!(mems.len(), 2);
     assert_eq!(mems[0].content, "User prefers Rust over Go");
-    assert!((mems[0].confidence - 0.9).abs() < 1e-6, "{}", mems[0].confidence);
+    assert!(
+        (mems[0].confidence - 0.9).abs() < 1e-6,
+        "{}",
+        mems[0].confidence
+    );
     assert_eq!(mems[0].category.label(), "preference");
     assert_eq!(mems[1].content, "The app is a Tauri desktop shell");
     assert!((mems[1].confidence - 0.7).abs() < 1e-6);
@@ -98,7 +110,11 @@ MEMORY: decision | 5 | this one is fine
 fn parse_extraction_clamps_confidence_above_ten() {
     let mems = parse_extraction_output("MEMORY: decision | 25 | over-confident model");
     assert_eq!(mems.len(), 1);
-    assert!((mems[0].confidence - 1.0).abs() < 1e-6, "{}", mems[0].confidence);
+    assert!(
+        (mems[0].confidence - 1.0).abs() < 1e-6,
+        "{}",
+        mems[0].confidence
+    );
 }
 
 /// A negative confidence is rejected outright (the `confidence < 0.0` guard runs
@@ -134,7 +150,10 @@ fn extraction_prompt_states_the_wire_format() {
     let p = extraction_prompt();
     // The parser above only understands this one line shape, so the prompt has
     // to keep asking for it verbatim.
-    assert!(p.contains("MEMORY: <category> | <confidence 0-10> | <fact>"), "{p}");
+    assert!(
+        p.contains("MEMORY: <category> | <confidence 0-10> | <fact>"),
+        "{p}"
+    );
     for cat in ["preference", "project", "pattern", "decision", "constraint"] {
         assert!(p.contains(cat), "prompt omits category {cat}");
     }
@@ -157,7 +176,11 @@ fn persist_renders_the_expected_entry_line() {
     let tmp = tempfile::tempdir().unwrap();
     let target = tmp.path().join("extracted").join("s1.md");
 
-    persist_memories(&[mem(MemoryCategory::Decision, "chose usearch", 0.85)], &target).unwrap();
+    persist_memories(
+        &[mem(MemoryCategory::Decision, "chose usearch", 0.85)],
+        &target,
+    )
+    .unwrap();
 
     let body = std::fs::read_to_string(&target).unwrap();
     assert!(
@@ -183,7 +206,10 @@ fn persist_empty_slice_writes_nothing() {
     let tmp = tempfile::tempdir().unwrap();
     let target = tmp.path().join("s.md");
     persist_memories(&[], &target).unwrap();
-    assert!(!target.exists(), "no file should be created for zero memories");
+    assert!(
+        !target.exists(),
+        "no file should be created for zero memories"
+    );
 }
 
 #[test]
@@ -198,7 +224,11 @@ fn persist_appends_into_the_same_date_block() {
     assert!(body.contains("first"), "{body}");
     assert!(body.contains("second"), "{body}");
     // Same UTC day → one section header and one date header, not two.
-    assert_eq!(body.matches("## Auto-extracted memories").count(), 1, "{body}");
+    assert_eq!(
+        body.matches("## Auto-extracted memories").count(),
+        1,
+        "{body}"
+    );
     assert_eq!(body.matches("### Session memories — ").count(), 1, "{body}");
 }
 
@@ -208,7 +238,11 @@ fn persist_preserves_unrelated_existing_content() {
     let target = tmp.path().join("s.md");
     std::fs::write(&target, "# Hand-written notes\n\nkeep me\n").unwrap();
 
-    persist_memories(&[mem(MemoryCategory::Constraint, "no network", 0.6)], &target).unwrap();
+    persist_memories(
+        &[mem(MemoryCategory::Constraint, "no network", 0.6)],
+        &target,
+    )
+    .unwrap();
 
     let body = std::fs::read_to_string(&target).unwrap();
     assert!(body.contains("# Hand-written notes"), "{body}");

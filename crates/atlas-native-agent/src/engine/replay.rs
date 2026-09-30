@@ -106,8 +106,10 @@ pub fn replay_turns(thread: &mut AcpThread, turns: &[v2::Turn]) {
                         continue;
                     }
                     let _ = thread.handle_session_update(acp::SessionUpdate::AgentThoughtChunk(
-                        acp::ContentChunk::new(acp::ContentBlock::Text(acp::TextContent::new(text)))
-                            .message_id(acp::MessageId::new(id.as_str())),
+                        acp::ContentChunk::new(acp::ContentBlock::Text(acp::TextContent::new(
+                            text,
+                        )))
+                        .message_id(acp::MessageId::new(id.as_str())),
                     ));
                 }
                 // Commands, file changes and MCP calls, through the same
@@ -310,7 +312,9 @@ mod tests {
     fn an_unfinished_turn_ends_with_an_interrupted_marker_as_its_own_entry() {
         let thread = replay(&[turn(
             "inProgress",
-            json!([agent_text("Creating the five files, starting with CRASH_A.md")]),
+            json!([agent_text(
+                "Creating the five files, starting with CRASH_A.md"
+            )]),
         )]);
         let guard = thread.lock().expect("thread lock");
         assert_eq!(
@@ -366,6 +370,9 @@ mod tests {
             ]),
         )]);
         let guard = thread.lock().expect("thread lock");
-        assert_eq!(assistant_texts(&guard), vec!["here is the answer".to_string()]);
+        assert_eq!(
+            assistant_texts(&guard),
+            vec!["here is the answer".to_string()]
+        );
     }
 }

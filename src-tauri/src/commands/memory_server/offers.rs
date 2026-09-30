@@ -15,7 +15,9 @@ use atlas_agent_servers::{AskFirst, SessionMcpOffer, SessionMcpRequest, SessionM
 
 use super::host::{MemoryServerHost, SharingGate};
 use super::MEMORY_SERVER_NAME;
-use crate::commands::org_server::{OrgOffer, OrgOfferDecision, EVERY_TIME_TOOLS, ORG_PATH, ORG_SERVER_NAME, OUTWARD_TOOLS};
+use crate::commands::org_server::{
+    OrgOffer, OrgOfferDecision, EVERY_TIME_TOOLS, ORG_PATH, ORG_SERVER_NAME, OUTWARD_TOOLS,
+};
 use crate::commands::ui_server::{UiOffer, UiOfferDecision, UI_PATH, UI_SERVER_NAME};
 
 /// Whether one session request is handed the memory tool server.
@@ -70,7 +72,12 @@ pub struct MemorySessionOffers {
 
 impl MemorySessionOffers {
     pub fn new(host: Arc<MemoryServerHost>, gate: SharingGate) -> Self {
-        Self { host, gate, ui: None, org: None }
+        Self {
+            host,
+            gate,
+            ui: None,
+            org: None,
+        }
     }
 
     /// Also offer the UI tool server, mounted on this host at `/ui`.
@@ -96,8 +103,16 @@ impl SessionMcpServers for MemorySessionOffers {
         &self,
         call: atlas_agent_servers::CallToApprove<'_>,
     ) -> futures::future::BoxFuture<'static, Option<atlas_agent_servers::CallDescription>> {
-        let tools = self.org.as_ref().and_then(OrgOffer::tools).filter(|_| call.server == ORG_SERVER_NAME).cloned();
-        let grant = self.host.tokens().grant_for_session(&call.session_id.to_string());
+        let tools = self
+            .org
+            .as_ref()
+            .and_then(OrgOffer::tools)
+            .filter(|_| call.server == ORG_SERVER_NAME)
+            .cloned();
+        let grant = self
+            .host
+            .tokens()
+            .grant_for_session(&call.session_id.to_string());
         let tool = call.tool.to_string();
         let arguments = call.arguments.clone();
         Box::pin(async move {
@@ -145,7 +160,12 @@ impl SessionMcpServers for MemorySessionOffers {
         let org_url = self.host.url_at(ORG_PATH);
         let (org, scope) = match self.org.as_ref() {
             Some(org) => {
-                let (decision, scope) = org.decide(request.http_mcp, request.org_access, &cwd, org_url.is_some());
+                let (decision, scope) = org.decide(
+                    request.http_mcp,
+                    request.org_access,
+                    &cwd,
+                    org_url.is_some(),
+                );
                 tracing::info!(
                     target: "atlas::org_server",
                     session = request.session_id.as_ref().map(ToString::to_string).unwrap_or_default(),
@@ -182,17 +202,18 @@ impl SessionMcpServers for MemorySessionOffers {
         let servers = entries
             .into_iter()
             .map(|(name, url)| {
-                acp::McpServer::Http(
-                    acp::McpServerHttp::new(name, url)
-                        .headers(vec![acp::HttpHeader::new("Authorization", format!("Bearer {token}"))]),
-                )
+                acp::McpServer::Http(acp::McpServerHttp::new(name, url).headers(vec![
+                    acp::HttpHeader::new("Authorization", format!("Bearer {token}")),
+                ]))
             })
             .collect();
         // The organisation server's outward actions ask first (ADR-0014);
         // the host declares them, the connection projects them. A message asks
         // on every call: no "Allow for this session" on its card.
         let ask_first = if org_included {
-            AskFirst::none().on(ORG_SERVER_NAME, OUTWARD_TOOLS).every_time(ORG_SERVER_NAME, EVERY_TIME_TOOLS)
+            AskFirst::none()
+                .on(ORG_SERVER_NAME, OUTWARD_TOOLS)
+                .every_time(ORG_SERVER_NAME, EVERY_TIME_TOOLS)
         } else {
             AskFirst::none()
         };

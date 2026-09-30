@@ -201,8 +201,10 @@ fn is_elf_binary(_path: &std::path::Path) -> bool {
 
 fn read_installed_version(path: &std::path::Path) -> Option<String> {
     let raw = std::fs::read_to_string(path).ok()?;
-    raw.lines()
-        .find_map(|l| l.strip_prefix("# atlas-cli-version: ").map(|v| v.trim().to_string()))
+    raw.lines().find_map(|l| {
+        l.strip_prefix("# atlas-cli-version: ")
+            .map(|v| v.trim().to_string())
+    })
 }
 
 fn read_installed_appimage(path: &std::path::Path) -> Option<String> {
@@ -373,8 +375,7 @@ pub async fn cli_install_helper() -> Result<CliStatus, String> {
                     .map_err(|e| format!("stat tmp: {e}"))?
                     .permissions();
                 perms.set_mode(0o755);
-                std::fs::set_permissions(&tmp, perms)
-                    .map_err(|e| format!("chmod tmp: {e}"))?;
+                std::fs::set_permissions(&tmp, perms).map_err(|e| format!("chmod tmp: {e}"))?;
             }
 
             std::fs::rename(&tmp, &path)

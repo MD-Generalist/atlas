@@ -4,8 +4,6 @@
 // Each answer is typed with the same type the frontend's API wrapper uses, so
 // `bun run typecheck` flags a fake that no longer matches what Rust returns.
 
-import type { KeybindingsLoadResult } from "@/features/keybindings/lib/keybindings-api";
-import { DEFAULT_KEYBINDINGS_FILE } from "@/features/keybindings/lib/types";
 import type { UpdaterSnapshot } from "@/features/updater/lib/updater-api";
 import type { FileEntry } from "@/features/explorer/stores/explorer-store";
 import type { Theme, ThemeCatalogSummary } from "@/features/theme/lib/theme-api";
@@ -118,11 +116,6 @@ export const baseHandlers: MockHandlers = {
     phase: "idle",
     version: null,
     currentVersion: "0.0.0-mock",
-  }),
-  keybindings_load: (): KeybindingsLoadResult => ({
-    file: DEFAULT_KEYBINDINGS_FILE,
-    path: "~/.config/atlas/keybindings.json",
-    warnings: [],
   }),
 
   // ── project open ──────────────────────────────────────────────────────

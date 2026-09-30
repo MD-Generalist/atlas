@@ -29,8 +29,8 @@
 //! coarse-write settings state already fixed a real bug (see
 //! `crate::telemetry::device`) or was never Atlas-owned to begin with.
 
-use std::fs;
 use std::collections::BTreeMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -155,7 +155,10 @@ fn override_strings(value: &serde_json::Value, section: &str) -> BTreeMap<String
         return out;
     };
     for (key, value) in table {
-        match value.as_str().filter(|value| atlas_theme::is_safe_css_value(value)) {
+        match value
+            .as_str()
+            .filter(|value| atlas_theme::is_safe_css_value(value))
+        {
             Some(value) => {
                 out.insert(key.clone(), value.to_string());
             }
@@ -177,7 +180,11 @@ fn flatten_override_keys(
         return;
     };
     for (key, value) in table {
-        let dotted = if prefix.is_empty() { key.clone() } else { format!("{prefix}.{key}") };
+        let dotted = if prefix.is_empty() {
+            key.clone()
+        } else {
+            format!("{prefix}.{key}")
+        };
         let drop = |why: &str| {
             tracing::warn!(target: "atlas::config", "themeOverrides.keys.{dotted} {why}; ignored");
         };
@@ -191,7 +198,10 @@ fn flatten_override_keys(
             // `{ color = "…" }` and nothing else is the table spelling of one
             // key; any other table is a group of keys, as in a theme file.
             serde_json::Value::Object(style) if style.len() == 1 && style.contains_key("color") => {
-                match style["color"].as_str().filter(|color| atlas_theme::is_safe_css_value(color)) {
+                match style["color"]
+                    .as_str()
+                    .filter(|color| atlas_theme::is_safe_css_value(color))
+                {
                     Some(color) => {
                         out.insert(
                             dotted,
@@ -297,6 +307,11 @@ pub struct AppSettings {
     /// doesn't even load the extension (no blame IPC).
     #[serde(default = "default_true")]
     pub git_blame_inline: bool,
+    /// Background `git fetch` of the open project — on activation, on window
+    /// focus, and every few minutes — so ahead/behind reflects the remote.
+    /// Default ON. See `crate::commands::git_autofetch`.
+    #[serde(default = "default_true")]
+    pub git_auto_fetch: bool,
     /// Auto-update master switch. See `crate::commands::updater`.
     #[serde(default = "default_true")]
     pub auto_update: bool,
@@ -398,6 +413,7 @@ impl Default for AppSettings {
             legacy_atlas_theme: None,
             adaptive_suggestions: AdaptiveSuggestions::default(),
             git_blame_inline: true,
+            git_auto_fetch: true,
             auto_update: true,
             curated_plugin_sync: false,
             updater_ignored_version: None,
@@ -526,6 +542,12 @@ const SETTINGS_DOCS: &[(&str, &str)] = &[
         "gitBlameInline",
         "# Inline git blame — a dim author/age/summary annotation trailing the\n\
          # active line in the editor. (default: true)",
+    ),
+    (
+        "gitAutoFetch",
+        "# Quietly `git fetch` the open project when it opens, when Atlas\n\
+         # regains focus, and every few minutes, so the Pull badge shows what\n\
+         # the remote has. Never pulls or touches your files. (default: true)",
     ),
     (
         "autoUpdate",
@@ -696,9 +718,14 @@ fn unknown_keys_in(document: &toml_edit::DocumentMut) -> Vec<String> {
 }
 
 fn document_for(settings: &AppSettings) -> toml_edit::DocumentMut {
-    let file = AtlasConfigFile { schema_version: CONFIG_SCHEMA_VERSION, settings: settings.clone() };
+    let file = AtlasConfigFile {
+        schema_version: CONFIG_SCHEMA_VERSION,
+        settings: settings.clone(),
+    };
     let text = toml::to_string_pretty(&file).expect("AppSettings always serializes to TOML");
-    annotate(&text).parse().expect("freshly-generated TOML always parses")
+    annotate(&text)
+        .parse()
+        .expect("freshly-generated TOML always parses")
 }
 
 /// Interleave [`CONFIG_HEADER`] and [`SETTINGS_DOCS`] into freshly generated
@@ -863,6 +890,7 @@ pub struct SettingsPatch {
     pub app_icon: Option<String>,
     pub adaptive_suggestions: Option<AdaptiveSuggestions>,
     pub git_blame_inline: Option<bool>,
+    pub git_auto_fetch: Option<bool>,
     pub auto_update: Option<bool>,
     pub curated_plugin_sync: Option<bool>,
     #[serde(default, deserialize_with = "deserialize_double_option")]
@@ -922,6 +950,9 @@ impl SettingsPatch {
         if let Some(v) = self.git_blame_inline {
             settings.git_blame_inline = v;
         }
+        if let Some(v) = self.git_auto_fetch {
+            settings.git_auto_fetch = v;
+        }
         if let Some(v) = self.auto_update {
             settings.auto_update = v;
         }
@@ -967,7 +998,9 @@ impl SettingsPatch {
         if doc.get("settings").and_then(|i| i.as_table()).is_none() {
             doc["settings"] = toml_edit::Item::Table(toml_edit::Table::new());
         }
-        let table = doc["settings"].as_table_mut().expect("just ensured settings is a table");
+        let table = doc["settings"]
+            .as_table_mut()
+            .expect("just ensured settings is a table");
 
         macro_rules! set_bool {
             ($field:ident, $key:literal) => {
@@ -982,6 +1015,7 @@ impl SettingsPatch {
         set_bool!(share_telemetry, "shareTelemetry");
         set_bool!(link_telemetry_to_account, "linkTelemetryToAccount");
         set_bool!(git_blame_inline, "gitBlameInline");
+        set_bool!(git_auto_fetch, "gitAutoFetch");
         set_bool!(auto_update, "autoUpdate");
         set_bool!(curated_plugin_sync, "curatedPluginSync");
         set_bool!(enter_to_send, "enterToSend");
@@ -1080,6 +1114,7 @@ pub fn settings_from_legacy_json(raw: Option<&serde_json::Value>) -> AppSettings
     take_bool!(share_telemetry, "shareTelemetry");
     take_bool!(link_telemetry_to_account, "linkTelemetryToAccount");
     take_bool!(git_blame_inline, "gitBlameInline");
+    take_bool!(git_auto_fetch, "gitAutoFetch");
     take_bool!(auto_update, "autoUpdate");
     take_bool!(curated_plugin_sync, "curatedPluginSync");
     take_bool!(enter_to_send, "enterToSend");
@@ -1092,20 +1127,29 @@ pub fn settings_from_legacy_json(raw: Option<&serde_json::Value>) -> AppSettings
             settings.ui_scale = v;
         }
     }
-    if let Some(v) = raw.get("embeddingModelId").and_then(serde_json::Value::as_str) {
+    if let Some(v) = raw
+        .get("embeddingModelId")
+        .and_then(serde_json::Value::as_str)
+    {
         if !v.trim().is_empty() {
             settings.embedding_model_id = v.to_string();
         }
     }
-    let old_editor = raw.get("codeEditorTheme").and_then(serde_json::Value::as_str);
+    let old_editor = raw
+        .get("codeEditorTheme")
+        .and_then(serde_json::Value::as_str);
     let old_atlas = raw.get("atlasTheme").and_then(serde_json::Value::as_str);
     let (theme, theme_overrides) = migrate_legacy_theme(old_atlas, old_editor);
     settings.theme = theme;
     settings.theme_overrides = theme_overrides;
-    if let Some(v) = raw.get("updaterIgnoredVersion").and_then(serde_json::Value::as_str) {
+    if let Some(v) = raw
+        .get("updaterIgnoredVersion")
+        .and_then(serde_json::Value::as_str)
+    {
         settings.updater_ignored_version = Some(v.to_string());
     }
-    settings.adaptive_suggestions = adaptive_suggestions_from_legacy(raw.get("adaptiveSuggestions"));
+    settings.adaptive_suggestions =
+        adaptive_suggestions_from_legacy(raw.get("adaptiveSuggestions"));
 
     settings
 }
@@ -1161,7 +1205,13 @@ fn migrate_legacy_theme(
             key.starts_with("editor.") || key.starts_with("syntax.") || key.starts_with("diff.")
         })
         .collect();
-    (theme, ThemeOverride { keys, ..ThemeOverride::default() })
+    (
+        theme,
+        ThemeOverride {
+            keys,
+            ..ThemeOverride::default()
+        },
+    )
 }
 
 /// Serve the default theme for this session when `settings.theme` does not
@@ -1182,10 +1232,7 @@ fn fallback_unknown_theme(settings: &mut AppSettings) {
 /// Fold the legacy `atlasTheme` / `codeEditorTheme` keys into `theme` and
 /// `themeOverrides`, returning whether `document` changed. That migration is
 /// the only thing this writes; an unresolvable `theme` is handled in memory.
-fn migrate_theme_fields(
-    document: &mut toml_edit::DocumentMut,
-    settings: &mut AppSettings,
-) -> bool {
+fn migrate_theme_fields(document: &mut toml_edit::DocumentMut, settings: &mut AppSettings) -> bool {
     let old_atlas = settings.legacy_atlas_theme.take();
     let old_editor = settings.legacy_code_editor_theme.take();
     let migrating = old_atlas.is_some() || old_editor.is_some();
@@ -1193,13 +1240,20 @@ fn migrate_theme_fields(
         fallback_unknown_theme(settings);
         return false;
     }
-    let (theme, theme_overrides) = migrate_legacy_theme(old_atlas.as_deref(), old_editor.as_deref());
+    let (theme, theme_overrides) =
+        migrate_legacy_theme(old_atlas.as_deref(), old_editor.as_deref());
     settings.theme = theme;
     settings.theme_overrides = theme_overrides;
-    if document.get("settings").and_then(toml_edit::Item::as_table).is_none() {
+    if document
+        .get("settings")
+        .and_then(toml_edit::Item::as_table)
+        .is_none()
+    {
         document["settings"] = toml_edit::Item::Table(toml_edit::Table::new());
     }
-    let table = document["settings"].as_table_mut().expect("settings table was ensured");
+    let table = document["settings"]
+        .as_table_mut()
+        .expect("settings table was ensured");
     table.remove("atlasTheme");
     table.remove("codeEditorTheme");
     table["theme"] = toml_edit::value(settings.theme.as_str());
@@ -1268,11 +1322,15 @@ pub enum ConfigStatus {
     Ok,
     /// A hot-reload (external edit) failed; `effective` still holds the
     /// previous, in-process-validated settings.
-    UsingLastKnownGood { error: String },
+    UsingLastKnownGood {
+        error: String,
+    },
     /// Cold start found no valid file (missing or malformed); `effective` is
     /// `AppSettings::default()`. The malformed file, if any, is left
     /// untouched on disk.
-    UsingDefaults { error: String },
+    UsingDefaults {
+        error: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1286,10 +1344,16 @@ pub struct ConfigSnapshot {
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum UpdateOutcome {
     /// The patch applied and was persisted.
-    Applied { settings: AppSettings, generation: u64 },
+    Applied {
+        settings: AppSettings,
+        generation: u64,
+    },
     /// `expected_generation` was stale — nothing was written. `settings`
     /// carries what's actually on disk now so the caller can reconcile.
-    Conflict { settings: AppSettings, generation: u64 },
+    Conflict {
+        settings: AppSettings,
+        generation: u64,
+    },
 }
 
 #[derive(Debug)]
@@ -1346,8 +1410,9 @@ impl ConfigManager {
     }
 
     fn from_raw(path: PathBuf, raw: &str) -> Result<Self, ConfigError> {
-        let mut document: toml_edit::DocumentMut =
-            raw.parse().map_err(|e: toml_edit::TomlError| ConfigError::Parse(e.to_string()))?;
+        let mut document: toml_edit::DocumentMut = raw
+            .parse()
+            .map_err(|e: toml_edit::TomlError| ConfigError::Parse(e.to_string()))?;
         let text = document.to_string();
         let mut file: AtlasConfigFile =
             toml::from_str(&text).map_err(|e| ConfigError::Parse(e.to_string()))?;
@@ -1400,7 +1465,9 @@ impl ConfigManager {
                         "config.toml invalid at cold start, serving defaults in memory (file left untouched): {e}"
                     );
                     let mut mgr = Self::in_memory_defaults(path);
-                    mgr.status = ConfigStatus::UsingDefaults { error: e.to_string() };
+                    mgr.status = ConfigStatus::UsingDefaults {
+                        error: e.to_string(),
+                    };
                     mgr
                 }
             },
@@ -1422,7 +1489,9 @@ impl ConfigManager {
                     "config.toml could not be read, serving defaults in memory (file left untouched): {e}"
                 );
                 let mut mgr = Self::in_memory_defaults(path);
-                mgr.status = ConfigStatus::UsingDefaults { error: format!("could not read config.toml: {e}") };
+                mgr.status = ConfigStatus::UsingDefaults {
+                    error: format!("could not read config.toml: {e}"),
+                };
                 mgr
             }
         }
@@ -1448,12 +1517,15 @@ impl ConfigManager {
         let fresh = match Self::from_raw(self.path.clone(), &raw) {
             Ok(fresh) => fresh,
             Err(e) => {
-                self.status = ConfigStatus::UsingLastKnownGood { error: e.to_string() };
+                self.status = ConfigStatus::UsingLastKnownGood {
+                    error: e.to_string(),
+                };
                 return Err(e);
             }
         };
         if fresh.last_raw != raw {
-            write_atomic(&self.path, &fresh.last_raw).map_err(|error| ConfigError::Io(error.to_string()))?;
+            write_atomic(&self.path, &fresh.last_raw)
+                .map_err(|error| ConfigError::Io(error.to_string()))?;
         }
         self.document = fresh.document;
         self.effective = fresh.effective;
@@ -1539,7 +1611,10 @@ impl ConfigManager {
         self.generation += 1;
         self.status = ConfigStatus::Ok;
 
-        Ok(Some(UpdateOutcome::Applied { settings: candidate, generation: self.generation }))
+        Ok(Some(UpdateOutcome::Applied {
+            settings: candidate,
+            generation: self.generation,
+        }))
     }
 
     /// Swap `text` in only if the file still holds exactly the content this
@@ -1566,8 +1641,13 @@ impl ConfigManager {
     /// fresh defaults.
     pub fn reset(&mut self) -> Result<ConfigSnapshot, ConfigError> {
         if let Ok(existing) = fs::read_to_string(&self.path) {
-            let stamp = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-            let backup = self.path.with_file_name(format!("{CONFIG_FILE_NAME}.bak-{stamp}"));
+            let stamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let backup = self
+                .path
+                .with_file_name(format!("{CONFIG_FILE_NAME}.bak-{stamp}"));
             let _ = fs::write(&backup, existing);
         }
         let settings = AppSettings::default();
@@ -1582,7 +1662,10 @@ impl ConfigManager {
         self.status = ConfigStatus::Ok;
         self.unknown_keys.clear();
 
-        Ok(ConfigSnapshot { settings, generation: self.generation })
+        Ok(ConfigSnapshot {
+            settings,
+            generation: self.generation,
+        })
     }
 
     /// Write a specific `AppSettings` as a brand-new file (migration's entry
@@ -1727,8 +1810,17 @@ pub fn update(app: &AppHandle, patch: SettingsPatch) -> Result<ConfigSnapshot, C
     let handle = app.state::<AtlasConfigHandle>();
     let mut guard = handle.lock();
     match guard.apply_patch(&patch, None)? {
-        UpdateOutcome::Applied { settings, generation }
-        | UpdateOutcome::Conflict { settings, generation } => Ok(ConfigSnapshot { settings, generation }),
+        UpdateOutcome::Applied {
+            settings,
+            generation,
+        }
+        | UpdateOutcome::Conflict {
+            settings,
+            generation,
+        } => Ok(ConfigSnapshot {
+            settings,
+            generation,
+        }),
     }
 }
 
@@ -1764,7 +1856,10 @@ pub fn bootstrap(
         manager.status = ConfigStatus::UsingDefaults {
             error: "could not resolve the Atlas config directory".to_string(),
         };
-        return MigrationOutcome { manager, mark_migrated: false };
+        return MigrationOutcome {
+            manager,
+            mark_migrated: false,
+        };
     };
     bootstrap_at(path, marker_already_set, legacy_settings_raw)
 }
@@ -1802,7 +1897,10 @@ fn bootstrap_at(
             manager.document = document_for(&manager.effective);
             fallback_unknown_theme(&mut manager.effective);
         }
-        return MigrationOutcome { manager, mark_migrated };
+        return MigrationOutcome {
+            manager,
+            mark_migrated,
+        };
     }
 
     // No file yet. Import from legacy state exactly once, ever.
@@ -1813,7 +1911,10 @@ fn bootstrap_at(
     };
 
     match ConfigManager::create_fresh_with(path.clone(), settings.clone()) {
-        Ok(manager) => MigrationOutcome { manager, mark_migrated: true },
+        Ok(manager) => MigrationOutcome {
+            manager,
+            mark_migrated: true,
+        },
         Err(e) => {
             tracing::warn!(target: "atlas::config", "failed to write migrated config.toml: {e}");
             // The file was never created, so `load_at` will take its
@@ -1825,9 +1926,13 @@ fn bootstrap_at(
             manager.effective = settings;
             manager.document = document_for(&manager.effective);
             fallback_unknown_theme(&mut manager.effective);
-            manager.status =
-                ConfigStatus::UsingDefaults { error: format!("could not write config.toml: {e}") };
-            MigrationOutcome { manager, mark_migrated: false }
+            manager.status = ConfigStatus::UsingDefaults {
+                error: format!("could not write config.toml: {e}"),
+            };
+            MigrationOutcome {
+                manager,
+                mark_migrated: false,
+            }
         }
     }
 }
@@ -1854,7 +1959,10 @@ mod tests {
         let root = config_root_from(None, Some(&home)).expect("a home resolves a root");
 
         assert_eq!(root, PathBuf::from("/Users/someone/.config/atlas"));
-        assert_eq!(root.join(CONFIG_FILE_NAME), PathBuf::from("/Users/someone/.config/atlas/config.toml"));
+        assert_eq!(
+            root.join(CONFIG_FILE_NAME),
+            PathBuf::from("/Users/someone/.config/atlas/config.toml")
+        );
         // The whole point: nothing here reads `dev.atlas.ide`.
         assert!(!root.to_string_lossy().contains("dev.atlas.ide"));
         assert!(!root.to_string_lossy().contains("Application Support"));
@@ -1904,10 +2012,18 @@ mod tests {
     fn agent_ui_navigation_is_on_by_default_and_read_from_the_file() {
         assert!(AppSettings::default().agent_ui_navigation);
         let (_dir, path) = tmp_config_path();
-        let mgr = ConfigManager::from_raw(path, "schemaVersion = 1\n\n[settings]\nenterToSend = false\n").unwrap();
+        let mgr = ConfigManager::from_raw(
+            path,
+            "schemaVersion = 1\n\n[settings]\nenterToSend = false\n",
+        )
+        .unwrap();
         assert!(mgr.effective().agent_ui_navigation);
         let (_dir, path) = tmp_config_path();
-        let mgr = ConfigManager::from_raw(path, "schemaVersion = 1\n\n[settings]\nagentUiNavigation = false\n").unwrap();
+        let mgr = ConfigManager::from_raw(
+            path,
+            "schemaVersion = 1\n\n[settings]\nagentUiNavigation = false\n",
+        )
+        .unwrap();
         assert!(!mgr.effective().agent_ui_navigation);
     }
 
@@ -1917,10 +2033,18 @@ mod tests {
     fn agent_org_access_is_on_by_default_and_read_from_the_file() {
         assert!(AppSettings::default().agent_org_access);
         let (_dir, path) = tmp_config_path();
-        let mgr = ConfigManager::from_raw(path, "schemaVersion = 1\n\n[settings]\nenterToSend = false\n").unwrap();
+        let mgr = ConfigManager::from_raw(
+            path,
+            "schemaVersion = 1\n\n[settings]\nenterToSend = false\n",
+        )
+        .unwrap();
         assert!(mgr.effective().agent_org_access);
         let (_dir, path) = tmp_config_path();
-        let mgr = ConfigManager::from_raw(path, "schemaVersion = 1\n\n[settings]\nagentOrgAccess = false\n").unwrap();
+        let mgr = ConfigManager::from_raw(
+            path,
+            "schemaVersion = 1\n\n[settings]\nagentOrgAccess = false\n",
+        )
+        .unwrap();
         assert!(!mgr.effective().agent_org_access);
     }
 
@@ -1961,10 +2085,16 @@ someFutureKey = \"left alone\"
         let mut mgr = ConfigManager::from_raw(path.clone(), raw).unwrap();
         assert_eq!(mgr.unknown_keys(), &["someFutureKey".to_string()]);
 
-        let patch = SettingsPatch { enter_to_send: Some(false), ..Default::default() };
+        let patch = SettingsPatch {
+            enter_to_send: Some(false),
+            ..Default::default()
+        };
         let outcome = mgr.apply_patch(&patch, None).expect("patch applies");
         match outcome {
-            UpdateOutcome::Applied { settings, generation } => {
+            UpdateOutcome::Applied {
+                settings,
+                generation,
+            } => {
                 assert!(!settings.enter_to_send);
                 assert_eq!(generation, 1);
             }
@@ -1984,8 +2114,13 @@ someFutureKey = \"left alone\"
         fs::write(&path, raw).unwrap();
         let mut mgr = ConfigManager::from_raw(path.clone(), raw).unwrap();
 
-        let patch = SettingsPatch { ui_scale: Some(99.0), ..Default::default() };
-        let err = mgr.apply_patch(&patch, None).expect_err("out-of-range scale must be rejected");
+        let patch = SettingsPatch {
+            ui_scale: Some(99.0),
+            ..Default::default()
+        };
+        let err = mgr
+            .apply_patch(&patch, None)
+            .expect_err("out-of-range scale must be rejected");
         assert!(matches!(err, ConfigError::Invalid(ref issue) if issue.key == "uiScale"));
 
         // Untouched: neither in-memory nor on disk.
@@ -2025,15 +2160,23 @@ someFutureKey = \"left alone\"
         // Simulate an external editor leaving the file mid-save / broken.
         fs::write(&path, "not toml at all {{{").unwrap();
 
-        let patch = SettingsPatch { enter_to_send: Some(false), ..Default::default() };
-        let err = mgr.apply_patch(&patch, None).expect_err("must refuse to write over a malformed file");
+        let patch = SettingsPatch {
+            enter_to_send: Some(false),
+            ..Default::default()
+        };
+        let err = mgr
+            .apply_patch(&patch, None)
+            .expect_err("must refuse to write over a malformed file");
         assert!(matches!(err, ConfigError::Parse(_)));
         // In-memory last-known-good is untouched.
         assert!(mgr.effective().enter_to_send);
         // The malformed file was never overwritten by the rejected patch.
         assert_eq!(fs::read_to_string(&path).unwrap(), "not toml at all {{{");
         // But the status now reflects the on-disk file being broken.
-        assert!(matches!(mgr.status(), ConfigStatus::UsingLastKnownGood { .. }));
+        assert!(matches!(
+            mgr.status(),
+            ConfigStatus::UsingLastKnownGood { .. }
+        ));
     }
 
     #[test]
@@ -2043,10 +2186,18 @@ someFutureKey = \"left alone\"
         fs::write(&path, raw).unwrap();
         let mut mgr = ConfigManager::from_raw(path.clone(), raw).unwrap();
 
-        let patch = SettingsPatch { enter_to_send: Some(false), ..Default::default() };
-        let outcome = mgr.apply_patch(&patch, Some(mgr.generation() + 1)).expect("conflict is not an error");
+        let patch = SettingsPatch {
+            enter_to_send: Some(false),
+            ..Default::default()
+        };
+        let outcome = mgr
+            .apply_patch(&patch, Some(mgr.generation() + 1))
+            .expect("conflict is not an error");
         match outcome {
-            UpdateOutcome::Conflict { settings, generation } => {
+            UpdateOutcome::Conflict {
+                settings,
+                generation,
+            } => {
                 assert!(settings.enter_to_send); // unchanged
                 assert_eq!(generation, mgr.generation());
             }
@@ -2079,11 +2230,15 @@ someFutureKey = \"left alone\"
 
         // A backup of the pre-reset content exists somewhere alongside it.
         let dir = path.parent().unwrap();
-        let has_backup = fs::read_dir(dir)
-            .unwrap()
-            .filter_map(Result::ok)
-            .any(|e| e.file_name().to_string_lossy().starts_with("config.toml.bak-"));
-        assert!(has_backup, "reset() must back up the previous file before overwriting");
+        let has_backup = fs::read_dir(dir).unwrap().filter_map(Result::ok).any(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .starts_with("config.toml.bak-")
+        });
+        assert!(
+            has_backup,
+            "reset() must back up the previous file before overwriting"
+        );
     }
 
     #[test]
@@ -2178,7 +2333,10 @@ someFutureKey = \"left alone\"
         for id in ["one-dark", "phosphor", "rose-pine"] {
             let (theme, overrides) = migrate_legacy_theme(Some(id), Some(id));
             assert_eq!(theme, id);
-            assert!(overrides.is_empty(), "{id} diverged from itself: {overrides:?}");
+            assert!(
+                overrides.is_empty(),
+                "{id} diverged from itself: {overrides:?}"
+            );
         }
     }
 
@@ -2222,8 +2380,16 @@ someFutureKey = \"left alone\"
         let raw = "schemaVersion = 1\n\n[settings]\natlasTheme = \"not-shipped-here\"\n";
         let manager = ConfigManager::from_raw(path, raw).expect("legacy settings parse");
 
-        assert_eq!(manager.effective().theme, default_theme(), "served in memory");
-        assert!(manager.last_raw.contains("theme = \"not-shipped-here\""), "{}", manager.last_raw);
+        assert_eq!(
+            manager.effective().theme,
+            default_theme(),
+            "served in memory"
+        );
+        assert!(
+            manager.last_raw.contains("theme = \"not-shipped-here\""),
+            "{}",
+            manager.last_raw
+        );
         assert!(!manager.last_raw.contains("atlasTheme"));
     }
 
@@ -2258,6 +2424,7 @@ someFutureKey = \"left alone\"
             app_icon: Some("light".to_string()),
             adaptive_suggestions: Some(AdaptiveSuggestions::Off),
             git_blame_inline: Some(!defaults.git_blame_inline),
+            git_auto_fetch: Some(!defaults.git_auto_fetch),
             auto_update: Some(!defaults.auto_update),
             curated_plugin_sync: Some(!defaults.curated_plugin_sync),
             updater_ignored_version: Some(Some("9.9.9".to_string())),
@@ -2277,14 +2444,18 @@ someFutureKey = \"left alone\"
         let expected_json = serde_json::to_value(&expected).unwrap();
         let default_json = serde_json::to_value(&defaults).unwrap();
         for (key, value) in expected_json.as_object().unwrap() {
-            assert_ne!(default_json.get(key), Some(value), "the fixture leaves {key} at its default");
+            assert_ne!(
+                default_json.get(key),
+                Some(value),
+                "the fixture leaves {key} at its default"
+            );
         }
 
         let mut document = document_for(&defaults);
         patch.write_into(&mut document);
         let (_dir, path) = tmp_config_path();
-        let reloaded = ConfigManager::from_raw(path, &document.to_string())
-            .expect("a written patch reloads");
+        let reloaded =
+            ConfigManager::from_raw(path, &document.to_string()).expect("a written patch reloads");
         assert_eq!(reloaded.effective(), &expected);
     }
 
@@ -2334,7 +2505,10 @@ red = "#ee0000"
             "themeOverrides": { "keys": { "syntax": { "keyword": "#fff" } } }
         }))
         .unwrap();
-        assert_eq!(patch.theme_overrides.unwrap().keys["syntax.keyword"].color(), "#fff");
+        assert_eq!(
+            patch.theme_overrides.unwrap().keys["syntax.keyword"].color(),
+            "#fff"
+        );
     }
 
     #[test]
@@ -2342,10 +2516,17 @@ red = "#ee0000"
         for legacy_value in ["parse", "llm", "agent", "anything-else"] {
             let legacy = serde_json::json!({ "adaptiveSuggestions": legacy_value });
             let settings = settings_from_legacy_json(Some(&legacy));
-            assert_eq!(settings.adaptive_suggestions, AdaptiveSuggestions::Agent, "value: {legacy_value}");
+            assert_eq!(
+                settings.adaptive_suggestions,
+                AdaptiveSuggestions::Agent,
+                "value: {legacy_value}"
+            );
         }
         let legacy = serde_json::json!({ "adaptiveSuggestions": "off" });
-        assert_eq!(settings_from_legacy_json(Some(&legacy)).adaptive_suggestions, AdaptiveSuggestions::Off);
+        assert_eq!(
+            settings_from_legacy_json(Some(&legacy)).adaptive_suggestions,
+            AdaptiveSuggestions::Off
+        );
     }
 
     #[test]
@@ -2373,7 +2554,10 @@ red = "#ee0000"
         assert!(outcome.mark_migrated);
         assert!(!outcome.manager.effective().enter_to_send);
         assert_eq!(outcome.manager.effective().theme, "rose-pine");
-        assert!(path.exists(), "bootstrap must actually write config.toml on first run");
+        assert!(
+            path.exists(),
+            "bootstrap must actually write config.toml on first run"
+        );
     }
 
     #[test]
@@ -2395,7 +2579,8 @@ red = "#ee0000"
         let (_dir, path) = tmp_config_path();
         let raw = "schemaVersion = 1\n\n[settings]\nenterToSend = false\n";
         fs::write(&path, raw).unwrap();
-        let legacy = serde_json::json!({ "enterToSend": true, "atlasTheme": "should-never-appear" });
+        let legacy =
+            serde_json::json!({ "enterToSend": true, "atlasTheme": "should-never-appear" });
 
         let outcome = bootstrap_at(path.clone(), false, Some(legacy));
 
@@ -2404,7 +2589,11 @@ red = "#ee0000"
         // not even for keys the existing file didn't set.
         assert!(!outcome.manager.effective().enter_to_send);
         assert_eq!(outcome.manager.effective().theme, default_theme());
-        assert_eq!(fs::read_to_string(&path).unwrap(), raw, "must not rewrite an existing config.toml");
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            raw,
+            "must not rewrite an existing config.toml"
+        );
     }
 
     #[test]
@@ -2420,7 +2609,11 @@ red = "#ee0000"
         // restarting: same call, but now with the marker set.
         let second = bootstrap_at(path.clone(), true, Some(legacy));
         assert!(second.mark_migrated);
-        assert_eq!(fs::read_to_string(&path).unwrap(), after_first, "a second bootstrap must not rewrite the file");
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            after_first,
+            "a second bootstrap must not rewrite the file"
+        );
         assert!(!second.manager.effective().enter_to_send);
     }
 
@@ -2439,7 +2632,10 @@ red = "#ee0000"
     #[test]
     fn every_known_setting_key_is_documented_in_the_configuration_reference() {
         for key in known_settings_keys() {
-            assert!(CONFIGURATION_DOC.contains(key), "docs/reference/configuration.md is missing `{key}`");
+            assert!(
+                CONFIGURATION_DOC.contains(key),
+                "docs/reference/configuration.md is missing `{key}`"
+            );
         }
     }
 
@@ -2470,11 +2666,17 @@ red = "#ee0000"
             serde_json::json!({ "status": "ok" })
         );
         assert_eq!(
-            serde_json::to_value(ConfigStatus::UsingDefaults { error: "boom".into() }).unwrap(),
+            serde_json::to_value(ConfigStatus::UsingDefaults {
+                error: "boom".into()
+            })
+            .unwrap(),
             serde_json::json!({ "status": "usingDefaults", "error": "boom" })
         );
         assert_eq!(
-            serde_json::to_value(ConfigStatus::UsingLastKnownGood { error: "boom".into() }).unwrap(),
+            serde_json::to_value(ConfigStatus::UsingLastKnownGood {
+                error: "boom".into()
+            })
+            .unwrap(),
             serde_json::json!({ "status": "usingLastKnownGood", "error": "boom" })
         );
     }
@@ -2495,7 +2697,10 @@ red = "#ee0000"
             !outcome.mark_migrated,
             "a malformed config.toml must not retire the legacy settings"
         );
-        assert!(matches!(outcome.manager.status(), ConfigStatus::UsingDefaults { .. }));
+        assert!(matches!(
+            outcome.manager.status(),
+            ConfigStatus::UsingDefaults { .. }
+        ));
         // Boot never blocks: something usable is always effective. Which
         // settings those are is the subject of
         // `a_broken_config_falls_back_to_the_legacy_settings_not_compiled_defaults`.
@@ -2511,7 +2716,11 @@ red = "#ee0000"
         let (_dir, path) = tmp_config_path();
         fs::create_dir_all(&path).unwrap();
 
-        let outcome = bootstrap_at(path, false, Some(serde_json::json!({ "enterToSend": false })));
+        let outcome = bootstrap_at(
+            path,
+            false,
+            Some(serde_json::json!({ "enterToSend": false })),
+        );
 
         assert!(
             !outcome.mark_migrated,
@@ -2536,9 +2745,15 @@ red = "#ee0000"
         let outcome = bootstrap_at(path, false, Some(legacy));
 
         assert!(!outcome.mark_migrated);
-        assert!(!outcome.manager.effective().share_telemetry, "the user's opt-out must survive");
+        assert!(
+            !outcome.manager.effective().share_telemetry,
+            "the user's opt-out must survive"
+        );
         assert_eq!(outcome.manager.effective().ui_scale, 1.25);
-        assert!(matches!(outcome.manager.status(), ConfigStatus::UsingDefaults { .. }));
+        assert!(matches!(
+            outcome.manager.status(),
+            ConfigStatus::UsingDefaults { .. }
+        ));
     }
 
     /// ...but only before migration is recorded. Once the marker is set, the
@@ -2562,7 +2777,11 @@ red = "#ee0000"
     #[test]
     fn a_readable_existing_config_reports_migration_done() {
         let (_dir, path) = tmp_config_path();
-        fs::write(&path, "schemaVersion = 1\n\n[settings]\nenterToSend = false\n").unwrap();
+        fs::write(
+            &path,
+            "schemaVersion = 1\n\n[settings]\nenterToSend = false\n",
+        )
+        .unwrap();
 
         let outcome = bootstrap_at(path, false, None);
 
@@ -2588,7 +2807,10 @@ red = "#ee0000"
         )
         .unwrap();
 
-        assert!(mgr.reload_from_disk().unwrap(), "a changed, valid file is adopted");
+        assert!(
+            mgr.reload_from_disk().unwrap(),
+            "a changed, valid file is adopted"
+        );
         assert!(!mgr.effective().git_blame_inline);
         assert_eq!(mgr.effective().ui_scale, 1.25);
         assert_eq!(mgr.generation(), before + 1);
@@ -2655,7 +2877,10 @@ red = "#ee0000"
         let (_dir, path) = tmp_config_path();
         fs::create_dir_all(&path).unwrap();
 
-        assert!(write_atomic(&path, "schemaVersion = 1\n").is_err(), "renaming onto a dir fails");
+        assert!(
+            write_atomic(&path, "schemaVersion = 1\n").is_err(),
+            "renaming onto a dir fails"
+        );
         assert!(
             temp_files_beside(&path).is_empty(),
             "a failed write left litter: {:?}",
@@ -2703,8 +2928,9 @@ red = "#ee0000"
     /// tell the agent where the file is.
     #[test]
     fn the_self_configure_skill_defers_to_the_files_own_comments() {
-        let named: Vec<_> =
-            known_settings_keys().filter(|key| SELF_CONFIGURE_SKILL.contains(*key)).collect();
+        let named: Vec<_> = known_settings_keys()
+            .filter(|key| SELF_CONFIGURE_SKILL.contains(*key))
+            .collect();
         // A worked example may name a key or two; a table of them is the
         // duplication the file's own comments replaced, and a stale copy of
         // the schema is worse for an agent than no copy at all.
@@ -2741,11 +2967,18 @@ red = "#ee0000"
     #[test]
     fn the_annotated_file_round_trips() {
         let (_dir, path) = tmp_config_path();
-        let settings = AppSettings { ui_scale: 1.25, enter_to_send: false, ..Default::default() };
+        let settings = AppSettings {
+            ui_scale: 1.25,
+            enter_to_send: false,
+            ..Default::default()
+        };
         let rendered = document_for(&settings).to_string();
 
         let mgr = ConfigManager::from_raw(path, &rendered).expect("the generated file parses");
         assert_eq!(mgr.effective(), &settings);
-        assert!(mgr.unknown_keys().is_empty(), "comments must not read as unknown keys");
+        assert!(
+            mgr.unknown_keys().is_empty(),
+            "comments must not read as unknown keys"
+        );
     }
 }

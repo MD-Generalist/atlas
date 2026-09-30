@@ -26,7 +26,10 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
-use super::{fold, insert_event, last_seq_tx, redact_text, redact_value, upsert_tx, EntryKind, EventRow, NewEntry, RecordStore};
+use super::{
+    fold, insert_event, last_seq_tx, redact_text, redact_value, upsert_tx, EntryKind, EventRow,
+    NewEntry, RecordStore,
+};
 
 /// Marker (under `<dir>/.atlas/memory/`) recording that `<dir>`'s legacy shared
 /// memory has been folded into a record store.
@@ -62,7 +65,9 @@ struct LegacyEvent {
 }
 
 fn events_path(dir: &Path) -> PathBuf {
-    dir.join(".atlas").join("shared-memory").join("events.jsonl")
+    dir.join(".atlas")
+        .join("shared-memory")
+        .join("events.jsonl")
 }
 
 fn memdir_path(dir: &Path) -> PathBuf {
@@ -81,7 +86,11 @@ impl RecordStore {
         // Held across the marker check, the import and the marker write, so
         // two threads opening the same scope cannot both import.
         let mut conn = self.conn();
-        let source = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf()).to_string_lossy().to_string();
+        let source = dir
+            .canonicalize()
+            .unwrap_or_else(|_| dir.to_path_buf())
+            .to_string_lossy()
+            .to_string();
         let recorded: bool = conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM legacy_imports WHERE source = ?1)",
             [&source],
@@ -128,15 +137,22 @@ impl RecordStore {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_millis() as i64);
-        tx.execute("INSERT INTO legacy_imports (source, at) VALUES (?1, ?2)", rusqlite::params![source, now])?;
+        tx.execute(
+            "INSERT INTO legacy_imports (source, at) VALUES (?1, ?2)",
+            rusqlite::params![source, now],
+        )?;
         tx.commit()?;
 
         let marker = marker_path(dir);
         if let Some(parent) = marker.parent() {
-            std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("create {}", parent.display()))?;
         }
-        std::fs::write(&marker, format!("migrated into {}\n", self.root().display()))
-            .with_context(|| format!("write {}", marker.display()))?;
+        std::fs::write(
+            &marker,
+            format!("migrated into {}\n", self.root().display()),
+        )
+        .with_context(|| format!("write {}", marker.display()))?;
         drop(conn);
         Ok(MigrationOutcome::Migrated { events, memories })
     }
@@ -158,7 +174,10 @@ fn read_memdir(dir: &Path) -> Vec<NewEntry> {
         let Ok(body) = std::fs::read_to_string(&file) else {
             continue;
         };
-        let session = file.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+        let session = file
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
         let mut at = 0_i64;
         for line in body.lines() {
             let line = line.trim();
@@ -199,7 +218,12 @@ fn parse_bullet(line: &str) -> Option<(String, String, f64)> {
     let (category, rest) = rest.split_once("]**")?;
     let (content, confidence) = match rest.rsplit_once("*(confidence:") {
         Some((content, conf)) => {
-            let pct = conf.trim().trim_end_matches(")*").trim().trim_end_matches('%').trim();
+            let pct = conf
+                .trim()
+                .trim_end_matches(")*")
+                .trim()
+                .trim_end_matches('%')
+                .trim();
             let confidence = pct.parse::<f64>().map(|p| (p / 100.0).clamp(0.0, 1.0));
             (content, confidence.unwrap_or(DEFAULT_IMPORT_CONFIDENCE))
         }
@@ -209,7 +233,11 @@ fn parse_bullet(line: &str) -> Option<(String, String, f64)> {
     if content.is_empty() {
         return None;
     }
-    Some((category.trim().to_lowercase(), content.to_string(), confidence))
+    Some((
+        category.trim().to_lowercase(),
+        content.to_string(),
+        confidence,
+    ))
 }
 
 #[cfg(test)]
@@ -249,9 +277,17 @@ mod tests {
 
         assert_eq!(
             store.migrate_legacy(&root).unwrap(),
-            MigrationOutcome::Migrated { events: 3, memories: 3 }
+            MigrationOutcome::Migrated {
+                events: 3,
+                memories: 3
+            }
         );
-        let seqs: Vec<u64> = store.events_newest(10).unwrap().iter().map(|e| e.seq).collect();
+        let seqs: Vec<u64> = store
+            .events_newest(10)
+            .unwrap()
+            .iter()
+            .map(|e| e.seq)
+            .collect();
         assert_eq!(seqs, vec![3, 2, 1]);
         let decisions = store.list(EntryKind::Decision, 10, Origin::Any).unwrap();
         let texts: Vec<&str> = decisions.iter().map(|e| e.content.as_str()).collect();
@@ -264,13 +300,25 @@ mod tests {
         let facts = store.list(EntryKind::Fact, 10, Origin::Any).unwrap();
         assert_eq!(facts.len(), 2);
         // Memdir imports are in the record but not in the event-log view.
-        assert_eq!(store.list(EntryKind::Decision, 10, Origin::EventLog).unwrap().len(), 1);
+        assert_eq!(
+            store
+                .list(EntryKind::Decision, 10, Origin::EventLog)
+                .unwrap()
+                .len(),
+            1
+        );
 
         // Reopening (the marker) does not duplicate anything, even when the
         // old log is still there and has grown.
-        assert_eq!(store.migrate_legacy(&root).unwrap(), MigrationOutcome::AlreadyDone);
+        assert_eq!(
+            store.migrate_legacy(&root).unwrap(),
+            MigrationOutcome::AlreadyDone
+        );
         let fresh = RecordStore::open(&root).unwrap();
-        assert_eq!(fresh.migrate_legacy(&root).unwrap(), MigrationOutcome::AlreadyDone);
+        assert_eq!(
+            fresh.migrate_legacy(&root).unwrap(),
+            MigrationOutcome::AlreadyDone
+        );
         assert_eq!(fresh.events_newest(10).unwrap().len(), 3);
         assert_eq!(fresh.count(EntryKind::Decision).unwrap(), 2);
         assert_eq!(fresh.count(EntryKind::Fact).unwrap(), 2);
@@ -289,7 +337,12 @@ mod tests {
         let store = open_scope(&root).unwrap();
         store.migrate_legacy(&root).unwrap();
         store.migrate_legacy(&other).unwrap();
-        let seqs: Vec<u64> = store.events_newest(10).unwrap().iter().map(|e| e.seq).collect();
+        let seqs: Vec<u64> = store
+            .events_newest(10)
+            .unwrap()
+            .iter()
+            .map(|e| e.seq)
+            .collect();
         assert_eq!(seqs, vec![6, 5, 4, 3, 2, 1]);
         // Same decision key from both worktrees: one entry.
         assert_eq!(store.count(EntryKind::Decision).unwrap(), 2);
@@ -302,7 +355,10 @@ mod tests {
     fn nothing_to_migrate_writes_no_marker() {
         let root = temp_root("empty");
         let store = open_scope(&root).unwrap();
-        assert_eq!(store.migrate_legacy(&root).unwrap(), MigrationOutcome::NothingToDo);
+        assert_eq!(
+            store.migrate_legacy(&root).unwrap(),
+            MigrationOutcome::NothingToDo
+        );
         assert!(!marker_path(&root).exists());
         let _ = std::fs::remove_dir_all(&root);
     }
