@@ -155,7 +155,7 @@ import { logEvent } from "@/features/log/lib/log";
 import { cn } from "@/lib/utils";
 import { useAppStore } from "@/features/app/stores/app-store";
 import { loadCachedAcpModels } from "../lib/acp-models-cache";
-import { resolveEffectiveMode } from "../lib/resume-mode";
+import { resolveEffectiveMode, applyModeOnResume } from "../lib/resume-mode";
 
 interface ChatPanelProps {
   tabId: string;
@@ -198,6 +198,19 @@ async function rebindDisconnectedSession(tabId: string): Promise<boolean> {
     }
     const actions = useChatStore.getState().actions;
     actions.setAcpBinding(tabId, agent.agent_id, key.session_id, cwd);
+    // The respawned agent starts on its OWN default, and a bind does not
+    // reset `acpModeExplicit`/`acpCurrentMode` — so without this the pill kept
+    // showing the user's pick while the agent enforced its default. That is the
+    // half of issue 289's second bug `resume-mode.ts` exists to prevent, on
+    // the one resume path that was left out of it. Awaited before the send
+    // gate below reopens, so the first turn after a restart cannot run under
+    // a mode the user never picked. Snapshot failure is not a rebind failure:
+    // the session IS bound, so warn and leave the agent on its own default.
+    try {
+      await applyModeOnResume(tabId, key, await agents.snapshotMeta(key));
+    } catch (err) {
+      console.warn("mode restore after agent restart failed:", err);
+    }
     actions.setDisconnected(tabId, false);
     return true;
   } catch (err) {
