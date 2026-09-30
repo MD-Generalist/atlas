@@ -76,6 +76,14 @@ const BIND_SITES = [
   },
 ] as const;
 
+/** The body of the function that actually respawns and rebinds. */
+function rebindBody(): string {
+  const src = read("src/features/chat/components/chat-panel.tsx");
+  const start = src.indexOf("async function respawnAndRebind");
+  expect(start, "chat-panel.tsx no longer defines respawnAndRebind").toBeGreaterThan(-1);
+  return src.slice(start, src.indexOf("\n}\n", start));
+}
+
 describe("resume-mode coverage", () => {
   it("declares applyModeOnResume exactly once, for both the ACP and Claude pills", () => {
     const src = read(RESUME_MODE);
@@ -88,8 +96,9 @@ describe("resume-mode coverage", () => {
 
   it.each(BIND_SITES)("$what re-applies the user's mode", ({ file, via }) => {
     const src = read(file);
+    // The call, not the name: an import alone would satisfy `includes(via)`.
     expect(
-      src.includes(via),
+      src.includes(`${via}(`),
       `${file}: no \`${via}\` — a session bound here would resume on the agent's own default while the pill kept showing the user's pick (issue 289).`,
     ).toBe(true);
   });
@@ -102,38 +111,48 @@ describe("resume-mode coverage", () => {
     expect(src).toMatch(/await agents\.setMode\(/);
   });
 
-  it("restores the mode BEFORE the rebind reports the session usable", () => {
-    // Ordering, not presence. `rebindDisconnectedSession` is awaited by the
-    // Send handler, so a mode restored after its `return true` races the
-    // queued prompt and the first turn runs under the agent's default. The
-    // `setDisconnected(false)` that dismisses the restart banner is the last
-    // statement of the try, so the two calls bracket it in source order.
-    const src = read("src/features/chat/components/chat-panel.tsx");
-    const start = src.indexOf("async function rebindDisconnectedSession");
-    expect(start).toBeGreaterThan(-1);
-    const body = src.slice(start, src.indexOf("\n}\n", start));
-
+  it("restores the mode BEFORE the tab is bound", () => {
+    // Ordering, not presence. The send gate is `setAcpBinding`, not
+    // `setDisconnected(false)`: a tab whose agent died while starting has no
+    // `acpSessionId`, so the bind is a `justBound` edge (`drain-gate.ts`) and
+    // the queued message goes out on the next commit. A mode restored after
+    // the bind races that message, and an `await` between the bind and
+    // `setDisconnected(false)` lets it see the tab still disconnected and
+    // start a second rebind. So: restore, then bind, then clear the flag.
+    const body = rebindBody();
     const apply = body.indexOf("applyModeOnResume(");
+    const bind = body.indexOf("setAcpBinding(");
     const settled = body.indexOf("setDisconnected(tabId, false)");
-    expect(apply, "rebindDisconnectedSession never calls applyModeOnResume").toBeGreaterThan(-1);
-    expect(settled, "rebindDisconnectedSession never clears the disconnected flag").toBeGreaterThan(
-      -1,
-    );
-    expect(apply, "the mode must be applied before the rebind reports usable").toBeLessThan(
-      settled,
-    );
+    expect(apply, "the rebind never calls applyModeOnResume").toBeGreaterThan(-1);
+    expect(bind, "the rebind never binds the tab").toBeGreaterThan(-1);
+    expect(settled, "the rebind never clears the disconnected flag").toBeGreaterThan(-1);
+    expect(apply, "the mode must be applied before the tab is bound").toBeLessThan(bind);
+    expect(
+      body.slice(bind, settled),
+      "nothing may be awaited between binding and clearing the disconnected flag",
+    ).not.toMatch(/\bawait\b/);
+  });
+
+  it("joins a rebind already in flight instead of respawning twice", () => {
+    // Restart and Send both call the rebind, and the bind itself drains the
+    // queue into `handleSend`; without a per-tab guard each caller respawns
+    // the agent and rebinds, and the loser can leave the tab on a session the
+    // mode was never applied to.
+    const src = read("src/features/chat/components/chat-panel.tsx");
+    const start = src.indexOf("function rebindDisconnectedSession");
+    expect(start).toBeGreaterThan(-1);
+    const guard = src.slice(start, src.indexOf("\n}\n", start));
+    expect(guard).toMatch(/rebindsInFlight\.get\(tabId\)/);
+    expect(guard).toMatch(/rebindsInFlight\.delete\(tabId\)/);
   });
 
   it("treats a failed mode restore as a warning, not a failed rebind", () => {
-    // The session IS bound at that point; failing the whole restart over a
+    // The session exists at that point; failing the whole restart over a
     // snapshot that would not read would strand a working session behind
     // "The agent could not be restarted". So the restore needs its own `try`
     // whose `catch` warns and falls through — not the rebind's outer `catch`,
     // which does return false and is correct for a spawn that never landed.
-    const src = read("src/features/chat/components/chat-panel.tsx");
-    const start = src.indexOf("async function rebindDisconnectedSession");
-    const body = src.slice(start, src.indexOf("\n}\n", start));
-
+    const body = rebindBody();
     const call = body.indexOf("applyModeOnResume(");
     expect(call).toBeGreaterThan(-1);
     // The innermost `try {` opening at or before the call.
