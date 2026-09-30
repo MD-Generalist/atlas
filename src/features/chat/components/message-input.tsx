@@ -107,6 +107,7 @@ import type { SlashTrigger } from "../lib/cm-slash-extension";
 // vendor chunk lands in the eager boot graph.
 import { clearSlashRange } from "../lib/cm-clear-range";
 import type { MentionData } from "../lib/mentions";
+import { COMMENT_LINK_EVENT, type CommentLinkDetail } from "../lib/comment-mentions";
 
 // Start the CodeMirror chunk download at module-evaluation time. Vite still
 // excludes it from `<link rel="modulepreload">` because the static analysis
@@ -1781,6 +1782,34 @@ export function MessageInput({
     return () => window.removeEventListener("atlas:chat-insert", handler);
   }, [tabId]);
 
+  // A comment popover's link button: this tab's own recorded session's
+  // comment, as a chip at the caret. Linking one already in the draft just
+  // focuses — the agent needs to be pointed at it once.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<CommentLinkDetail>).detail;
+      if (!detail || detail.tabId !== tabId || disabled) return;
+      const input = inputRef.current;
+      if (!input) return;
+      const linked = input
+        .getMentions()
+        .some((m) => m.kind === "comment" && m.id === detail.mention.id);
+      if (!linked) {
+        const view = input.view();
+        const doc = view?.state.doc;
+        const head = view?.state.selection.main.head ?? 0;
+        const before = doc && head > 0 ? doc.sliceString(head - 1, head) : "";
+        if (before && !/\s/.test(before)) {
+          view?.dispatch({ changes: { from: head, insert: " " }, selection: { anchor: head + 1 } });
+        }
+        input.insertMention(detail.mention);
+      }
+      requestAnimationFrame(() => inputRef.current?.focus());
+    };
+    window.addEventListener(COMMENT_LINK_EVENT, handler);
+    return () => window.removeEventListener(COMMENT_LINK_EVENT, handler);
+  }, [tabId, disabled]);
+
   const submit = useCallback(() => {
     // Hard gate: Claude Code missing or not authed — sending would just
     // surface a confusing ACP spawn error. The banner above tells the user
@@ -2160,6 +2189,7 @@ export function MessageInput({
           // only list ones enabled for the active agent (registry ids
           // "claude-code" / "codex" match agentType).
           agentId={agentType}
+          tabId={tabId}
           onSelect={handleMentionSelect}
           onClose={() => setTrigger(null)}
         />

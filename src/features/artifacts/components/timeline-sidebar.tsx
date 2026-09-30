@@ -32,6 +32,7 @@ import { AccountAvatar } from "@/features/auth/components/account-avatar";
 import { useOrgDirectory } from "@/features/organisations/lib/use-org-directory";
 
 import { authorOf, type AuthorDirectory } from "../lib/author-directory";
+import { boardKey } from "../lib/board-key";
 import { groupSessions, sessionState, sessionTitle, type GroupPeriod } from "../lib/board";
 import type { BoardSession } from "../types";
 import { SidebarSkeleton } from "./timeline-skeleton";
@@ -42,8 +43,9 @@ interface Props {
   loading: boolean;
   /** True when a search or facet is narrowing the board — changes the empty copy. */
   filtered: boolean;
-  /** The Session open on the right, highlighted here. */
-  openId: string | null;
+  /** The row open on the right, highlighted here — a {@link boardKey}, since
+   *  one Session id can be on the board once per Project. */
+  openKey: string | null;
   /** How coarsely rows are grouped — the header's Day / Week / Month. */
   period: GroupPeriod;
   /** The project is passed back because each one has its own store. */
@@ -155,7 +157,7 @@ function dotY(row: Row): number {
  *  and single-valued: there is one Timeline. */
 let scrollTopCache = 0;
 
-export function TimelineSidebar({ sessions, loading, filtered, openId, period, onOpen }: Props) {
+export function TimelineSidebar({ sessions, loading, filtered, openKey, period, onOpen }: Props) {
   // One subscription for the whole nav. Five hundred rows each resolving their
   // own author would re-render the list every time the roster revalidated.
   const directory = useOrgDirectory();
@@ -178,7 +180,12 @@ export function TimelineSidebar({ sessions, loading, filtered, openId, period, o
       });
       for (const item of clusterRows(day.sessions)) {
         if (item.kind === "single") {
-          out.push({ kind: "session", key: item.session.id, lane: 1, session: item.session });
+          out.push({
+            kind: "session",
+            key: boardKey(item.session),
+            lane: 1,
+            session: item.session,
+          });
           continue;
         }
         const expandKey = `${day.label}:${item.title}`;
@@ -192,7 +199,7 @@ export function TimelineSidebar({ sessions, loading, filtered, openId, period, o
         });
         if (expanded.has(expandKey)) {
           for (const session of item.sessions) {
-            out.push({ kind: "session", key: session.id, lane: 2, session });
+            out.push({ kind: "session", key: boardKey(session), lane: 2, session });
           }
         }
       }
@@ -267,12 +274,12 @@ export function TimelineSidebar({ sessions, loading, filtered, openId, period, o
   // make it impossible to browse while an agent is working.
   const revealed = useRef<string | null>(null);
   useEffect(() => {
-    if (!openId || revealed.current === openId) return;
-    const index = rows.findIndex((r) => r.kind === "session" && r.session.id === openId);
+    if (!openKey || revealed.current === openKey) return;
+    const index = rows.findIndex((r) => r.kind === "session" && r.key === openKey);
     if (index < 0) return;
-    revealed.current = openId;
+    revealed.current = openKey;
     virtualizer.scrollToIndex(index, { align: "center" });
-  }, [openId, rows, virtualizer]);
+  }, [openKey, rows, virtualizer]);
 
   // Structure rather than a sentence: the read is usually a few milliseconds,
   // and a line of prose that appears and vanishes reads as a flash of error.
@@ -322,14 +329,14 @@ export function TimelineSidebar({ sessions, loading, filtered, openId, period, o
                   <ClusterRow
                     row={row}
                     expanded={expanded.has(row.expandKey)}
-                    holdsOpen={!!openId && row.sessions.some((s) => s.id === openId)}
+                    holdsOpen={!!openKey && row.sessions.some((s) => boardKey(s) === openKey)}
                     onToggle={toggle}
                   />
                 ) : (
                   <SessionRow
                     session={row.session}
                     lane={row.lane}
-                    selected={row.session.id === openId}
+                    selected={row.key === openKey}
                     directory={directory}
                     onOpen={onOpen}
                   />

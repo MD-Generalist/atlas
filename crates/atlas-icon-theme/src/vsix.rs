@@ -40,15 +40,19 @@ pub fn unpack_extension(archive_bytes: &[u8], destination: &Path) -> Result<usiz
         });
     }
 
-    fs::create_dir_all(destination)
-        .map_err(|source| IconThemeError::Io { path: destination.to_path_buf(), source })?;
+    fs::create_dir_all(destination).map_err(|source| IconThemeError::Io {
+        path: destination.to_path_buf(),
+        source,
+    })?;
 
     let mut written = 0usize;
     let mut budget = MAX_UNCOMPRESSED_BYTES;
     for index in 0..archive.len() {
-        let mut entry = archive.by_index(index).map_err(|source| IconThemeError::Vsix {
-            message: format!("reading entry {index}: {source}"),
-        })?;
+        let mut entry = archive
+            .by_index(index)
+            .map_err(|source| IconThemeError::Vsix {
+                message: format!("reading entry {index}: {source}"),
+            })?;
         if entry.is_dir() {
             continue;
         }
@@ -64,8 +68,10 @@ pub fn unpack_extension(archive_bytes: &[u8], destination: &Path) -> Result<usiz
         };
         let target = destination.join(&relative);
         if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|source| IconThemeError::Io { path: parent.to_path_buf(), source })?;
+            fs::create_dir_all(parent).map_err(|source| IconThemeError::Io {
+                path: parent.to_path_buf(),
+                source,
+            })?;
         }
         let mut bytes = Vec::new();
         // Read at most one byte past what is left, so an entry whose header
@@ -73,12 +79,19 @@ pub fn unpack_extension(archive_bytes: &[u8], destination: &Path) -> Result<usiz
         (&mut entry)
             .take(budget + 1)
             .read_to_end(&mut bytes)
-            .map_err(|source| IconThemeError::Io { path: target.clone(), source })?;
-        budget = budget.checked_sub(bytes.len() as u64).ok_or_else(|| IconThemeError::Vsix {
-            message: format!("expands past the {MAX_UNCOMPRESSED_BYTES} byte ceiling"),
+            .map_err(|source| IconThemeError::Io {
+                path: target.clone(),
+                source,
+            })?;
+        budget = budget
+            .checked_sub(bytes.len() as u64)
+            .ok_or_else(|| IconThemeError::Vsix {
+                message: format!("expands past the {MAX_UNCOMPRESSED_BYTES} byte ceiling"),
+            })?;
+        fs::write(&target, &bytes).map_err(|source| IconThemeError::Io {
+            path: target.clone(),
+            source,
         })?;
-        fs::write(&target, &bytes)
-            .map_err(|source| IconThemeError::Io { path: target.clone(), source })?;
         written += 1;
     }
     if written == 0 {
@@ -93,7 +106,10 @@ pub fn unpack_extension(archive_bytes: &[u8], destination: &Path) -> Result<usiz
 /// dropped (`extension.vsixmanifest`, `[Content_Types].xml`).
 fn strip_payload_prefix(name: &Path) -> Option<PathBuf> {
     let as_str = name.to_str()?.replace('\\', "/");
-    as_str.strip_prefix(PAYLOAD_PREFIX).filter(|rest| !rest.is_empty()).map(PathBuf::from)
+    as_str
+        .strip_prefix(PAYLOAD_PREFIX)
+        .filter(|rest| !rest.is_empty())
+        .map(PathBuf::from)
 }
 
 #[cfg(test)]
@@ -137,14 +153,20 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let archive = build_zip(&[("readme.txt", "hi")]);
         let error = unpack_extension(&archive, dir.path()).unwrap_err();
-        assert!(error.to_string().contains("no `extension/` payload"), "{error}");
+        assert!(
+            error.to_string().contains("no `extension/` payload"),
+            "{error}"
+        );
     }
 
     #[test]
     fn refuses_something_that_is_not_a_zip() {
         let dir = tempfile::tempdir().expect("tempdir");
         let error = unpack_extension(b"not a zip at all", dir.path()).unwrap_err();
-        assert!(error.to_string().contains("not a readable .vsix"), "{error}");
+        assert!(
+            error.to_string().contains("not a readable .vsix"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -154,7 +176,10 @@ mod tests {
         {
             let mut writer = zip::ZipWriter::new(std::io::Cursor::new(&mut buffer));
             writer
-                .start_file("extension/big.bin", zip::write::SimpleFileOptions::default())
+                .start_file(
+                    "extension/big.bin",
+                    zip::write::SimpleFileOptions::default(),
+                )
                 .expect("start_file");
             let chunk = vec![0u8; 1024 * 1024];
             for _ in 0..=(MAX_UNCOMPRESSED_BYTES / chunk.len() as u64) {

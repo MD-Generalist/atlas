@@ -256,7 +256,10 @@ pub trait AgentConnection: Send + Sync {
     }
 
     /// Close an existing session. Allows the agent to free the session from memory.
-    fn close_session(self: Arc<Self>, _session_id: acp::SessionId) -> BoxFuture<'static, Result<()>> {
+    fn close_session(
+        self: Arc<Self>,
+        _session_id: acp::SessionId,
+    ) -> BoxFuture<'static, Result<()>> {
         Box::pin(async { Err(anyhow::Error::msg("Closing sessions is not supported")) })
     }
 
@@ -309,10 +312,8 @@ pub trait AgentConnection: Send + Sync {
         None
     }
 
-    fn prompt(
-        &self,
-        params: acp::PromptRequest,
-    ) -> BoxFuture<'static, Result<acp::PromptResponse>>;
+    fn prompt(&self, params: acp::PromptRequest)
+        -> BoxFuture<'static, Result<acp::PromptResponse>>;
 
     fn retry(&self, _session_id: &acp::SessionId) -> Option<Arc<dyn AgentSessionRetry>> {
         None

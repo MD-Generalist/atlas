@@ -475,6 +475,15 @@ function GeneralSettings() {
         />
       </SettingRow>
       <SettingRow
+        label="Auto-fetch from remote"
+        description="Quietly run `git fetch` for the open project when it opens, when Atlas regains focus, and every few minutes, so the Pull badge shows what the remote has. It only updates remote-tracking branches — it never pulls, merges, or touches your files."
+      >
+        <Toggle
+          checked={settings.gitAutoFetch}
+          onChange={(next) => updateSettings({ gitAutoFetch: next })}
+        />
+      </SettingRow>
+      <SettingRow
         label="Enable Atlas Logs"
         description="Record Atlas-internal events (sign-in, agent start/finish, browser/file open, etc.) into the Logs tab under the `atlas` source. Default ON so when something goes wrong you can open the Logs tab, filter by `atlas`, and share a timeline. Turn off if the noise bothers you."
       >
@@ -758,7 +767,7 @@ function AboutSettings() {
           <AtlasIcon size={40} className="rounded-xl" />
           <div>
             <p className="text-sm font-semibold text-foreground">Atlas</p>
-            <p className="text-2xs text-muted-foreground">v0.3.3 — The second brain IDE</p>
+            <p className="text-2xs text-muted-foreground">v0.3.4 — The second brain IDE</p>
           </div>
         </div>
         <p className="text-xs text-secondary-foreground leading-relaxed pt-2">

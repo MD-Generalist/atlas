@@ -24,7 +24,13 @@ const DL_PARALLEL_MIN: u64 = 4 * 1024 * 1024;
 /// Flush accumulated bytes to disk once a segment buffers this much.
 const DL_WRITE_CHUNK: usize = 1024 * 1024;
 
-pub(super) fn emit_progress(app: &AppHandle, version: &str, downloaded: u64, total: u64, phase: &str) {
+pub(super) fn emit_progress(
+    app: &AppHandle,
+    version: &str,
+    downloaded: u64,
+    total: u64,
+    phase: &str,
+) {
     let _ = app.emit(
         "atlas:update-progress",
         serde_json::json!({ "version": version, "downloaded": downloaded, "total": total, "phase": phase }),
@@ -121,7 +127,13 @@ async fn download_parallel(
         let version = version.to_string();
         tauri::async_runtime::spawn(async move {
             loop {
-                emit_progress(&app, &version, downloaded.load(Ordering::Relaxed), total, "downloading");
+                emit_progress(
+                    &app,
+                    &version,
+                    downloaded.load(Ordering::Relaxed),
+                    total,
+                    "downloading",
+                );
                 if done.load(Ordering::Relaxed) {
                     break;
                 }
@@ -183,7 +195,10 @@ async fn download_segment(
     // Require a *partial* response — a 200 means the server ignored the Range and
     // sent the whole file, which would corrupt this offset-based writer.
     if resp.status().as_u16() != 206 {
-        return Err(format!("segment download not ranged: HTTP {}", resp.status()));
+        return Err(format!(
+            "segment download not ranged: HTTP {}",
+            resp.status()
+        ));
     }
 
     let mut offset = start;
@@ -255,11 +270,19 @@ async fn download_stream(
     total: u64,
     version: &str,
 ) -> Result<(), String> {
-    let resp = client.get(uri).send().await.map_err(|e| format!("download: {e}"))?;
+    let resp = client
+        .get(uri)
+        .send()
+        .await
+        .map_err(|e| format!("download: {e}"))?;
     if !resp.status().is_success() {
         return Err(format!("download failed: HTTP {}", resp.status()));
     }
-    let total = if total > 0 { total } else { resp.content_length().unwrap_or(0) };
+    let total = if total > 0 {
+        total
+    } else {
+        resp.content_length().unwrap_or(0)
+    };
     let mut file = tokio::fs::File::create(part)
         .await
         .map_err(|e| format!("create part: {e}"))?;
@@ -269,7 +292,9 @@ async fn download_stream(
     let mut stream = resp.bytes_stream();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|e| format!("download chunk: {e}"))?;
-        file.write_all(&chunk).await.map_err(|e| format!("write: {e}"))?;
+        file.write_all(&chunk)
+            .await
+            .map_err(|e| format!("write: {e}"))?;
         downloaded += chunk.len() as u64;
         if downloaded - last_emit >= DL_WRITE_CHUNK as u64 || (total > 0 && downloaded >= total) {
             last_emit = downloaded;

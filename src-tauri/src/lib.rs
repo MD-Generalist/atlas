@@ -132,11 +132,14 @@ pub fn run() {
             // the command replaced the whole struct) — so one machine became a
             // new PostHog person on every save. An install upgrading from that
             // era ADOPTS its existing id here rather than forking a new person.
-            let (device, is_new_device) =
-                telemetry::device::load_or_create(app.handle(), loaded.telemetry_anon_id.as_deref());
+            let (device, is_new_device) = telemetry::device::load_or_create(
+                app.handle(),
+                loaded.telemetry_anon_id.as_deref(),
+            );
             let device_id = device.device_id.clone();
             let device_id_source = device.source;
-            let telemetry_id_changed = loaded.telemetry_anon_id.as_deref() != Some(device_id.as_str());
+            let telemetry_id_changed =
+                loaded.telemetry_anon_id.as_deref() != Some(device_id.as_str());
             if telemetry_id_changed {
                 loaded.telemetry_anon_id = Some(device_id.clone());
             }
@@ -147,9 +150,12 @@ pub fn run() {
             // guarded by `settings_config_migrated` so a user who later
             // deletes `config.toml` on purpose never gets it silently
             // resurrected from stale `state.json` data.
-            let migration =
-                state::atlas_config::bootstrap(loaded.settings_config_migrated, legacy_settings_raw);
-            let migration_marker_changed = migration.mark_migrated && !loaded.settings_config_migrated;
+            let migration = state::atlas_config::bootstrap(
+                loaded.settings_config_migrated,
+                legacy_settings_raw,
+            );
+            let migration_marker_changed =
+                migration.mark_migrated && !loaded.settings_config_migrated;
             if migration_marker_changed {
                 loaded.settings_config_migrated = true;
             }
@@ -195,6 +201,7 @@ pub fn run() {
             app.manage(atlas_config.clone());
             commands::atlas_config::start_watcher(app.handle(), atlas_config);
             commands::themes::start_watcher(app.handle());
+            commands::git_autofetch::start(app.handle());
 
             // Mirror the (possibly updated) telemetry id + migration marker
             // back into `state.json` so both agree and a downgrade still
@@ -237,7 +244,11 @@ pub fn run() {
                         .payload()
                         .downcast_ref::<&str>()
                         .copied()
-                        .or_else(|| info.payload().downcast_ref::<String>().map(std::string::String::as_str))
+                        .or_else(|| {
+                            info.payload()
+                                .downcast_ref::<String>()
+                                .map(std::string::String::as_str)
+                        })
                         .unwrap_or("panic");
                     tclient.capture_panic_blocking(serde_json::json!({
                         "location": location,
@@ -297,7 +308,10 @@ pub fn run() {
                         .clone();
                     handle
                         .state::<Arc<telemetry::TelemetryClient>>()
-                        .set_active_org(commands::telemetry::resolve_org(handle, active.as_deref()));
+                        .set_active_org(commands::telemetry::resolve_org(
+                            handle,
+                            active.as_deref(),
+                        ));
                 }
 
                 // Session capture's drain needs a credential, and the auth core
@@ -330,8 +344,7 @@ pub fn run() {
             let (job_tx, job_rx) = tokio::sync::mpsc::channel::<commands::memory_indexer::Job>(
                 commands::memory_indexer::QUEUE_CAPACITY,
             );
-            let registry =
-                Arc::new(commands::memory_indexer::MemoryRegistry::new(job_tx));
+            let registry = Arc::new(commands::memory_indexer::MemoryRegistry::new(job_tx));
             app.manage(registry.clone());
             let indexer_app = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -348,6 +361,7 @@ pub fn run() {
         .manage(commands::modelchat::ModelChatState::new())
         .manage(FileIndexState::new())
         .manage(GitWatcherState::new())
+        .manage(commands::git_autofetch::GitAutoFetchState::new())
         .manage(RecentFilesState::new())
         .manage(MentionCacheState::new())
         .manage(Arc::new(KnowledgeMetaState::new()))
@@ -364,10 +378,20 @@ pub fn run() {
         // its file watcher stops and memory is freed (these states are keyed by
         // webview label for multi-window project scoping).
         .on_window_event(|window, event| {
-            if matches!(event, tauri::WindowEvent::Destroyed) {
-                let label = window.label();
-                window.state::<FileIndexState>().drop_window(label);
-                window.state::<MentionCacheState>().drop_window(label);
+            match event {
+                tauri::WindowEvent::Destroyed => {
+                    let label = window.label();
+                    window.state::<FileIndexState>().drop_window(label);
+                    window.state::<MentionCacheState>().drop_window(label);
+                    window
+                        .state::<commands::git_autofetch::GitAutoFetchState>()
+                        .drop_window(label);
+                }
+                // Coming back to Atlas is when a stale Pull badge misleads.
+                tauri::WindowEvent::Focused(true) => {
+                    commands::git_autofetch::on_window_focused(window.app_handle(), window.label());
+                }
+                _ => {}
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -504,6 +528,7 @@ pub fn run() {
             commands::git_ops::git_merge_branch,
             commands::git_ops::git_merge_preview,
             commands::git_ops::git_fetch,
+            commands::git_autofetch::git_autofetch_set_active,
             commands::git_ops::git_pull,
             commands::git_ops::git_push,
             commands::git_ops::git_publish_branch,
@@ -565,6 +590,7 @@ pub fn run() {
             commands::capture::capture_promote,
             commands::capture::capture_connect_options,
             commands::capture::capture_connect,
+            commands::capture::capture_switch_project,
             commands::capture::capture_activate,
             commands::capture::capture_retry_failed,
             commands::capture::capture_retry_watcher,
@@ -733,6 +759,7 @@ pub fn run() {
             commands::keybindings::keybindings_load,
             commands::keybindings::keybindings_save,
             commands::keybindings::keybindings_open,
+            commands::keybindings::keybindings_set_close_tab_accelerator,
             commands::memory_graph::memory_embed_status,
             commands::memory_graph::memory_embed_download,
             commands::memory_graph::memory_index_build,
@@ -809,8 +836,8 @@ pub fn run() {
                     // child's stdin; the SDK reaps it). `process::exit` skips
                     // Drop impls, so this must happen before the exit — with a
                     // short bounded grace for the async teardown to run.
-                    if let Some(host) = app_handle
-                        .try_state::<Arc<commands::agent_host::AgentHost>>()
+                    if let Some(host) =
+                        app_handle.try_state::<Arc<commands::agent_host::AgentHost>>()
                     {
                         host.shutdown();
                         std::thread::sleep(std::time::Duration::from_millis(500));

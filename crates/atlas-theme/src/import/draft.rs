@@ -139,8 +139,11 @@ impl VariantDraft {
         let chain: &[&str] = match token {
             "card" | "secondary" | "muted" | "sidebar" => &["background"],
             "popover" => &["card", "background"],
-            "card-foreground" | "popover-foreground" | "accent-foreground"
-            | "secondary-foreground" | "sidebar-foreground" => &["foreground"],
+            "card-foreground"
+            | "popover-foreground"
+            | "accent-foreground"
+            | "secondary-foreground"
+            | "sidebar-foreground" => &["foreground"],
             "primary" => &["ring", "foreground"],
             "accent" => &["muted", "card", "background"],
             "border" => &["muted", "card"],
@@ -192,7 +195,10 @@ impl VariantDraft {
                 return (format!("contrast with {surface}"), pick.to_string());
             }
         }
-        ("atlas default".to_string(), atlas_default(token, dark).to_string())
+        (
+            "atlas default".to_string(),
+            atlas_default(token, dark).to_string(),
+        )
     }
 
     /// Guess the eight palette colours from what the source already gave us.
@@ -202,34 +208,85 @@ impl VariantDraft {
     pub fn fill_palette(&mut self) {
         // (palette name, candidate theme keys in order, candidate base tokens)
         const SOURCES: &[(&str, &[&str], &[&str])] = &[
-            ("red", &["terminal.ansi.red", "syntax.tag", "status.error.foreground"], &["destructive"]),
-            ("green", &["terminal.ansi.green", "syntax.string", "status.success.foreground"], &[]),
-            ("yellow", &["terminal.ansi.yellow", "syntax.attribute", "status.warning.foreground"], &[]),
-            ("blue", &["terminal.ansi.blue", "syntax.function", "status.info.foreground"], &["primary"]),
+            (
+                "red",
+                &["terminal.ansi.red", "syntax.tag", "status.error.foreground"],
+                &["destructive"],
+            ),
+            (
+                "green",
+                &[
+                    "terminal.ansi.green",
+                    "syntax.string",
+                    "status.success.foreground",
+                ],
+                &[],
+            ),
+            (
+                "yellow",
+                &[
+                    "terminal.ansi.yellow",
+                    "syntax.attribute",
+                    "status.warning.foreground",
+                ],
+                &[],
+            ),
+            (
+                "blue",
+                &[
+                    "terminal.ansi.blue",
+                    "syntax.function",
+                    "status.info.foreground",
+                ],
+                &["primary"],
+            ),
             ("cyan", &["terminal.ansi.cyan", "syntax.type"], &[]),
             ("purple", &["terminal.ansi.magenta", "syntax.keyword"], &[]),
-            ("orange", &["syntax.number", "terminal.ansi.bright_red"], &[]),
-            ("pink", &["syntax.escape", "terminal.ansi.bright_magenta", "syntax.regexp"], &[]),
+            (
+                "orange",
+                &["syntax.number", "terminal.ansi.bright_red"],
+                &[],
+            ),
+            (
+                "pink",
+                &[
+                    "syntax.escape",
+                    "terminal.ansi.bright_magenta",
+                    "syntax.regexp",
+                ],
+                &[],
+            ),
         ];
         for (name, keys, tokens) in SOURCES {
             let found = keys
                 .iter()
-                .find_map(|key| self.key_color(key).map(|value| (format!("keys.{key}"), value.to_string())))
+                .find_map(|key| {
+                    self.key_color(key)
+                        .map(|value| (format!("keys.{key}"), value.to_string()))
+                })
                 .or_else(|| {
                     tokens.iter().find_map(|token| {
-                        self.base_value(token).map(|value| (format!("base.{token}"), value.to_string()))
+                        self.base_value(token)
+                            .map(|value| (format!("base.{token}"), value.to_string()))
                     })
                 });
             if let Some((from, value)) = found {
                 self.derive_palette(name, &from, &value);
             }
         }
-        debug_assert!(self.palette.keys().all(|name| PALETTE_KEYS.contains(&name.as_str())));
+        debug_assert!(self
+            .palette
+            .keys()
+            .all(|name| PALETTE_KEYS.contains(&name.as_str())));
     }
 
     pub fn finish(self) -> (ThemeVariant, Vec<MappedKey>, Vec<DerivedKey>) {
         (
-            ThemeVariant { base: self.base, palette: self.palette, keys: self.keys },
+            ThemeVariant {
+                base: self.base,
+                palette: self.palette,
+                keys: self.keys,
+            },
             self.mapped,
             self.derived,
         )
@@ -262,23 +319,95 @@ fn dark_default() -> &'static str {
 /// produce a light variant from a `:root` block should not reproduce it.
 fn atlas_default(token: &str, dark: bool) -> &'static str {
     match token {
-        "background" => if dark { "#000000" } else { "#ffffff" },
-        "foreground" => if dark { "#ffffff" } else { "#18181b" },
-        "muted-foreground" => if dark { "#8a8a8a" } else { "#71717a" },
-        "destructive" => if dark { "#e5484d" } else { "#dc2626" },
+        "background" => {
+            if dark {
+                "#000000"
+            } else {
+                "#ffffff"
+            }
+        }
+        "foreground" => {
+            if dark {
+                "#ffffff"
+            } else {
+                "#18181b"
+            }
+        }
+        "muted-foreground" => {
+            if dark {
+                "#8a8a8a"
+            } else {
+                "#71717a"
+            }
+        }
+        "destructive" => {
+            if dark {
+                "#e5484d"
+            } else {
+                "#dc2626"
+            }
+        }
         "radius" => "8px",
         "font-sans" => ATLAS_FONT_SANS,
         "font-serif" => ATLAS_FONT_SERIF,
         "font-mono" => ATLAS_FONT_MONO,
         "tracking-normal" => "0em",
         "spacing" => "0.25rem",
-        "shadow-2xs" => if dark { "0 1px 2px rgba(0, 0, 0, 0.35)" } else { "0 1px 2px rgba(0, 0, 0, 0.04)" },
-        "shadow-xs" => if dark { "0 1px 2px rgba(0, 0, 0, 0.45)" } else { "0 1px 2px rgba(0, 0, 0, 0.06)" },
-        "shadow-sm" => if dark { "0 1px 3px rgba(0, 0, 0, 0.55)" } else { "0 1px 3px rgba(0, 0, 0, 0.08)" },
-        "shadow-md" => if dark { "0 4px 12px rgba(0, 0, 0, 0.65)" } else { "0 4px 12px rgba(0, 0, 0, 0.10)" },
-        "shadow-lg" => if dark { "0 8px 24px rgba(0, 0, 0, 0.75)" } else { "0 8px 24px rgba(0, 0, 0, 0.12)" },
-        "shadow-xl" => if dark { "0 12px 36px rgba(0, 0, 0, 0.82)" } else { "0 12px 36px rgba(0, 0, 0, 0.14)" },
-        "shadow-2xl" => if dark { "0 16px 48px rgba(0, 0, 0, 0.9)" } else { "0 16px 48px rgba(0, 0, 0, 0.18)" },
-        _ => if dark { "#1a1a1a" } else { "#f4f4f5" },
+        "shadow-2xs" => {
+            if dark {
+                "0 1px 2px rgba(0, 0, 0, 0.35)"
+            } else {
+                "0 1px 2px rgba(0, 0, 0, 0.04)"
+            }
+        }
+        "shadow-xs" => {
+            if dark {
+                "0 1px 2px rgba(0, 0, 0, 0.45)"
+            } else {
+                "0 1px 2px rgba(0, 0, 0, 0.06)"
+            }
+        }
+        "shadow-sm" => {
+            if dark {
+                "0 1px 3px rgba(0, 0, 0, 0.55)"
+            } else {
+                "0 1px 3px rgba(0, 0, 0, 0.08)"
+            }
+        }
+        "shadow-md" => {
+            if dark {
+                "0 4px 12px rgba(0, 0, 0, 0.65)"
+            } else {
+                "0 4px 12px rgba(0, 0, 0, 0.10)"
+            }
+        }
+        "shadow-lg" => {
+            if dark {
+                "0 8px 24px rgba(0, 0, 0, 0.75)"
+            } else {
+                "0 8px 24px rgba(0, 0, 0, 0.12)"
+            }
+        }
+        "shadow-xl" => {
+            if dark {
+                "0 12px 36px rgba(0, 0, 0, 0.82)"
+            } else {
+                "0 12px 36px rgba(0, 0, 0, 0.14)"
+            }
+        }
+        "shadow-2xl" => {
+            if dark {
+                "0 16px 48px rgba(0, 0, 0, 0.9)"
+            } else {
+                "0 16px 48px rgba(0, 0, 0, 0.18)"
+            }
+        }
+        _ => {
+            if dark {
+                "#1a1a1a"
+            } else {
+                "#f4f4f5"
+            }
+        }
     }
 }

@@ -76,12 +76,18 @@ struct DownloadDone {
 #[tauri::command]
 pub async fn memory_embed_download(app: AppHandle) -> Result<(), String> {
     let id = super::models::selected_embedding_id(&app);
-    let entry = super::models::find_entry(&id).ok_or_else(|| format!("unknown embedding model '{id}'"))?;
+    let entry =
+        super::models::find_entry(&id).ok_or_else(|| format!("unknown embedding model '{id}'"))?;
     let dir = model_dir(&app)?;
     tokio::spawn(async move {
-        let result =
-            super::models::download_files(&app, &id, &dir, &entry.files, "atlas:memory-embed:progress")
-                .await;
+        let result = super::models::download_files(
+            &app,
+            &id,
+            &dir,
+            &entry.files,
+            "atlas:memory-embed:progress",
+        )
+        .await;
         let _ = app.emit(
             "atlas:memory-embed:done",
             DownloadDone {
@@ -245,9 +251,7 @@ fn build_graph_blocking(
             if score < SIM_THRESHOLD {
                 continue;
             }
-            edge_map
-                .entry(key(i, j))
-                .or_insert((score, "similarity"));
+            edge_map.entry(key(i, j)).or_insert((score, "similarity"));
         }
     }
     // Explicit wikilink edges (override similarity for that pair).
@@ -293,7 +297,11 @@ fn build_graph_blocking(
     let edges: Vec<GraphEdge> = edge_map
         .into_iter()
         .map(|((a, b), (w, k))| {
-            let (older, newer) = if (ts[a], a) <= (ts[b], b) { (a, b) } else { (b, a) };
+            let (older, newer) = if (ts[a], a) <= (ts[b], b) {
+                (a, b)
+            } else {
+                (b, a)
+            };
             GraphEdge {
                 from: id_of[older].to_string(),
                 to: id_of[newer].to_string(),

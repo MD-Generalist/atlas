@@ -24,8 +24,8 @@ use crate::blobs::{self, BlobStore};
 use crate::error::{Error, Result};
 use crate::lock::WriterLock;
 use crate::model::*;
-use crate::tools::ToolName;
 use crate::schema;
+use crate::tools::ToolName;
 
 /// A Project's recorded Sessions.
 pub struct Store {
@@ -686,10 +686,7 @@ impl Store {
         }
         self.conn.execute(
             "UPDATE agent_session SET redaction_counts = ?2 WHERE id = ?1",
-            rusqlite::params![
-                session_id,
-                serde_json::Value::Object(merged).to_string()
-            ],
+            rusqlite::params![session_id, serde_json::Value::Object(merged).to_string()],
         )?;
         Ok(())
     }
@@ -957,10 +954,7 @@ impl Store {
     }
 
     /// Tool-call totals for every Session in a Project. See [`Self::message_counts`].
-    pub fn tool_call_counts_by_session(
-        &self,
-        workspace_id: &str,
-    ) -> Result<HashMap<String, i64>> {
+    pub fn tool_call_counts_by_session(&self, workspace_id: &str) -> Result<HashMap<String, i64>> {
         self.counts_by_session("tool_call", workspace_id)
     }
 
@@ -1524,6 +1518,40 @@ impl Store {
         Ok(moved)
     }
 
+    /// Point a Cloud Project at a different Cloud Project, re-sending its history.
+    ///
+    /// The server has no move: each Project is its own object, so the rows
+    /// already accepted by the old one stay there and the new one has to be
+    /// sent everything. The binding flip and the row requeue commit together
+    /// for the same reason [`Store::promote_to_cloud`] does — a crash between
+    /// them would leave a Project whose history the new destination never
+    /// receives, after the user was told it would.
+    ///
+    /// Every row goes back to `pending` with a fresh attempt count: `sent`
+    /// because the new destination has not seen it, `failed` because the
+    /// failure was against the old one, `local` for convergence.
+    pub fn switch_cloud_project(
+        &self,
+        workspace_id: &str,
+        org_id: &str,
+        slug: &str,
+        remote_workspace_id: &str,
+    ) -> Result<i64> {
+        self.require_writer()?;
+        let now = Utc::now().to_rfc3339();
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
+            "UPDATE binding
+                SET mode = 'cloud', org_id = ?1, slug = ?2, remote_workspace_id = ?3,
+                    drain_state = 'ok', updated_at = ?4
+              WHERE id = 1",
+            rusqlite::params![org_id, slug, remote_workspace_id, now],
+        )?;
+        let moved = requeue_all_rows_in(&tx, workspace_id)?;
+        tx.commit()?;
+        Ok(moved)
+    }
+
     /// Was promotion interrupted? A Cloud Project should have no `local` rows;
     /// any that exist were stranded by a crash between registration and the row
     /// flip on an older build, and flipping them is always correct.
@@ -1613,14 +1641,17 @@ impl Store {
               ORDER BY started_at LIMIT ?2"
         ))?;
         let sessions = stmt
-            .query_map(rusqlite::params![workspace_id, max_count as i64], row_to_session)?
+            .query_map(
+                rusqlite::params![workspace_id, max_count as i64],
+                row_to_session,
+            )?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         for session in sessions {
             // The hash covers the fields that can change after a first send —
             // title, totals, model — so a mutated Session re-sends as new
             // content instead of being dropped by the server's replay dedupe.
-            let token_totals = serde_json::to_value(session.token_totals)
-                .unwrap_or(serde_json::Value::Null);
+            let token_totals =
+                serde_json::to_value(session.token_totals).unwrap_or(serde_json::Value::Null);
             let content_hash = blobs::key_for(
                 format!(
                     "{}:{}:{}:{}:{}",
@@ -1668,7 +1699,10 @@ impl Store {
               ORDER BY seq LIMIT ?2"
         ))?;
         let messages = stmt
-            .query_map(rusqlite::params![workspace_id, max_count as i64], row_to_message)?
+            .query_map(
+                rusqlite::params![workspace_id, max_count as i64],
+                row_to_message,
+            )?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         for message in messages {
             push_or_stop!(AtlasArtifact::AgentMessage(MessageArtifact {
@@ -1702,7 +1736,10 @@ impl Store {
               ORDER BY seq LIMIT ?2"
         ))?;
         let calls = stmt
-            .query_map(rusqlite::params![workspace_id, max_count as i64], row_to_tool_call)?
+            .query_map(
+                rusqlite::params![workspace_id, max_count as i64],
+                row_to_tool_call,
+            )?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         for call in calls {
             // Status and payload refs change across a call's lifetime; hash them
@@ -1748,7 +1785,10 @@ impl Store {
               ORDER BY created_at LIMIT ?2"
         ))?;
         let checkpoints = stmt
-            .query_map(rusqlite::params![workspace_id, max_count as i64], row_to_checkpoint)?
+            .query_map(
+                rusqlite::params![workspace_id, max_count as i64],
+                row_to_checkpoint,
+            )?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         for checkpoint in checkpoints {
             let artifact = AtlasArtifact::Checkpoint(CheckpointArtifact {
@@ -1795,11 +1835,7 @@ impl Store {
     /// rejections, where the server never names the offending row: attempts
     /// accrue per pass, and once a row crosses the cap it leaves the queue so
     /// everything behind it drains. Returns how many rows were failed.
-    pub fn mark_exhausted_rows_failed(
-        &self,
-        workspace_id: &str,
-        max_attempts: i64,
-    ) -> Result<i64> {
+    pub fn mark_exhausted_rows_failed(&self, workspace_id: &str, max_attempts: i64) -> Result<i64> {
         self.require_writer()?;
         let mut failed = 0i64;
         failed += self.conn.execute(
@@ -1851,7 +1887,12 @@ impl Store {
     /// would be invisible to every query keyed on the new one — the timeline,
     /// the health counts and the promotion preview would all silently read as
     /// empty. One transaction, so a crash re-keys nothing rather than half.
-    pub fn rekey_project(&self, old_project_id: &str, new_project_id: &str, new_root: &str) -> Result<()> {
+    pub fn rekey_project(
+        &self,
+        old_project_id: &str,
+        new_project_id: &str,
+        new_root: &str,
+    ) -> Result<()> {
         if old_project_id == new_project_id {
             return Ok(());
         }
@@ -1891,7 +1932,9 @@ impl Store {
     /// Count one more attempt against a row.
     pub fn record_attempt(&self, row_id: &str) -> Result<()> {
         self.require_writer()?;
-        let Some(table) = table_for(row_id) else { return Ok(()) };
+        let Some(table) = table_for(row_id) else {
+            return Ok(());
+        };
         self.conn.execute(
             &format!("UPDATE {table} SET sync_attempts = sync_attempts + 1 WHERE id = ?1"),
             [row_id],
@@ -1900,7 +1943,9 @@ impl Store {
     }
 
     pub fn attempts(&self, row_id: &str) -> Result<i64> {
-        let Some(table) = table_for(row_id) else { return Ok(0) };
+        let Some(table) = table_for(row_id) else {
+            return Ok(0);
+        };
         Ok(self.conn.query_row(
             &format!("SELECT sync_attempts FROM {table} WHERE id = ?1"),
             [row_id],
@@ -1910,7 +1955,9 @@ impl Store {
 
     fn set_row_sync_state(&self, row_id: &str, state: SyncState) -> Result<()> {
         self.require_writer()?;
-        let Some(table) = table_for(row_id) else { return Ok(()) };
+        let Some(table) = table_for(row_id) else {
+            return Ok(());
+        };
         self.conn.execute(
             &format!("UPDATE {table} SET sync_state = ?2 WHERE id = ?1"),
             rusqlite::params![row_id, state.as_str()],
@@ -2101,7 +2148,12 @@ impl Store {
     /// into a UNIQUE violation that would wedge reconciliation for every later
     /// pass. A row that was already `sent` flips back to `pending` so the
     /// Organisation timeline learns the commit moved.
-    pub fn relink_checkpoint(&self, id: &str, commit_sha: &str, branch: Option<&str>) -> Result<()> {
+    pub fn relink_checkpoint(
+        &self,
+        id: &str,
+        commit_sha: &str,
+        branch: Option<&str>,
+    ) -> Result<()> {
         self.require_writer()?;
         let tx = self.conn.unchecked_transaction()?;
 
@@ -2621,6 +2673,29 @@ fn promote_local_rows_in(conn: &Connection, workspace_id: &str) -> Result<i64> {
     Ok(moved)
 }
 
+/// Flip every row of a Project — whatever its state — to `pending` with a fresh
+/// attempt count. The body of [`Store::switch_cloud_project`]: the destination
+/// changed, so nothing the old one accepted counts.
+fn requeue_all_rows_in(conn: &Connection, workspace_id: &str) -> Result<i64> {
+    let mut moved = 0i64;
+    moved += conn.execute(
+        "UPDATE agent_session SET sync_state = 'pending', sync_attempts = 0
+          WHERE workspace_id = ?1 AND sync_state != 'pending'",
+        [workspace_id],
+    )? as i64;
+    for table in ["agent_message", "tool_call", "checkpoint"] {
+        moved += conn.execute(
+            &format!(
+                "UPDATE {table} SET sync_state = 'pending', sync_attempts = 0
+                  WHERE sync_state != 'pending'
+                    AND session_id IN (SELECT id FROM agent_session WHERE workspace_id = ?1)"
+            ),
+            [workspace_id],
+        )? as i64;
+    }
+    Ok(moved)
+}
+
 /// Which table a row id belongs to.
 ///
 /// Ids are prefixed at creation (`as-`, `am-`, `tc-`, `cp-`) precisely so the
@@ -2710,10 +2785,15 @@ fn row_to_checkpoint(row: &rusqlite::Row<'_>) -> rusqlite::Result<Checkpoint> {
 /// commit together — a gap would look to the drain like a row it had already
 /// seen and skipped.
 fn next_seq(tx: &rusqlite::Transaction<'_>) -> Result<i64> {
-    tx.execute("UPDATE counter SET value = value + 1 WHERE name = 'seq'", [])?;
-    Ok(tx.query_row("SELECT value FROM counter WHERE name = 'seq'", [], |row| {
-        row.get(0)
-    })?)
+    tx.execute(
+        "UPDATE counter SET value = value + 1 WHERE name = 'seq'",
+        [],
+    )?;
+    Ok(
+        tx.query_row("SELECT value FROM counter WHERE name = 'seq'", [], |row| {
+            row.get(0)
+        })?,
+    )
 }
 
 const SESSION_COLUMNS: &str = "id, workspace_id, source, native_session_id, title, agent, model, \
@@ -2828,7 +2908,11 @@ mod tests {
     fn a_zero_means_not_reported_and_leaves_the_cursor_alone() {
         let (delta, cursor) = usage_delta([100, 10, 5, 50, 3], [0, 0, 0, 0, 0]);
         assert_eq!(delta, [0; 5]);
-        assert_eq!(cursor, [100, 10, 5, 50, 3], "a gauge-only report moves nothing");
+        assert_eq!(
+            cursor,
+            [100, 10, 5, 50, 3],
+            "a gauge-only report moves nothing"
+        );
     }
 
     #[test]

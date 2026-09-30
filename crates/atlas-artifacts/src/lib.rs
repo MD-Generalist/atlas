@@ -36,15 +36,17 @@ mod manager;
 mod model;
 mod socket;
 
-pub use board::{CloudBoard, OrgBoard, ProjectKey};
+pub use board::{CloudBoard, OrgBoard, ProjectKey, SessionKey};
 pub use client::{
-    ArtifactsClient, BoardQuery, CommentTarget, NewComment, BOARD_PAGE_MAX, ENTRY_PAGE_MAX, SEARCH_MAX_CHARS,
+    ArtifactsClient, BoardQuery, CommentTarget, NewComment, BOARD_PAGE_MAX, ENTRY_PAGE_MAX,
+    SEARCH_MAX_CHARS,
 };
 pub use error::{Error, Result};
 pub use manager::{ArtifactsEvent, ArtifactsManager, ManagerConfig};
 pub use model::{
-    AnchorKind, Comment, EntryPayload, InboxEntry, InboxKind, InboxPage, RemoteEntry, RemoteEntryCounts, RemoteProject,
-    RemoteSession, RemoteToolTally, SessionBoardPage, SessionDetailPage,
+    AnchorKind, Comment, EntryPayload, InboxEntry, InboxKind, InboxPage, RemoteEntry,
+    RemoteEntryCounts, RemoteProject, RemoteSession, RemoteToolTally, SessionBoardPage,
+    SessionDetailPage,
 };
 pub use socket::{ClientFrame, ExitReason, Keepalive, ServerFrame};
 
@@ -97,7 +99,10 @@ pub fn socket_url(org_id: &str, project_id: &str) -> String {
 
 /// The same, against an explicit base — what the manager's tests dial.
 pub fn socket_url_at(ws_base: &str, org_id: &str, project_id: &str) -> String {
-    format!("{}/ws?org={org_id}&workspace={project_id}", ws_base.trim_end_matches('/'))
+    format!(
+        "{}/ws?org={org_id}&workspace={project_id}",
+        ws_base.trim_end_matches('/')
+    )
 }
 
 /// Where the web app lives.
@@ -160,7 +165,10 @@ mod tests {
         // Dropping any one lands the reader on an empty board, which is a worse
         // outcome than not offering a link.
         let url = session_web_url("org_1", "ws_2", "ses_3");
-        assert!(url.starts_with("https://app.tryatlas.cc/timeline?"), "{url}");
+        assert!(
+            url.starts_with("https://app.tryatlas.cc/timeline?"),
+            "{url}"
+        );
         assert!(url.contains("org=org_1"), "{url}");
         assert!(url.contains("workspace=ws_2"), "{url}");
         assert!(url.contains("session=ses_3"), "{url}");

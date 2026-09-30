@@ -137,8 +137,10 @@ impl Associations {
             &mut self.file_names,
             &mut self.language_ids,
         ] {
-            let normalised =
-                std::mem::take(map).into_iter().map(|(k, v)| (normalise_key(&k), v)).collect();
+            let normalised = std::mem::take(map)
+                .into_iter()
+                .map(|(k, v)| (normalise_key(&k), v))
+                .collect();
             *map = normalised;
         }
     }
@@ -214,9 +216,11 @@ impl IconThemeDocument {
     /// Parse one document. `origin` names it in errors.
     pub fn parse(source: &str, origin: &str) -> Result<Self, IconThemeError> {
         let cleaned = strip_jsonc(source);
-        let mut document: Self = serde_json::from_str(&cleaned).map_err(|source| {
-            IconThemeError::Parse { origin: origin.to_string(), message: source.to_string() }
-        })?;
+        let mut document: Self =
+            serde_json::from_str(&cleaned).map_err(|source| IconThemeError::Parse {
+                origin: origin.to_string(),
+                message: source.to_string(),
+            })?;
         document.associations.normalise();
         if let Some(light) = document.light.as_mut() {
             light.normalise();
@@ -289,7 +293,9 @@ impl IconThemeDocument {
 pub fn is_plain_css_word(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 64
-        && value.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | '_' | '-'))
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | '_' | '-'))
 }
 
 /// Drop every font whose id, weight or style is not a plain word, and every
@@ -299,13 +305,19 @@ pub fn is_plain_css_word(value: &str) -> bool {
 fn sanitise_fonts(fonts: &mut Vec<IconFont>) -> Vec<IconThemeWarning> {
     let mut rejected = Vec::new();
     fonts.retain_mut(|font| {
-        let bad_field = [("id", Some(&font.id)), ("weight", font.weight.as_ref()), ("style", font.style.as_ref())]
-            .into_iter()
-            .find(|(_, value)| value.is_some_and(|value| !is_plain_css_word(value)));
+        let bad_field = [
+            ("id", Some(&font.id)),
+            ("weight", font.weight.as_ref()),
+            ("style", font.style.as_ref()),
+        ]
+        .into_iter()
+        .find(|(_, value)| value.is_some_and(|value| !is_plain_css_word(value)));
         if let Some((field, _)) = bad_field {
             rejected.push(IconThemeWarning {
                 key: format!("fonts.{}", font.id),
-                message: format!("font `{field}` must be letters, digits, space, `_` or `-`; font ignored"),
+                message: format!(
+                    "font `{field}` must be letters, digits, space, `_` or `-`; font ignored"
+                ),
             });
             return false;
         }
@@ -478,7 +490,10 @@ mod tests {
             "folderNames": { "META-INF": "a" }
         }"#;
         let document = IconThemeDocument::parse(source, "test").expect("parses");
-        assert!(document.associations.file_extensions.contains_key("tmlanguage"));
+        assert!(document
+            .associations
+            .file_extensions
+            .contains_key("tmlanguage"));
         assert!(document.associations.folder_names.contains_key("meta-inf"));
     }
 
@@ -556,7 +571,12 @@ mod tests {
         let document = IconThemeDocument::parse(source, "test").expect("parses");
         assert_eq!(document.fonts[0].size.as_deref(), Some("150%"));
         let definition = &document.icon_definitions["_default"];
-        assert_eq!(definition.resolved(), DefinitionKind::Glyph { character: "\\E001" });
+        assert_eq!(
+            definition.resolved(),
+            DefinitionKind::Glyph {
+                character: "\\E001"
+            }
+        );
         assert_eq!(definition.font_color.as_deref(), Some("#cccccc"));
     }
 }

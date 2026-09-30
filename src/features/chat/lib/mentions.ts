@@ -24,13 +24,19 @@ import { useOrgStore } from "@/features/organisations/stores/org-store";
 import { skills } from "@/features/skills/lib/skills-api";
 import {
   searchOrgMentions,
+  type MentionComment,
   type MentionConversation,
   type MentionMember,
   type MentionRecordedSession,
   type OrgMentionKind,
 } from "./org-mentions";
 
-export type { MentionConversation, MentionMember, MentionRecordedSession } from "./org-mentions";
+export type {
+  MentionComment,
+  MentionConversation,
+  MentionMember,
+  MentionRecordedSession,
+} from "./org-mentions";
 import type { PackComponentKind } from "@/features/skills/lib/types";
 // NOTE: skills are no longer a mention kind — inlining a skill body into the
 // prompt was retired (see docs/adr/0001-slash-tokens-pass-through-skills-are-not-inlined.md).
@@ -73,7 +79,10 @@ export type MentionKind =
   // `past_session` (a local transcript, inlined).
   | "member"
   | "conversation"
-  | "recorded_session";
+  | "recorded_session"
+  // A comment on the chat's own recorded session, linked so the agent attends
+  // to it (`comment-mentions.ts`). Rides as `atlas-org://comment/…` + a quote.
+  | "comment";
 
 export interface MentionFile {
   kind: "file";
@@ -189,7 +198,8 @@ export type MentionData =
   | MentionPastSession
   | MentionMember
   | MentionConversation
-  | MentionRecordedSession;
+  | MentionRecordedSession
+  | MentionComment;
 
 // ── Catalog ──────────────────────────────────────────────────────────────────
 
@@ -236,10 +246,16 @@ export const MENTION_CATEGORIES: readonly MentionCategory[] = [
     aliases: ["recorded", "timeline", "r/"],
     weight: 0.5,
   },
+  { kind: "comment", label: "Comments", aliases: ["comment", "cm/"], weight: 0.75 },
 ];
 
 /** The organisation kinds (issue 122), sourced JS-side by `searchOrgMentions`. */
-const ORG_MENTION_KINDS: readonly MentionKind[] = ["member", "conversation", "recorded_session"];
+const ORG_MENTION_KINDS: readonly MentionKind[] = [
+  "member",
+  "conversation",
+  "recorded_session",
+  "comment",
+];
 
 function isOrgKind(kind: MentionKind | null): kind is OrgMentionKind {
   return kind !== null && ORG_MENTION_KINDS.includes(kind);
@@ -267,6 +283,9 @@ export interface MentionContext {
    *  components from that agent's chat. Undefined = no agent filter (legacy
    *  callers). */
   agentId?: string;
+  /** The chat tab the picker belongs to. Comments are the tab's own
+   *  session's, so without one none are offered. */
+  tabId?: string;
 }
 
 // ── Providers (removed) ─────────────────────────────────────────────────────
@@ -403,6 +422,8 @@ export function toShortForm(m: MentionData): string {
       return `@conversation:${shortFormValue(m.displayName)}`;
     case "recorded_session":
       return `@recorded-session:${shortFormValue(m.displayName)}`;
+    case "comment":
+      return `@comment:${shortFormValue(m.displayName)}`;
   }
 }
 
@@ -456,6 +477,7 @@ export async function searchMentions(
       scope,
       ctx.projectPath,
       ORG_SCOPED_LIMIT,
+      ctx.tabId,
     );
   }
   // Projects live in a JS store — resolve them JS-side, so an agent in one
@@ -489,7 +511,9 @@ export async function searchMentions(
           projectPath: ctx.projectPath,
           workspaceId: activeProjectId(),
         }),
-        searchOrgMentions(stripped, null, ctx.projectPath, ORG_BLEND_LIMIT).catch(() => []),
+        searchOrgMentions(stripped, null, ctx.projectPath, ORG_BLEND_LIMIT, ctx.tabId).catch(
+          () => [],
+        ),
       ]);
       return [...results, ...searchProjects(stripped, ctx), ...org];
     }

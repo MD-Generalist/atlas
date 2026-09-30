@@ -32,9 +32,10 @@ pub fn theme_to_toml(theme: &Theme) -> String {
     out.push_str(&format!("name = {}\n", quote(&theme.name)));
     out.push_str(&format!("author = {}\n", quote(&theme.author)));
     out.push_str(&format!("license = {}\n", quote(&theme.license)));
-    for (appearance, variant) in
-        [("dark", theme.dark.as_ref()), ("light", theme.light.as_ref())]
-    {
+    for (appearance, variant) in [
+        ("dark", theme.dark.as_ref()),
+        ("light", theme.light.as_ref()),
+    ] {
         if let Some(variant) = variant {
             write_variant(&mut out, appearance, variant);
         }
@@ -111,9 +112,8 @@ mod tests {
     fn every_built_in_round_trips_through_the_writer() {
         for theme in built_in_themes().unwrap() {
             let written = theme_to_toml(&theme);
-            let reparsed = parse_theme(&written, "round-trip").unwrap_or_else(|error| {
-                panic!("{} did not re-read: {error}\n{written}", theme.id)
-            });
+            let reparsed = parse_theme(&written, "round-trip")
+                .unwrap_or_else(|error| panic!("{} did not re-read: {error}\n{written}", theme.id));
             assert_eq!(reparsed, theme, "{} changed across a round trip", theme.id);
         }
     }
@@ -125,6 +125,9 @@ mod tests {
         let background = written.find("\"background\"").unwrap();
         let radius = written.find("\"radius\"").unwrap();
         let accent = written.find("\"accent\"").unwrap();
-        assert!(background < accent && accent < radius, "alphabetised, not documented order");
+        assert!(
+            background < accent && accent < radius,
+            "alphabetised, not documented order"
+        );
     }
 }

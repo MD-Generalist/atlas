@@ -201,7 +201,6 @@ fn prepend_to_path(extras: &[String]) {
     }
 }
 
-
 /// Run `$SHELL -lic <script>` with an OWNED timeout: on expiry the probe child
 /// is killed (so its reader thread exits promptly) instead of being abandoned
 /// to run forever — the old `recv_timeout`-only pattern leaked one thread AND

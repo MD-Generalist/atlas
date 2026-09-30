@@ -86,14 +86,22 @@ pub fn curate_pack(mut docs: Vec<MemoryDoc>, max_chars: usize) -> Vec<PackEntry>
     let mut out = Vec::new();
     let mut chars = 0usize;
     for d in &docs {
-        let raw = if d.text.trim().is_empty() { d.summary.as_str() } else { d.text.as_str() };
+        let raw = if d.text.trim().is_empty() {
+            d.summary.as_str()
+        } else {
+            d.text.as_str()
+        };
         let text = truncate_chars(raw.trim(), ENTRY_MAX_CHARS);
         // Always include at least one entry; stop before exceeding the budget.
         if !out.is_empty() && chars + text.len() > max_chars {
             break;
         }
         chars += text.len();
-        out.push(PackEntry { kind: d.kind.clone(), title: d.title.clone(), text });
+        out.push(PackEntry {
+            kind: d.kind.clone(),
+            title: d.title.clone(),
+            text,
+        });
     }
     out
 }
@@ -128,7 +136,9 @@ pub fn build_session_handoff(
     let stores: Vec<(&PathBuf, Store)> = roots
         .iter()
         .filter_map(|root| {
-            let store = crate::commands::capture::open_reader(&root.to_string_lossy()).ok().flatten()?;
+            let store = crate::commands::capture::open_reader(&root.to_string_lossy())
+                .ok()
+                .flatten()?;
             Some((root, store))
         })
         .collect();
@@ -151,7 +161,10 @@ pub fn build_session_handoff(
         .filter(|h| !same_session(&h.native_id, current_session_id))
         .find_map(|h| {
             let entries = match &h.origin {
-                Origin::Capture { store_idx, session_id } => capture_entries(&stores[*store_idx].1, session_id),
+                Origin::Capture {
+                    store_idx,
+                    session_id,
+                } => capture_entries(&stores[*store_idx].1, session_id),
                 Origin::Transcript { path } => transcript_entries(path),
             };
             let turns = handoff_turns(entries, HANDOFF_MAX_TURNS);
@@ -167,8 +180,13 @@ struct SessionHead {
 }
 
 enum Origin {
-    Capture { store_idx: usize, session_id: String },
-    Transcript { path: PathBuf },
+    Capture {
+        store_idx: usize,
+        session_id: String,
+    },
+    Transcript {
+        path: PathBuf,
+    },
 }
 
 /// Every launch directory whose recordings belong to this scope. Outside git
@@ -233,7 +251,10 @@ fn capture_heads(root: &Path, store: &Store, store_idx: usize) -> Vec<SessionHea
         .map(|s| SessionHead {
             native_id: s.native_session_id,
             last_activity: s.last_activity_at.unwrap_or(s.updated_at),
-            origin: Origin::Capture { store_idx, session_id: s.id },
+            origin: Origin::Capture {
+                store_idx,
+                session_id: s.id,
+            },
         })
         .collect()
 }
@@ -266,7 +287,10 @@ fn capture_entries(store: &Store, session_id: &str) -> Vec<(Speaker, String)> {
 fn transcript_heads(transcripts_dir: &Path, roots: &[PathBuf]) -> Vec<SessionHead> {
     let mut dirs: Vec<PathBuf> = Vec::new();
     for root in roots {
-        for cwd in [root.to_string_lossy().to_string(), canonical(root).to_string_lossy().to_string()] {
+        for cwd in [
+            root.to_string_lossy().to_string(),
+            canonical(root).to_string_lossy().to_string(),
+        ] {
             let dir = super::agent_transcript::dir_for(transcripts_dir, &cwd);
             if !dirs.contains(&dir) {
                 dirs.push(dir);
@@ -355,7 +379,13 @@ fn prose_only(raw: &str) -> Option<String> {
 fn format_turns(turns: &[(Speaker, String)]) -> String {
     turns
         .iter()
-        .map(|(speaker, text)| format!("{}: {}", speaker.label(), truncate_chars(text, TURN_MAX_CHARS)))
+        .map(|(speaker, text)| {
+            format!(
+                "{}: {}",
+                speaker.label(),
+                truncate_chars(text, TURN_MAX_CHARS)
+            )
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -376,16 +406,24 @@ where
     let (raw_body, turns) = raw?;
     let (text, attribution) =
         if pref.mode == "provider" && !pref.provider.is_empty() && !pref.model.is_empty() {
-            let summary = summarize(raw_body.clone(), pref.provider.clone(), pref.model.clone()).await;
+            let summary =
+                summarize(raw_body.clone(), pref.provider.clone(), pref.model.clone()).await;
             if summary == raw_body {
                 (raw_body, "raw".to_string())
             } else {
-                (summary, format!("summarized by {}/{}", pref.provider, pref.model))
+                (
+                    summary,
+                    format!("summarized by {}/{}", pref.provider, pref.model),
+                )
             }
         } else {
             (raw_body, "raw".to_string())
         };
-    Some(Handoff { text, turns, attribution })
+    Some(Handoff {
+        text,
+        turns,
+        attribution,
+    })
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -406,11 +444,14 @@ fn truncate_chars(s: &str, max: usize) -> String {
 /// scratch Workspace — what the handoff reads in production.
 #[cfg(test)]
 pub(crate) mod test_support {
-    use atlas_checkpoint::{model::ProjectMode, Capture, Mode, Role, SessionKey, Source, Store, TurnContent};
+    use atlas_checkpoint::{
+        model::ProjectMode, Capture, Mode, Role, SessionKey, Source, Store, TurnContent,
+    };
 
     /// A fresh scratch directory standing in for a project.
     pub(crate) fn scratch_project(label: &str) -> String {
-        let dir = std::env::temp_dir().join(format!("atlas-handoff-{label}-{}", uuid::Uuid::new_v4()));
+        let dir =
+            std::env::temp_dir().join(format!("atlas-handoff-{label}-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         dir.to_string_lossy().to_string()
     }
@@ -418,13 +459,23 @@ pub(crate) mod test_support {
     /// Record one session for `agent` into the capture store at `project`:
     /// every `User` entry opens a turn (as a send does), everything else is
     /// recorded inside the turn it follows.
-    pub(crate) fn record_session(project: &str, native_id: &str, agent: &str, entries: &[(Role, Mode, &str)]) {
-        let mut store = Store::open(atlas_checkpoint::atlas_dir(project)).expect("capture store opens");
+    pub(crate) fn record_session(
+        project: &str,
+        native_id: &str,
+        agent: &str,
+        entries: &[(Role, Mode, &str)],
+    ) {
+        let mut store =
+            Store::open(atlas_checkpoint::atlas_dir(project)).expect("capture store opens");
         let mut capture = Capture::new(&mut store, ProjectMode::Local);
         let key = SessionKey {
             workspace_id: crate::commands::capture::project_id_for(std::path::Path::new(project)),
             // As live capture files it: the native agent under its own source.
-            source: if agent == atlas_native_agent::ATLAS_AGENT_ID { Source::Native } else { Source::Acp },
+            source: if agent == atlas_native_agent::ATLAS_AGENT_ID {
+                Source::Native
+            } else {
+                Source::Acp
+            },
             native_session_id: native_id.into(),
         };
         let (mut turn, mut row) = (0i64, String::new());
@@ -468,7 +519,13 @@ mod tests {
     }
 
     /// Record `messages` as Atlas's own transcript of a session run in `cwd`.
-    fn save_transcript(transcripts: &Path, cwd: &str, id: &str, agent: &str, messages: &[(&str, &str)]) {
+    fn save_transcript(
+        transcripts: &Path,
+        cwd: &str,
+        id: &str,
+        agent: &str,
+        messages: &[(&str, &str)],
+    ) {
         use super::super::agent_transcript::{save, StoredMessage, StoredTranscript};
         let at = "2026-09-19T10:00:00Z".to_string();
         save(
@@ -499,11 +556,22 @@ mod tests {
         let out = std::process::Command::new("git")
             .arg("-C")
             .arg(dir)
-            .args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"])
+            .args([
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "commit.gpgsign=false",
+            ])
             .args(args)
             .output()
             .expect("git runs");
-        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
     }
 
     /// A fresh repository with one commit; returns its main worktree.
@@ -523,14 +591,18 @@ mod tests {
             &p,
             "codex-1",
             "codex",
-            &[(U.0, U.1, "add rate limiting to login"), (A.0, A.1, "Added a token bucket in src/limit.rs")],
+            &[
+                (U.0, U.1, "add rate limiting to login"),
+                (A.0, A.1, "Added a token bucket in src/limit.rs"),
+            ],
         );
         record_session(&p, "claude-now", "claude-code", &[(U.0, U.1, "carry on")]);
 
         assert_eq!(
             build_session_handoff(&p, "claude-now", &no_transcripts()),
             Some((
-                "User: add rate limiting to login\nAssistant: Added a token bucket in src/limit.rs".to_string(),
+                "User: add rate limiting to login\nAssistant: Added a token bucket in src/limit.rs"
+                    .to_string(),
                 2
             ))
         );
@@ -560,9 +632,17 @@ mod tests {
             &p,
             "claude-1",
             "claude-code",
-            &[(U.0, U.1, "why does the build fail on CI?"), (A.0, A.1, "The lockfile was stale; regenerated it.")],
+            &[
+                (U.0, U.1, "why does the build fail on CI?"),
+                (A.0, A.1, "The lockfile was stale; regenerated it."),
+            ],
         );
-        record_session(&p, "atlas-agent-now", "atlas-agent", &[(U.0, U.1, "what next")]);
+        record_session(
+            &p,
+            "atlas-agent-now",
+            "atlas-agent",
+            &[(U.0, U.1, "what next")],
+        );
 
         assert_eq!(
             build_session_handoff(&p, "atlas-agent-now", &no_transcripts()),
@@ -578,7 +658,9 @@ mod tests {
     #[test]
     fn the_handoff_keeps_todays_turn_and_character_budgets() {
         let p = scratch_project("budgets");
-        let long: Vec<String> = (0..20).map(|i| format!("m{i:02} {}", "x".repeat(900))).collect();
+        let long: Vec<String> = (0..20)
+            .map(|i| format!("m{i:02} {}", "x".repeat(900)))
+            .collect();
         let mut entries: Vec<(Role, Mode, &str)> = Vec::new();
         for m in &long {
             entries.push((Role::User, Mode::Text, m));
@@ -587,7 +669,8 @@ mod tests {
         }
         record_session(&p, "codex-long", "codex", &entries);
 
-        let (body, turns) = build_session_handoff(&p, "someone-else", &no_transcripts()).expect("handoff");
+        let (body, turns) =
+            build_session_handoff(&p, "someone-else", &no_transcripts()).expect("handoff");
         assert_eq!(turns, 8);
         let expected: Vec<String> = (12..20)
             .map(|i| format!("User: m{i} {}…", "x".repeat(800 - 4)))
@@ -607,7 +690,10 @@ mod tests {
             let envelope = atlas_agent_transcript::wrap_memory_envelope(&[block]).unwrap();
             format!("{envelope}\n\n{user}")
         };
-        let wire = legacy("--- PROJECT MEMORY ---\nuse RS256\n--- END PROJECT MEMORY ---", "why is auth failing?");
+        let wire = legacy(
+            "--- PROJECT MEMORY ---\nuse RS256\n--- END PROJECT MEMORY ---",
+            "why is auth failing?",
+        );
         let only_context = legacy("--- PROJECT MEMORY ---\nx\n--- END PROJECT MEMORY ---", "");
         record_session(
             &p,
@@ -622,7 +708,10 @@ mod tests {
         );
         assert_eq!(
             build_session_handoff(&p, "now", &no_transcripts()),
-            Some(("User: why is auth failing?\nAssistant: Clock skew on the verifier.".to_string(), 2))
+            Some((
+                "User: why is auth failing?\nAssistant: Clock skew on the verifier.".to_string(),
+                2
+            ))
         );
     }
 
@@ -634,14 +723,22 @@ mod tests {
         let p = scratch_project("newest");
         record_session(&p, "old", "claude-code", &[(U.0, U.1, "old question")]);
         record_session(&p, "mid", "gemini", &[(U.0, U.1, "gemini question")]);
-        record_session(&p, "empty", "codex", &[(U.0, U.1, "<system-reminder>x</system-reminder>")]);
+        record_session(
+            &p,
+            "empty",
+            "codex",
+            &[(U.0, U.1, "<system-reminder>x</system-reminder>")],
+        );
         record_session(&p, "now", "codex", &[(U.0, U.1, "current question")]);
 
         assert_eq!(
             build_session_handoff(&p, "now", &no_transcripts()),
             Some(("User: gemini question".to_string(), 1))
         );
-        assert_eq!(build_session_handoff(&scratch_project("nothing"), "now", &no_transcripts()), None);
+        assert_eq!(
+            build_session_handoff(&scratch_project("nothing"), "now", &no_transcripts()),
+            None
+        );
     }
 
     /// Capture is opt-in. Where it was never enabled, the handoff still works
@@ -655,14 +752,24 @@ mod tests {
             &p,
             "codex-1",
             "codex",
-            &[("user", "rename the crate"), ("assistant", "Renamed to atlas-core.")],
+            &[
+                ("user", "rename the crate"),
+                ("assistant", "Renamed to atlas-core."),
+            ],
         );
 
         assert_eq!(
             build_session_handoff(&p, "claude-now", &transcripts),
-            Some(("User: rename the crate\nAssistant: Renamed to atlas-core.".to_string(), 2))
+            Some((
+                "User: rename the crate\nAssistant: Renamed to atlas-core.".to_string(),
+                2
+            ))
         );
-        assert_eq!(build_session_handoff(&p, "codex-1", &transcripts), None, "never a self-handoff");
+        assert_eq!(
+            build_session_handoff(&p, "codex-1", &transcripts),
+            None,
+            "never a self-handoff"
+        );
     }
 
     /// Worktrees of one repository share a scope: a session run in a linked
@@ -673,7 +780,12 @@ mod tests {
         let linked = format!("{main}-wt");
         git(&main, &["worktree", "add", "-q", &linked]);
 
-        record_session(&linked, "codex-wt", "codex", &[(U.0, U.1, "fix the flaky test")]);
+        record_session(
+            &linked,
+            "codex-wt",
+            "codex",
+            &[(U.0, U.1, "fix the flaky test")],
+        );
         assert_eq!(
             build_session_handoff(&main, "claude-main", &no_transcripts()),
             Some(("User: fix the flaky test".to_string(), 1))
@@ -691,19 +803,40 @@ mod tests {
         std::fs::create_dir_all(&sub).unwrap();
         let transcripts = no_transcripts();
 
-        record_session(&sub, "gemini-sub", "gemini", &[(U.0, U.1, "token sk-live-secret leaked?")]);
-        save_transcript(&transcripts, &sub, "gemini-sub", "gemini", &[("user", "transcript copy")]);
+        record_session(
+            &sub,
+            "gemini-sub",
+            "gemini",
+            &[(U.0, U.1, "token sk-live-secret leaked?")],
+        );
+        save_transcript(
+            &transcripts,
+            &sub,
+            "gemini-sub",
+            "gemini",
+            &[("user", "transcript copy")],
+        );
 
-        let (body, turns) = build_session_handoff(&main, "claude-root", &transcripts).expect("handoff");
+        let (body, turns) =
+            build_session_handoff(&main, "claude-root", &transcripts).expect("handoff");
         assert_eq!(turns, 1);
         assert!(body.starts_with("User: token "), "{body}");
-        assert!(!body.contains("transcript copy"), "capture wins over the transcript copy: {body}");
+        assert!(
+            !body.contains("transcript copy"),
+            "capture wins over the transcript copy: {body}"
+        );
 
         // Outside git the scope is the launch directory alone.
         let plain = scratch_project("plain");
         let plain_sub = format!("{plain}/sub");
         std::fs::create_dir_all(&plain_sub).unwrap();
-        save_transcript(&transcripts, &plain_sub, "codex-sub", "codex", &[("user", "elsewhere")]);
+        save_transcript(
+            &transcripts,
+            &plain_sub,
+            "codex-sub",
+            "codex",
+            &[("user", "elsewhere")],
+        );
         assert_eq!(build_session_handoff(&plain, "now", &transcripts), None);
     }
 
@@ -713,27 +846,60 @@ mod tests {
     async fn the_optional_summariser_is_applied() {
         use super::super::memory_sharing::SummarizerPref;
         let raw = || Some(("User: hi\nAssistant: yo".to_string(), 2));
-        let provider = SummarizerPref { mode: "provider".into(), provider: "anthropic".into(), model: "m1".into() };
+        let provider = SummarizerPref {
+            mode: "provider".into(),
+            provider: "anthropic".into(),
+            model: "m1".into(),
+        };
         let handoff = |text: &str, attribution: &str| {
-            Some(Handoff { text: text.into(), turns: 2, attribution: attribution.into() })
+            Some(Handoff {
+                text: text.into(),
+                turns: 2,
+                attribution: attribution.into(),
+            })
         };
 
-        let never = |_: String, _: String, _: String| async { unreachable!("raw mode never summarises") };
+        let never =
+            |_: String, _: String, _: String| async { unreachable!("raw mode never summarises") };
         assert_eq!(
             handoff_block(raw(), &SummarizerPref::default(), never).await,
             handoff("User: hi\nAssistant: yo", "raw")
         );
-        let incomplete = SummarizerPref { model: String::new(), ..provider.clone() };
-        assert_eq!(handoff_block(raw(), &incomplete, never).await.unwrap().attribution, "raw");
+        let incomplete = SummarizerPref {
+            model: String::new(),
+            ..provider.clone()
+        };
+        assert_eq!(
+            handoff_block(raw(), &incomplete, never)
+                .await
+                .unwrap()
+                .attribution,
+            "raw"
+        );
 
-        let summarised = handoff_block(raw(), &provider, |text: String, p: String, m: String| async move {
-            assert_eq!((text.as_str(), p.as_str(), m.as_str()), ("User: hi\nAssistant: yo", "anthropic", "m1"));
-            "- greeted".to_string()
-        })
+        let summarised = handoff_block(
+            raw(),
+            &provider,
+            |text: String, p: String, m: String| async move {
+                assert_eq!(
+                    (text.as_str(), p.as_str(), m.as_str()),
+                    ("User: hi\nAssistant: yo", "anthropic", "m1")
+                );
+                "- greeted".to_string()
+            },
+        )
         .await;
-        assert_eq!(summarised, handoff("- greeted", "summarized by anthropic/m1"));
+        assert_eq!(
+            summarised,
+            handoff("- greeted", "summarized by anthropic/m1")
+        );
 
-        let fell_back = handoff_block(raw(), &provider, |text: String, _: String, _: String| async move { text }).await;
+        let fell_back = handoff_block(
+            raw(),
+            &provider,
+            |text: String, _: String, _: String| async move { text },
+        )
+        .await;
         assert_eq!(fell_back, handoff("User: hi\nAssistant: yo", "raw"));
         assert_eq!(handoff_block(None, &provider, never).await, None);
     }
@@ -750,8 +916,19 @@ mod tests {
             doc("index", "Ix", "i", 7),
         ];
         let pack = curate_pack(docs, PACK_MAX_CHARS);
-        let kinds: Vec<(&str, &str)> = pack.iter().map(|p| (p.kind.as_str(), p.title.as_str())).collect();
-        assert_eq!(kinds, [("reference", "Rf"), ("project", "Pr"), ("user", "Us"), ("feedback", "Fb")]);
+        let kinds: Vec<(&str, &str)> = pack
+            .iter()
+            .map(|p| (p.kind.as_str(), p.title.as_str()))
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                ("reference", "Rf"),
+                ("project", "Pr"),
+                ("user", "Us"),
+                ("feedback", "Fb")
+            ]
+        );
     }
 
     #[test]
@@ -771,10 +948,15 @@ mod tests {
         }
         let pack = curate_pack(docs, PACK_MAX_CHARS);
         let chars: usize = pack.iter().map(|p| p.text.len()).sum();
-        assert!(chars <= PACK_MAX_CHARS + ENTRY_MAX_CHARS, "pack within budget: {chars}");
+        assert!(
+            chars <= PACK_MAX_CHARS + ENTRY_MAX_CHARS,
+            "pack within budget: {chars}"
+        );
         // Newest (highest ts = D39) must be present; an old one (D0) dropped.
         assert_eq!(pack[0].title, "D39");
         assert!(pack.iter().all(|p| p.title != "D0"));
-        assert!(pack.iter().all(|p| p.text.chars().count() <= ENTRY_MAX_CHARS + 1));
+        assert!(pack
+            .iter()
+            .all(|p| p.text.chars().count() <= ENTRY_MAX_CHARS + 1));
     }
 }

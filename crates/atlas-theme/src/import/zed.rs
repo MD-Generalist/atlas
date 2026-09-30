@@ -31,7 +31,7 @@ use serde_json::{Map, Value};
 
 use crate::import::draft::VariantDraft;
 use crate::import::report::{Fidelity, ImportReport};
-use crate::import::{finish_theme, ImportedTheme, ImportOptions};
+use crate::import::{finish_theme, ImportOptions, ImportedTheme};
 use crate::{ThemeError, ThemeKeyValue};
 
 /// Zed style key → Atlas theme key. One source may feed several targets.
@@ -48,20 +48,51 @@ const STYLE_MAP: &[(&str, &[&str])] = &[
     ("error", &["status.error.foreground"]),
     ("info", &["status.info.foreground"]),
     ("created", &["diff.added.text"]),
-    ("created.background", &["diff.added.background", "diff.added.emphasis"]),
+    (
+        "created.background",
+        &["diff.added.background", "diff.added.emphasis"],
+    ),
     ("deleted", &["diff.removed.text"]),
-    ("deleted.background", &["diff.removed.background", "diff.removed.emphasis"]),
-    ("editor.background", &["editor.background", "diff.context.background", "panel.input.background"]),
+    (
+        "deleted.background",
+        &["diff.removed.background", "diff.removed.emphasis"],
+    ),
+    (
+        "editor.background",
+        &[
+            "editor.background",
+            "diff.context.background",
+            "panel.input.background",
+        ],
+    ),
     ("editor.foreground", &["editor.foreground", "editor.caret"]),
     ("editor.gutter.background", &["editor.gutter.background"]),
     ("editor.line_number", &["editor.gutter.foreground"]),
-    ("editor.active_line_number", &["editor.active_line.gutter_foreground"]),
-    ("editor.active_line.background", &["editor.active_line.background"]),
-    ("editor.document_highlight.read_background", &["editor.match_bracket.background"]),
+    (
+        "editor.active_line_number",
+        &["editor.active_line.gutter_foreground"],
+    ),
+    (
+        "editor.active_line.background",
+        &["editor.active_line.background"],
+    ),
+    (
+        "editor.document_highlight.read_background",
+        &["editor.match_bracket.background"],
+    ),
     ("surface.background", &["panel.background"]),
-    ("search.match_background", &["search.match.background", "search.match.active_background"]),
-    ("scrollbar.thumb.background", &["scrollbar.thumb.background"]),
-    ("scrollbar.thumb.hover_background", &["scrollbar.thumb.hover"]),
+    (
+        "search.match_background",
+        &["search.match.background", "search.match.active_background"],
+    ),
+    (
+        "scrollbar.thumb.background",
+        &["scrollbar.thumb.background"],
+    ),
+    (
+        "scrollbar.thumb.hover_background",
+        &["scrollbar.thumb.hover"],
+    ),
     ("terminal.background", &["terminal.background"]),
     ("terminal.foreground", &["terminal.foreground"]),
     ("terminal.ansi.black", &["terminal.ansi.black"]),
@@ -72,14 +103,29 @@ const STYLE_MAP: &[(&str, &[&str])] = &[
     ("terminal.ansi.magenta", &["terminal.ansi.magenta"]),
     ("terminal.ansi.cyan", &["terminal.ansi.cyan"]),
     ("terminal.ansi.white", &["terminal.ansi.white"]),
-    ("terminal.ansi.bright_black", &["terminal.ansi.bright_black"]),
+    (
+        "terminal.ansi.bright_black",
+        &["terminal.ansi.bright_black"],
+    ),
     ("terminal.ansi.bright_red", &["terminal.ansi.bright_red"]),
-    ("terminal.ansi.bright_green", &["terminal.ansi.bright_green"]),
-    ("terminal.ansi.bright_yellow", &["terminal.ansi.bright_yellow"]),
+    (
+        "terminal.ansi.bright_green",
+        &["terminal.ansi.bright_green"],
+    ),
+    (
+        "terminal.ansi.bright_yellow",
+        &["terminal.ansi.bright_yellow"],
+    ),
     ("terminal.ansi.bright_blue", &["terminal.ansi.bright_blue"]),
-    ("terminal.ansi.bright_magenta", &["terminal.ansi.bright_magenta"]),
+    (
+        "terminal.ansi.bright_magenta",
+        &["terminal.ansi.bright_magenta"],
+    ),
     ("terminal.ansi.bright_cyan", &["terminal.ansi.bright_cyan"]),
-    ("terminal.ansi.bright_white", &["terminal.ansi.bright_white"]),
+    (
+        "terminal.ansi.bright_white",
+        &["terminal.ansi.bright_white"],
+    ),
 ];
 
 /// Zed syntax scope → Atlas `syntax.*` key. Zed's map is richer than Atlas's
@@ -96,7 +142,10 @@ const SYNTAX_MAP: &[(&str, &[&str])] = &[
     ("syntax.operator", &["operator"]),
     ("syntax.tag", &["tag"]),
     ("syntax.attribute", &["attribute", "preproc", "embedded"]),
-    ("syntax.constant", &["constant", "constant.builtin", "boolean"]),
+    (
+        "syntax.constant",
+        &["constant", "constant.builtin", "boolean"],
+    ),
     ("syntax.regexp", &["string.regex"]),
     ("syntax.escape", &["string.escape"]),
     ("syntax.definition", &["title", "constructor"]),
@@ -149,13 +198,21 @@ const IGNORED_PREFIXES: &[(&str, &str, &str)] = &[
     ("terminal.ansi.dim", "terminal", "Atlas exposes the 16-colour ANSI set, not Zed's dim ramp"),
 ];
 
-pub(crate) fn import(value: &Value, options: &ImportOptions) -> Result<Vec<ImportedTheme>, ThemeError> {
-    let family = value.get("name").and_then(Value::as_str).unwrap_or("Zed theme");
+pub(crate) fn import(
+    value: &Value,
+    options: &ImportOptions,
+) -> Result<Vec<ImportedTheme>, ThemeError> {
+    let family = value
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("Zed theme");
     let author = value.get("author").and_then(Value::as_str);
     let themes = value
         .get("themes")
         .and_then(Value::as_array)
-        .ok_or_else(|| crate::validation(&options.origin, "a Zed theme family needs a `themes` array"))?;
+        .ok_or_else(|| {
+            crate::validation(&options.origin, "a Zed theme family needs a `themes` array")
+        })?;
     if themes.is_empty() {
         return Err(crate::validation(&options.origin, "`themes` is empty"));
     }
@@ -173,7 +230,11 @@ fn import_one(
     author: Option<&str>,
     options: &ImportOptions,
 ) -> Result<ImportedTheme, ThemeError> {
-    let name = entry.get("name").and_then(Value::as_str).unwrap_or(family).to_string();
+    let name = entry
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or(family)
+        .to_string();
     let appearance = match entry.get("appearance").and_then(Value::as_str) {
         Some("light") => "light",
         _ => "dark",
@@ -181,7 +242,12 @@ fn import_one(
     let style = entry
         .get("style")
         .and_then(Value::as_object)
-        .ok_or_else(|| crate::validation(&options.origin, format!("theme \"{name}\" has no `style` object")))?;
+        .ok_or_else(|| {
+            crate::validation(
+                &options.origin,
+                format!("theme \"{name}\" has no `style` object"),
+            )
+        })?;
 
     let mut report = ImportReport::new("zed", name.clone(), Fidelity::NearLossless);
     let mut draft = VariantDraft::new(appearance);
@@ -191,7 +257,9 @@ fn import_one(
     // wins inside a draft.
     map_players(style, &mut draft, &mut report);
     for (source, targets) in STYLE_MAP {
-        let Some(value) = string_at(style, source) else { continue };
+        let Some(value) = string_at(style, source) else {
+            continue;
+        };
         for target in *targets {
             draft.map_color_key(target, source, value);
         }
@@ -216,7 +284,11 @@ fn import_one(
 /// `players[0]` is the local user, so its cursor and selection are the ones the
 /// single-user Atlas actually draws.
 fn map_players(style: &Map<String, Value>, draft: &mut VariantDraft, report: &mut ImportReport) {
-    let Some(first) = style.get("players").and_then(Value::as_array).and_then(|list| list.first()) else {
+    let Some(first) = style
+        .get("players")
+        .and_then(Value::as_array)
+        .and_then(|list| list.first())
+    else {
         return;
     };
     if let Some(cursor) = first.get("cursor").and_then(Value::as_str) {
@@ -235,7 +307,11 @@ fn map_players(style: &Map<String, Value>, draft: &mut VariantDraft, report: &mu
             draft.map_color_key(target, "players[0].selection", selection);
         }
     }
-    let extra = style.get("players").and_then(Value::as_array).map_or(0, Vec::len).saturating_sub(1);
+    let extra = style
+        .get("players")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len)
+        .saturating_sub(1);
     if extra > 0 {
         report.ignore(
             format!("players[1..{}]", extra + 1),
@@ -251,18 +327,28 @@ fn map_players(style: &Map<String, Value>, draft: &mut VariantDraft, report: &mu
 /// reads. So an italicised scope is imported upright, and says so in the
 /// dropped list — the alternative is a TOML the loader refuses.
 fn map_syntax(style: &Map<String, Value>, draft: &mut VariantDraft, report: &mut ImportReport) {
-    let Some(syntax) = style.get("syntax").and_then(Value::as_object) else { return };
+    let Some(syntax) = style.get("syntax").and_then(Value::as_object) else {
+        return;
+    };
     let mut used = std::collections::BTreeSet::new();
     let mut styled = std::collections::BTreeSet::new();
     for (target, scopes) in SYNTAX_MAP {
         for scope in *scopes {
-            let Some(entry) = syntax.get(*scope) else { continue };
-            let Some(color) = entry.get("color").and_then(Value::as_str) else { continue };
+            let Some(entry) = syntax.get(*scope) else {
+                continue;
+            };
+            let Some(color) = entry.get("color").and_then(Value::as_str) else {
+                continue;
+            };
             let has_font_style = entry
                 .get("font_style")
                 .and_then(Value::as_str)
                 .is_some_and(|style| !style.eq_ignore_ascii_case("normal"));
-            if draft.map_key(target, &format!("syntax.{scope}"), ThemeKeyValue::Color(color.to_string())) {
+            if draft.map_key(
+                target,
+                &format!("syntax.{scope}"),
+                ThemeKeyValue::Color(color.to_string()),
+            ) {
                 used.insert((*scope).to_string());
                 if has_font_style {
                     styled.insert((*scope).to_string());
@@ -339,7 +425,8 @@ fn derive_base_tokens(draft: &mut VariantDraft, style: &Map<String, Value>) {
 
 fn record_ignored(style: &Map<String, Value>, report: &mut ImportReport) {
     let mapped: std::collections::BTreeSet<&str> = STYLE_MAP.iter().map(|(key, _)| *key).collect();
-    let mut counted: std::collections::BTreeMap<(&str, &str), usize> = std::collections::BTreeMap::new();
+    let mut counted: std::collections::BTreeMap<(&str, &str), usize> =
+        std::collections::BTreeMap::new();
     let mut unknown = Vec::new();
     for key in style.keys() {
         if key == "syntax" || mapped.contains(key.as_str()) {
@@ -358,7 +445,11 @@ fn record_ignored(style: &Map<String, Value>, report: &mut ImportReport) {
         report.ignore(format!("{count} {category} key(s)"), category, reason);
     }
     for key in unknown {
-        report.ignore(key, "unmapped zed role", "no Atlas theme key carries this role");
+        report.ignore(
+            key,
+            "unmapped zed role",
+            "no Atlas theme key carries this role",
+        );
     }
 }
 

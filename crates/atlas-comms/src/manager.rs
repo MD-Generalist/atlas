@@ -18,7 +18,6 @@ use tokio::sync::{broadcast, mpsc};
 
 use crate::conn::{self, ConnEvent, ExitReason};
 use crate::error::Result;
-use crate::CommsError;
 use crate::events::{CommsEnvelope, CommsEvent, ConnReason, ConnectionState, WireMessage};
 use crate::rest::RestClient;
 use crate::state::{
@@ -26,7 +25,10 @@ use crate::state::{
     SendStatus, StateDelta,
 };
 use crate::store::CommsStore;
-use crate::wire::{SessionReference, ClientFrame, Message, ReactionRow, ServerFrame, CHAT_TYPING_INTERVAL_MS};
+use crate::wire::{
+    ClientFrame, Message, ReactionRow, ServerFrame, SessionReference, CHAT_TYPING_INTERVAL_MS,
+};
+use crate::CommsError;
 use crate::{chat_base, socket_url, OrgTarget, TokenSource};
 
 const RECONNECT_BASE_MS: u64 = 1_000;
@@ -1270,7 +1272,11 @@ impl CommsManager {
     }
 
     fn upload_cancelled(&self, upload_id: &str) -> bool {
-        self.inner.cancelled_uploads.lock().unwrap().contains(upload_id)
+        self.inner
+            .cancelled_uploads
+            .lock()
+            .unwrap()
+            .contains(upload_id)
     }
 
     /// Resolve file ids to the metadata their upload returned.
@@ -1283,18 +1289,24 @@ impl CommsManager {
         file_ids
             .iter()
             .map(|id| {
-                done.get(id).cloned().unwrap_or_else(|| crate::wire::Attachment {
-                    id: id.clone(),
-                    filename: "file".into(),
-                    content_type: "application/octet-stream".into(),
-                    bytes: 0,
-                })
+                done.get(id)
+                    .cloned()
+                    .unwrap_or_else(|| crate::wire::Attachment {
+                        id: id.clone(),
+                        filename: "file".into(),
+                        content_type: "application/octet-stream".into(),
+                        bytes: 0,
+                    })
             })
             .collect()
     }
 
     fn finish_upload(&self, upload_id: &str) {
-        self.inner.cancelled_uploads.lock().unwrap().remove(upload_id);
+        self.inner
+            .cancelled_uploads
+            .lock()
+            .unwrap()
+            .remove(upload_id);
     }
 
     fn emit_upload(
@@ -1339,7 +1351,11 @@ impl CommsManager {
     pub async fn download_recording(&self, url: &str, download_id: &str) -> Result<Vec<u8>> {
         let progress = self.progress_reporter(download_id);
         let mut on_chunk = progress;
-        let result = self.inner.rest.download_recording_with(url, &mut on_chunk).await;
+        let result = self
+            .inner
+            .rest
+            .download_recording_with(url, &mut on_chunk)
+            .await;
         self.finish_download(download_id, &result);
         result
     }
@@ -1631,7 +1647,11 @@ impl CommsManager {
                 at_ms,
             }),
             StateDelta::ReactionsChanged { message_id } => Some(CommsEvent::ReactionsChanged {
-                rows: state.reactions.get(&message_id).cloned().unwrap_or_default(),
+                rows: state
+                    .reactions
+                    .get(&message_id)
+                    .cloned()
+                    .unwrap_or_default(),
                 message_id,
             }),
             StateDelta::PinsChanged { conv_id } => Some(CommsEvent::PinsChanged {
@@ -1825,10 +1845,7 @@ fn backoff_ms(attempt: u32) -> u64 {
 }
 
 /// Fill `buf`, tolerating a short final read at EOF.
-async fn read_exact_or_eof(
-    file: &mut tokio::fs::File,
-    buf: &mut Vec<u8>,
-) -> std::io::Result<()> {
+async fn read_exact_or_eof(file: &mut tokio::fs::File, buf: &mut Vec<u8>) -> std::io::Result<()> {
     use tokio::io::AsyncReadExt;
     let mut filled = 0;
     while filled < buf.len() {
@@ -1897,8 +1914,8 @@ impl CommsManager {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::backoff_ms;
+    use super::*;
 
     struct NoToken;
     impl TokenSource for NoToken {
@@ -2031,9 +2048,7 @@ mod tests {
     }
 
     fn target(org: &str) -> Option<OrgTarget> {
-        Some(OrgTarget {
-            org_id: org.into(),
-        })
+        Some(OrgTarget { org_id: org.into() })
     }
 
     fn fresh() -> CommsManager {
@@ -2088,12 +2103,18 @@ mod tests {
 
         mgr.set_target(target("org_a"));
         let after = mgr.session().expect("targeted");
-        assert!(after.generation > before.generation, "unavailable → respawn");
+        assert!(
+            after.generation > before.generation,
+            "unavailable → respawn"
+        );
 
         mgr.set_connection(ConnectionState::Disconnected, None, Some("org_a".into()));
         mgr.set_target(target("org_a"));
         let again = mgr.session().expect("targeted");
-        assert!(again.generation > after.generation, "disconnected → respawn");
+        assert!(
+            again.generation > after.generation,
+            "disconnected → respawn"
+        );
     }
 
     /// A stale attempt returning from its token mint used to install its
@@ -2128,7 +2149,10 @@ mod tests {
             conv_id: "c1".into(),
             seq: 2,
         });
-        assert!(live_rx.try_recv().is_ok(), "the live socket survives a stale release");
+        assert!(
+            live_rx.try_recv().is_ok(),
+            "the live socket survives a stale release"
+        );
         mgr.release_outbound(live.generation);
         assert!(mgr.inner.outbound.lock().unwrap().is_none());
     }
@@ -2285,7 +2309,9 @@ mod tests {
     async fn send_without_a_target_is_an_error_with_no_side_effects() {
         let mgr = fresh();
         let mut rx = mgr.subscribe();
-        assert!(mgr.send("c1", "hello".into(), None, vec![], vec![]).is_err());
+        assert!(mgr
+            .send("c1", "hello".into(), None, vec![], vec![])
+            .is_err());
         assert!(mgr.inner.pending.lock().unwrap().is_empty());
         assert!(mgr.with_state(|s| s.messages.is_empty()));
         assert!(rx.try_recv().is_err());
@@ -2360,7 +2386,10 @@ mod tests {
         let mut rx = mgr.subscribe();
         let session = mgr.session().expect("targeted");
         // …and the REST page, fetched before that frame, still says live.
-        mgr.adopt_calls(&session, vec![call("call_1", None), call("call_2", Some(50))]);
+        mgr.adopt_calls(
+            &session,
+            vec![call("call_1", None), call("call_2", Some(50))],
+        );
 
         // The frame's answer stands; the new row was learned.
         mgr.with_state(|state| {
@@ -2395,7 +2424,10 @@ mod tests {
 
         // Detaching drops every per-org fact, hydration included.
         mgr.set_target(None);
-        assert!(!mgr.is_hydrated("c1"), "hydration must not survive an org change");
+        assert!(
+            !mgr.is_hydrated("c1"),
+            "hydration must not survive an org change"
+        );
     }
 
     /// The optimism contract: a `react` mutates local state and emits its

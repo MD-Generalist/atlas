@@ -25,8 +25,8 @@ use atlas_memory::record::{Entry, EntryKind};
 use futures::future::BoxFuture;
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::{
-    CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock as Content, JsonObject,
-    ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool,
+    CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock as Content,
+    JsonObject, ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool,
 };
 use rmcp::service::{RequestContext, RoleServer};
 use rmcp::ErrorData as McpError;
@@ -91,7 +91,8 @@ pub struct IndexDoc {
 
 /// `(cwd, query, limit) -> ranked documents` over the project's on-device
 /// index. Empty on any failure.
-pub type IndexSearch = Arc<dyn Fn(String, String, usize) -> BoxFuture<'static, Vec<IndexDoc>> + Send + Sync>;
+pub type IndexSearch =
+    Arc<dyn Fn(String, String, usize) -> BoxFuture<'static, Vec<IndexDoc>> + Send + Sync>;
 
 /// `(cwd, doc id) -> was it there` — drop one document from the project's
 /// index now, rather than at the next whole-corpus pass.
@@ -113,7 +114,8 @@ pub struct Bootstrap {
 
 /// `(cwd, session_id) -> extras`. Empty on any failure; time-bounded by the
 /// installer.
-pub type BootstrapSource = Arc<dyn Fn(String, String) -> BoxFuture<'static, Bootstrap> + Send + Sync>;
+pub type BootstrapSource =
+    Arc<dyn Fn(String, String) -> BoxFuture<'static, Bootstrap> + Send + Sync>;
 
 // ── Specs ────────────────────────────────────────────────────────────────────
 
@@ -127,7 +129,10 @@ fn kind_names(durable_only: bool) -> Vec<&'static str> {
 }
 
 fn durable_kinds() -> Vec<EntryKind> {
-    EntryKind::ALL.into_iter().filter(|k| k.is_durable()).collect()
+    EntryKind::ALL
+        .into_iter()
+        .filter(|k| k.is_durable())
+        .collect()
 }
 
 fn schema(value: Value) -> Arc<JsonObject> {
@@ -138,7 +143,11 @@ fn schema(value: Value) -> Arc<JsonObject> {
 }
 
 fn tool(name: &'static str, description: &'static str, input: Value) -> Tool {
-    Tool::new(Cow::Borrowed(name), Cow::Borrowed(description), schema(input))
+    Tool::new(
+        Cow::Borrowed(name),
+        Cow::Borrowed(description),
+        schema(input),
+    )
 }
 
 /// The tools that READ the record. Reaching for any of them is what makes a
@@ -248,8 +257,16 @@ pub(super) fn tools() -> Vec<Tool> {
 /// The tools' names, in the order they are listed.
 #[cfg(test)]
 pub(super) fn tool_names() -> Vec<&'static str> {
-    ["memory_briefing", "memory_changes", "memory_search", "memory_get", "memory_list", "memory_remember", "memory_forget"]
-        .to_vec()
+    [
+        "memory_briefing",
+        "memory_changes",
+        "memory_search",
+        "memory_get",
+        "memory_list",
+        "memory_remember",
+        "memory_forget",
+    ]
+    .to_vec()
 }
 
 /// The `tools/list` answer.
@@ -295,12 +312,20 @@ struct ListArgs {
 }
 
 fn parse_kind(raw: &str) -> Result<EntryKind, String> {
-    EntryKind::parse(raw.trim()).ok_or_else(|| format!("unknown kind `{raw}`; one of {}", kind_names(false).join(", ")))
+    EntryKind::parse(raw.trim()).ok_or_else(|| {
+        format!(
+            "unknown kind `{raw}`; one of {}",
+            kind_names(false).join(", ")
+        )
+    })
 }
 
-fn args<T: for<'de> Deserialize<'de>>(request: &CallToolRequestParams) -> Result<T, CallToolResult> {
+fn args<T: for<'de> Deserialize<'de>>(
+    request: &CallToolRequestParams,
+) -> Result<T, CallToolResult> {
     let object = request.arguments.clone().unwrap_or_default();
-    serde_json::from_value(Value::Object(object)).map_err(|e| tool_error(format!("invalid arguments: {e}")))
+    serde_json::from_value(Value::Object(object))
+        .map_err(|e| tool_error(format!("invalid arguments: {e}")))
 }
 
 // ── Results ──────────────────────────────────────────────────────────────────
@@ -388,7 +413,13 @@ impl MemoryTools {
         reads: Arc<SessionReads>,
         sources: Sources,
     ) -> Self {
-        Self { memory, gate, clocks, reads, sources }
+        Self {
+            memory,
+            gate,
+            clocks,
+            reads,
+            sources,
+        }
     }
 
     async fn dispatch(&self, grant: Grant, request: CallToolRequestParams) -> CallToolResult {
@@ -425,7 +456,8 @@ impl MemoryTools {
     async fn briefing(&self, grant: Grant) -> CallToolResult {
         let (cwd, now) = (grant.cwd.clone(), self.memory.now());
         let read = run_blocking(move || {
-            shared_memory::store_for(&cwd).and_then(|s| briefing::read_briefing(&s, now).map_err(|e| format!("{e:#}")))
+            shared_memory::store_for(&cwd)
+                .and_then(|s| briefing::read_briefing(&s, now).map_err(|e| format!("{e:#}")))
         })
         .await
         .and_then(|read| read);
@@ -444,7 +476,8 @@ impl MemoryTools {
                     .collect::<Vec<_>>());
             }
             if let Some(h) = &extras.recent_session {
-                value["recentSession"] = json!({ "text": h.text, "turns": h.turns, "attribution": h.attribution });
+                value["recentSession"] =
+                    json!({ "text": h.text, "turns": h.turns, "attribution": h.attribution });
             }
         }
         self.clocks.looked(&grant.session_id, briefing.synced_to);
@@ -493,7 +526,8 @@ impl MemoryTools {
             return ok_json(json!({ "forgotten": false, "id": id }));
         };
         if let Some(evict) = &self.sources.evict {
-            let doc_id = crate::commands::agent_memory::shared_doc_id(entry.kind.as_str(), entry.id);
+            let doc_id =
+                crate::commands::agent_memory::shared_doc_id(entry.kind.as_str(), entry.id);
             evict(grant.cwd.clone(), doc_id).await;
         }
         ok_json(json!({ "forgotten": true, "id": id }))
@@ -506,12 +540,20 @@ impl MemoryTools {
             Ok(a) => a,
             Err(refused) => return refused,
         };
-        let kinds = match args.kinds.iter().map(|k| parse_kind(k)).collect::<Result<Vec<_>, _>>() {
+        let kinds = match args
+            .kinds
+            .iter()
+            .map(|k| parse_kind(k))
+            .collect::<Result<Vec<_>, _>>()
+        {
             Ok(k) if k.is_empty() => durable_kinds(),
             Ok(k) => k,
             Err(e) => return tool_error(e),
         };
-        let limit = args.limit.unwrap_or(SEARCH_DEFAULT_LIMIT).clamp(1, SEARCH_MAX_LIMIT);
+        let limit = args
+            .limit
+            .unwrap_or(SEARCH_DEFAULT_LIMIT)
+            .clamp(1, SEARCH_MAX_LIMIT);
         let (memory, cwd, query) = (self.memory.clone(), grant.cwd.clone(), args.query.clone());
         let hits = run_blocking(move || memory.search_entries(&cwd, &query, &kinds, limit))
             .await
@@ -519,7 +561,10 @@ impl MemoryTools {
         let result = entries_json(&hits);
         match (&self.sources.index, args.kinds.is_empty()) {
             (Some(index), true) => {
-                let limit = args.limit.unwrap_or(INDEX_DEFAULT_LIMIT).clamp(1, INDEX_MAX_LIMIT);
+                let limit = args
+                    .limit
+                    .unwrap_or(INDEX_DEFAULT_LIMIT)
+                    .clamp(1, INDEX_MAX_LIMIT);
                 let docs = index(grant.cwd.clone(), args.query, limit).await;
                 // A forgotten entry's document can outlive its record, so the
                 // record has the last word on what may be returned.
@@ -542,7 +587,11 @@ impl MemoryTools {
 }
 
 /// The record-only tools. Blocking.
-fn record_call(memory: &SharedMemoryStore, grant: &Grant, request: &CallToolRequestParams) -> CallToolResult {
+fn record_call(
+    memory: &SharedMemoryStore,
+    grant: &Grant,
+    request: &CallToolRequestParams,
+) -> CallToolResult {
     match request.name.as_ref() {
         "memory_get" => {
             let args: IdArgs = match args(request) {
@@ -580,9 +629,14 @@ fn record_call(memory: &SharedMemoryStore, grant: &Grant, request: &CallToolRequ
                 Ok(k) => k,
                 Err(e) => return tool_error(e),
             };
-            let writer = Writer { agent: grant.agent.clone(), session_id: grant.session_id.clone() };
+            let writer = Writer {
+                agent: grant.agent.clone(),
+                session_id: grant.session_id.clone(),
+            };
             match memory.remember(&grant.cwd, &writer, kind, &args.content, &args.key) {
-                Ok(r) => ok_json(json!({ "outcome": r.outcome.as_str(), "entry": briefing::entry_json(&r.entry) })),
+                Ok(r) => ok_json(
+                    json!({ "outcome": r.outcome.as_str(), "entry": briefing::entry_json(&r.entry) }),
+                ),
                 Err(e) => tool_error(format!("not remembered: {e}")),
             }
         }
@@ -596,12 +650,15 @@ where
     T: Send + 'static,
     F: FnOnce() -> T + Send + 'static,
 {
-    tokio::task::spawn_blocking(f).await.map_err(|e| e.to_string())
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 impl ServerHandler for MemoryTools {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(INSTRUCTIONS)
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            .with_instructions(INSTRUCTIONS)
     }
 
     async fn list_tools(

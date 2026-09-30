@@ -26,7 +26,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
-use crate::model::{DrainGate, SyncState, ProjectMode};
+use crate::model::{DrainGate, ProjectMode, SyncState};
 use crate::store::Store;
 
 /// How capture is doing for one Project.
@@ -163,8 +163,7 @@ pub fn evaluate(store: &Store, workspace_id: &str, host: HostSignals) -> Result<
     if !host.worker_alive {
         issues.push(HealthIssue {
             state: HealthState::Stopped,
-            reason: "Atlas's capture worker has stopped, so nothing new is being recorded."
-                .into(),
+            reason: "Atlas's capture worker has stopped, so nothing new is being recorded.".into(),
             next_step: "Restart Atlas to resume recording. What was already captured is safe."
                 .into(),
         });
@@ -298,7 +297,12 @@ fn reconcile_issue(store: &Store, workspace_id: &str) -> Result<Option<HealthIss
         return Ok(None);
     };
 
-    let count = |key: &str| value.get(key).and_then(serde_json::Value::as_u64).unwrap_or(0);
+    let count = |key: &str| {
+        value
+            .get(key)
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0)
+    };
 
     let orphaned = count("orphaned");
     if orphaned as usize >= crate::checkpoint::MASS_ORPHAN_THRESHOLD {
@@ -360,7 +364,11 @@ fn summarize(state: HealthState, issues: &[HealthIssue], pending_rows: i64) -> S
         _ if issues.len() == 1 => issues[0].reason.clone(),
         _ => format!(
             "{} — {} issues need attention",
-            if state == HealthState::Stopped { "Capture stopped" } else { "Capture degraded" },
+            if state == HealthState::Stopped {
+                "Capture stopped"
+            } else {
+                "Capture degraded"
+            },
             issues.len()
         ),
     }
@@ -402,6 +410,9 @@ mod tests {
     fn default_host_signals_raise_no_alarms_on_their_own() {
         let host = HostSignals::default();
         assert_eq!(host.holds_writer, None, "no claim is not a lost claim");
-        assert!(host.worker_alive, "absence of evidence is not a dead worker");
+        assert!(
+            host.worker_alive,
+            "absence of evidence is not a dead worker"
+        );
     }
 }

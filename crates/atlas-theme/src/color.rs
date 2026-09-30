@@ -38,8 +38,14 @@ pub fn lightness(value: &str) -> Option<f64> {
             ))
         }
         // `hsl()`'s third channel and `oklch()`'s first are both a lightness.
-        "hsl" | "hsla" => parts.get(2).and_then(|part| number(part)).map(percent_to_unit),
-        "oklch" => parts.first().and_then(|part| number(part)).map(percent_to_unit),
+        "hsl" | "hsla" => parts
+            .get(2)
+            .and_then(|part| number(part))
+            .map(percent_to_unit),
+        "oklch" => parts
+            .first()
+            .and_then(|part| number(part))
+            .map(percent_to_unit),
         _ => None,
     }
 }
@@ -92,7 +98,11 @@ fn first_three(parts: &[String]) -> Option<[f64; 3]> {
 }
 
 fn number(part: &str) -> Option<f64> {
-    part.trim_end_matches('%').trim_end_matches("deg").parse::<f64>().ok().filter(|n| n.is_finite())
+    part.trim_end_matches('%')
+        .trim_end_matches("deg")
+        .parse::<f64>()
+        .ok()
+        .filter(|n| n.is_finite())
 }
 
 /// `50%` is a half; a bare number in `rgb()` is 0–255.
@@ -110,7 +120,10 @@ fn percent_to_unit(value: f64) -> f64 {
 }
 
 fn parse_hex(hex: &str) -> Option<(f64, f64, f64)> {
-    let digits: Vec<u8> = hex.bytes().map(|b| (b as char).to_digit(16).map(|d| d as u8)).collect::<Option<_>>()?;
+    let digits: Vec<u8> = hex
+        .bytes()
+        .map(|b| (b as char).to_digit(16).map(|d| d as u8))
+        .collect::<Option<_>>()?;
     let (r, g, b) = match digits.len() {
         3 | 4 => (digits[0] * 17, digits[1] * 17, digits[2] * 17),
         6 | 8 => (
@@ -120,7 +133,11 @@ fn parse_hex(hex: &str) -> Option<(f64, f64, f64)> {
         ),
         _ => return None,
     };
-    Some((f64::from(r) / 255.0, f64::from(g) / 255.0, f64::from(b) / 255.0))
+    Some((
+        f64::from(r) / 255.0,
+        f64::from(g) / 255.0,
+        f64::from(b) / 255.0,
+    ))
 }
 
 fn relative_luminance(r: f64, g: f64, b: f64) -> f64 {
@@ -144,7 +161,10 @@ mod tests {
         assert!(is_dark("#000000").unwrap());
         assert!(!is_dark("#ffffff").unwrap());
         assert!(is_dark("#191724ff").unwrap(), "zed writes 8-digit hex");
-        assert!(!is_dark("oklch(0.98 0.01 90)").unwrap(), "tweakcn writes oklch");
+        assert!(
+            !is_dark("oklch(0.98 0.01 90)").unwrap(),
+            "tweakcn writes oklch"
+        );
         assert!(is_dark("hsl(240 5% 6%)").unwrap());
         assert!(is_dark("rgb(20 20 20)").unwrap());
         assert!(!is_dark("rgb(90% 90% 90%)").unwrap());

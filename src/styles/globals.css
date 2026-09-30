@@ -756,6 +756,9 @@
 .atlas-mention-chip[data-mention-kind="recorded_session"] {
   color: var(--atlas-status-success-foreground);
 }
+.atlas-mention-chip[data-mention-kind="comment"] {
+  color: var(--atlas-status-warning-foreground);
+}
 
 /* Hover preview card for media (`@file` image/video) mention chips. Appended to
    document.body by the CM ChipWidget; positioned inline via fixed coords. */

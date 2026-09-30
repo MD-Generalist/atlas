@@ -149,10 +149,7 @@ async fn a_successful_handshake_reports_the_agents_own_name_and_version() {
         "fake-agent",
         "the agent's own name wins over the id we know it by"
     );
-    assert_eq!(
-        connection.agent_version().as_deref(),
-        Some("9.9.9")
-    );
+    assert_eq!(connection.agent_version().as_deref(), Some("9.9.9"));
 }
 
 /// Adapted from the protocol-version guard (`acp.rs:1023-1025`). Zed rejects
@@ -220,12 +217,9 @@ async fn a_dying_agent_reports_what_it_said_on_stderr() {
 /// A binary that is not there at all fails at spawn rather than hanging.
 #[tokio::test]
 async fn a_missing_binary_fails_to_spawn() {
-    let error = connect(command(
-        "/nonexistent/definitely-not-an-agent",
-        &[],
-    ))
-    .await
-    .expect_err("expected the spawn to fail");
+    let error = connect(command("/nonexistent/definitely-not-an-agent", &[]))
+        .await
+        .expect_err("expected the spawn to fail");
 
     assert!(
         error.to_string().contains("failed to spawn"),
@@ -273,10 +267,8 @@ async fn an_agent_that_never_answers_initialize_times_out_at_the_deadline() {
 /// connection for the lifetime of the app.
 #[tokio::test]
 async fn dropping_the_connection_kills_the_agent_process() {
-    let pid_file = std::env::temp_dir().join(format!(
-        "atlas-agent-servers-pid-{}",
-        std::process::id()
-    ));
+    let pid_file =
+        std::env::temp_dir().join(format!("atlas-agent-servers-pid-{}", std::process::id()));
     let _ = std::fs::remove_file(&pid_file);
 
     let Some(command) = fake_agent_command_with_pid_file(1, Some(&pid_file)) else {
@@ -381,7 +373,9 @@ fn model_config_options() -> serde_json::Value {
     ])
 }
 
-async fn session_on(config_options: serde_json::Value) -> Option<(Arc<AcpConnection>, acp::SessionId)> {
+async fn session_on(
+    config_options: serde_json::Value,
+) -> Option<(Arc<AcpConnection>, acp::SessionId)> {
     let command = session_agent_command(config_options)?;
     let connection = Arc::new(connect(command).await.expect("handshake failed"));
 
@@ -425,7 +419,10 @@ async fn an_agent_advertising_a_model_select_gets_a_model_selector() {
     let ids: Vec<_> = models.iter().map(|model| model.id.as_str()).collect();
     assert_eq!(ids, vec!["sonnet", "opus"]);
 
-    let selected = selector.selected_model().await.expect("selected_model failed");
+    let selected = selector
+        .selected_model()
+        .await
+        .expect("selected_model failed");
     assert_eq!(
         selected.id.as_str(),
         "sonnet",
@@ -444,14 +441,23 @@ async fn picking_a_model_sets_the_agents_model_config_option() {
     };
 
     use atlas_acp_thread::AgentConnection as _;
-    let selector = connection.model_selector(&session_id).expect("a model selector");
+    let selector = connection
+        .model_selector(&session_id)
+        .expect("a model selector");
     selector
         .select_model(atlas_acp_thread::AgentModelId::new("opus"))
         .await
         .expect("select_model failed");
 
-    let selected = selector.selected_model().await.expect("selected_model failed");
-    assert_eq!(selected.id.as_str(), "opus", "the pick must reach the agent");
+    let selected = selector
+        .selected_model()
+        .await
+        .expect("selected_model failed");
+    assert_eq!(
+        selected.id.as_str(),
+        "opus",
+        "the pick must reach the agent"
+    );
 }
 
 /// The other half of the gate: no model select advertised, no model selector.
@@ -576,7 +582,9 @@ async fn a_pending_permission_does_not_block_the_messages_behind_it() {
     let (mut saw_chunk, mut saw_prompt) = (false, false);
     while std::time::Instant::now() < deadline && !(saw_chunk && saw_prompt) {
         {
-            let thread = thread.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let thread = thread
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             for entry in thread.entries() {
                 match entry {
                     AgentThreadEntry::AssistantMessage(message) => {
@@ -708,7 +716,9 @@ async fn an_embedded_terminal_in_tool_call_meta_is_created_and_streams() {
     .expect("prompt failed");
     assert_eq!(response.stop_reason, acp::StopReason::EndTurn);
 
-    let thread = thread.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let thread = thread
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let call = thread
         .entries()
         .iter()
@@ -734,7 +744,10 @@ async fn an_embedded_terminal_in_tool_call_meta_is_created_and_streams() {
         .terminal(&acp::TerminalId::new("emb-1"))
         .expect("registered");
     assert_eq!(
-        terminal.current_output().exit_status.and_then(|s| s.exit_code),
+        terminal
+            .current_output()
+            .exit_status
+            .and_then(|s| s.exit_code),
         Some(0),
         "the meta exit must land"
     );
@@ -987,10 +1000,16 @@ for line in sys.stdin:
             send({"jsonrpc": "2.0", "id": prompt_id, "result": {"stopReason": "end_turn"}})
 "#;
 
-fn fs_escape_agent_command(outside: &std::path::Path, result_file: &std::path::Path) -> Option<AgentServerCommand> {
+fn fs_escape_agent_command(
+    outside: &std::path::Path,
+    result_file: &std::path::Path,
+) -> Option<AgentServerCommand> {
     let script = FS_ESCAPE_AGENT
         .replace("OUTSIDE", &format!("{:?}", outside.display().to_string()))
-        .replace("RESULT_FILE", &format!("{:?}", result_file.display().to_string()));
+        .replace(
+            "RESULT_FILE",
+            &format!("{:?}", result_file.display().to_string()),
+        );
     Some(AgentServerCommand {
         path: python()?,
         args: vec!["-c".to_string(), script],
@@ -1042,9 +1061,10 @@ async fn an_agent_cannot_write_outside_the_sessions_granted_directories() {
         .await
         .expect("the turn itself should end normally");
 
-    let outcome: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&result_file).expect("agent wrote no outcome"))
-            .expect("outcome is json");
+    let outcome: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(&result_file).expect("agent wrote no outcome"),
+    )
+    .expect("outcome is json");
 
     assert_eq!(
         outcome["write"], "error",

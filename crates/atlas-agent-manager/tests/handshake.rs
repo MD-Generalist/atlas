@@ -15,7 +15,9 @@ mod support;
 use std::time::Duration;
 
 use atlas_agent_manager::AgentConnectionStatus;
-use support::spawning::{agent_pid, manager_advertising_capabilities, parked_manager, spawning_manager};
+use support::spawning::{
+    agent_pid, manager_advertising_capabilities, parked_manager, spawning_manager,
+};
 use support::{custom, wait_for};
 
 /// `kill -0`: signal 0 checks for existence without delivering anything.
@@ -47,11 +49,15 @@ async fn the_manager_spawns_a_real_agent_and_completes_the_handshake() {
     assert_eq!(connection.agent_version().as_deref(), Some("9.9.9"));
     // The entry reaches `Connected` on the watcher task, which the caller's own
     // await does not wait for.
-    wait_for(|| (manager.connection_status(&key) == AgentConnectionStatus::Connected).then_some(()))
-        .await
-        .expect("the entry reaches Connected");
+    wait_for(|| {
+        (manager.connection_status(&key) == AgentConnectionStatus::Connected).then_some(())
+    })
+    .await
+    .expect("the entry reaches Connected");
 
-    let pid = agent_pid(&pid_file).await.expect("the agent reported its pid");
+    let pid = agent_pid(&pid_file)
+        .await
+        .expect("the agent reported its pid");
     assert!(process_is_alive(pid), "the agent process is running");
 
     drop(connection);
@@ -80,7 +86,9 @@ async fn shutdown_kills_an_agent_that_still_has_a_session_open() {
     drop(thread);
     assert_eq!(manager.sessions().len(), 1);
 
-    let pid = agent_pid(&pid_file).await.expect("the agent reported its pid");
+    let pid = agent_pid(&pid_file)
+        .await
+        .expect("the agent reported its pid");
     assert!(process_is_alive(pid));
 
     manager.shutdown();
@@ -110,7 +118,10 @@ async fn an_agent_killed_during_its_connect_leaves_no_process() {
     let pid = agent_pid(&pid_file)
         .await
         .expect("the agent spawned and reported its pid");
-    assert!(process_is_alive(pid), "the child is up and awaiting `initialize`");
+    assert!(
+        process_is_alive(pid),
+        "the child is up and awaiting `initialize`"
+    );
 
     manager.drop_connection(&key);
 
@@ -134,7 +145,10 @@ async fn an_agent_killed_during_its_connect_leaves_no_process() {
 
 /// Opens one session on an agent that answers `initialize` with `caps`, and
 /// reports what the manager says about its HTTP MCP support.
-async fn http_mcp_support_advertised_by(tag: &str, caps: serde_json::Value) -> Option<Option<bool>> {
+async fn http_mcp_support_advertised_by(
+    tag: &str,
+    caps: serde_json::Value,
+) -> Option<Option<bool>> {
     let (manager, pid_file) = manager_advertising_capabilities(tag, caps)?;
     let key = custom("fake-agent");
     assert_eq!(

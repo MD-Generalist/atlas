@@ -192,8 +192,7 @@ pub async fn capture_screenshot(
 pub async fn is_text_file(path: String) -> Result<bool, String> {
     tokio::task::spawn_blocking(move || {
         use std::io::Read;
-        let mut f =
-            fs::File::open(&path).map_err(|e| format!("Failed to open {path}: {e}"))?;
+        let mut f = fs::File::open(&path).map_err(|e| format!("Failed to open {path}: {e}"))?;
         let mut buf = [0u8; 8192];
         let n = f
             .read(&mut buf)
@@ -637,9 +636,7 @@ pub async fn ensure_atlas_gitignore(
         .map_err(|e| e.to_string())?
 }
 
-fn ensure_atlas_gitignore_sync(
-    project_path: &str,
-) -> Result<EnsureAtlasGitignoreResult, String> {
+fn ensure_atlas_gitignore_sync(project_path: &str) -> Result<EnsureAtlasGitignoreResult, String> {
     let root = Path::new(project_path);
     if !root.join(".git").exists() {
         return Ok(EnsureAtlasGitignoreResult::NotGitRepo);
@@ -707,13 +704,17 @@ mod inline_cap_tests {
 
         let small = dir.join("small.pdf");
         std::fs::write(&small, b"pdf bytes").unwrap();
-        assert!(read_file_base64(small.to_string_lossy().into()).await.is_ok());
+        assert!(read_file_base64(small.to_string_lossy().into())
+            .await
+            .is_ok());
 
         // 51MB: a real document ceiling, not a policy about content.
         let big = dir.join("big.bin");
         let f = std::fs::File::create(&big).unwrap();
         f.set_len(51 * 1024 * 1024).unwrap();
-        let err = read_file_base64(big.to_string_lossy().into()).await.unwrap_err();
+        let err = read_file_base64(big.to_string_lossy().into())
+            .await
+            .unwrap_err();
         assert!(err.contains("too large"), "{err}");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -730,7 +731,11 @@ mod asset_grant_tests {
         let ws = vec![PathBuf::from("/Volumes/ext/project")];
 
         // Visible home dirs and project roots pass.
-        for ok in ["/Users/me/Desktop/shots", "/Users/me/Documents", "/Volumes/ext/project/media"] {
+        for ok in [
+            "/Users/me/Desktop/shots",
+            "/Users/me/Documents",
+            "/Volumes/ext/project/media",
+        ] {
             assert!(asset_grant_allowed(Path::new(ok), &ws, Some(home)), "{ok}");
         }
         // The audit shapes: root grant, hidden dirs, Library, home itself,
@@ -744,7 +749,10 @@ mod asset_grant_tests {
             "/etc",
             "/Users/other/Desktop",
         ] {
-            assert!(!asset_grant_allowed(Path::new(bad), &ws, Some(home)), "{bad}");
+            assert!(
+                !asset_grant_allowed(Path::new(bad), &ws, Some(home)),
+                "{bad}"
+            );
         }
     }
 }

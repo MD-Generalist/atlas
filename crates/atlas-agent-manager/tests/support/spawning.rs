@@ -16,7 +16,9 @@ use agent_client_protocol::schema::v1 as acp;
 use anyhow::Result;
 use atlas_acp_thread::AgentId;
 use atlas_agent_manager::AgentManager;
-use atlas_agent_servers::{AgentServerCommand, ConnectOptions, ExternalAgentServer, SessionMcpServers};
+use atlas_agent_servers::{
+    AgentServerCommand, ConnectOptions, ExternalAgentServer, SessionMcpServers,
+};
 use futures::future::BoxFuture;
 use futures::FutureExt;
 use tokio::sync::watch;
@@ -234,10 +236,8 @@ fn spawning_manager_inner(
     session_mcp: Option<Arc<dyn SessionMcpServers>>,
 ) -> Option<(Arc<AgentManager>, PathBuf, PathBuf)> {
     let python = python()?;
-    let pid_file = std::env::temp_dir().join(format!(
-        "atlas-agent-manager-{tag}-{}",
-        std::process::id()
-    ));
+    let pid_file =
+        std::env::temp_dir().join(format!("atlas-agent-manager-{tag}-{}", std::process::id()));
     let go_file = std::env::temp_dir().join(format!(
         "atlas-agent-manager-{tag}-go-{}",
         std::process::id()

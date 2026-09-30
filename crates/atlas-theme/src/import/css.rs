@@ -51,7 +51,8 @@ fn collect(css: &str, sheet: &mut StyleSheet, depth: usize) {
     }
     for (selector, body) in blocks(css) {
         let head = selector.trim();
-        if head.starts_with("@layer") || head.starts_with("@media") || head.starts_with("@supports") {
+        if head.starts_with("@layer") || head.starts_with("@media") || head.starts_with("@supports")
+        {
             collect(&body, sheet, depth + 1);
             continue;
         }
@@ -115,7 +116,10 @@ fn blocks(css: &str) -> Vec<(String, String)> {
                     index += 1;
                 }
                 let body_end = if depth == 0 { index - 1 } else { chars.len() };
-                out.push((selector.trim().to_string(), chars[body_start..body_end].iter().collect()));
+                out.push((
+                    selector.trim().to_string(),
+                    chars[body_start..body_end].iter().collect(),
+                ));
                 selector_start = index;
             }
             ';' if out.is_empty() || selector_start == index => {
@@ -134,9 +138,13 @@ fn blocks(css: &str) -> Vec<(String, String)> {
 fn declarations(body: &str) -> Vec<(String, String)> {
     let mut out = Vec::new();
     for statement in split_top_level(body) {
-        let Some((name, value)) = statement.split_once(':') else { continue };
+        let Some((name, value)) = statement.split_once(':') else {
+            continue;
+        };
         let name = name.trim();
-        let Some(name) = name.strip_prefix("--") else { continue };
+        let Some(name) = name.strip_prefix("--") else {
+            continue;
+        };
         let value = value.trim().trim_end_matches(';').trim();
         if name.is_empty() || value.is_empty() {
             continue;
@@ -190,7 +198,9 @@ fn strip_comments(css: &str) -> String {
     while index < bytes.len() {
         if bytes[index] == '/' && bytes.get(index + 1) == Some(&'*') {
             index += 2;
-            while index < bytes.len() && !(bytes[index] == '*' && bytes.get(index + 1) == Some(&'/')) {
+            while index < bytes.len()
+                && !(bytes[index] == '*' && bytes.get(index + 1) == Some(&'/'))
+            {
                 index += 1;
             }
             index += 2;
@@ -243,7 +253,11 @@ mod tests {
         let sheet = parse(SAMPLE);
         assert_eq!(sheet.root.get("background").unwrap(), "oklch(1 0 0)");
         assert_eq!(sheet.root.get("radius").unwrap(), "0.625rem");
-        assert_eq!(sheet.root.get("spacing").unwrap(), "0.25rem", "nested in @layer base");
+        assert_eq!(
+            sheet.root.get("spacing").unwrap(),
+            "0.25rem",
+            "nested in @layer base"
+        );
         assert_eq!(sheet.dark.get("background").unwrap(), "oklch(0.145 0 0)");
         assert_eq!(sheet.theme.get("font-sans").unwrap(), "Inter, sans-serif");
         assert!(is_alias(sheet.theme.get("color-background").unwrap()));

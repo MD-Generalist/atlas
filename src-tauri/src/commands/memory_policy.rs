@@ -79,8 +79,17 @@ pub struct Policy {
 fn classify(text: &str) -> &'static str {
     let l = text.to_lowercase();
     const STRONG: &[&str] = &[
-        "must", "never", "always", "do not", "don't", "required", "mandatory",
-        "forbidden", "shall", "only ever", "do NOT",
+        "must",
+        "never",
+        "always",
+        "do not",
+        "don't",
+        "required",
+        "mandatory",
+        "forbidden",
+        "shall",
+        "only ever",
+        "do NOT",
     ];
     if STRONG.iter().any(|m| l.contains(m)) {
         "strong"
@@ -198,7 +207,9 @@ fn compute_policies(
         if !doc_vecs.contains_key(&d.id) {
             // Same text the index embeds, so these vectors are comparable.
             let text = super::memory_indexer::to_corpus_doc(d).text;
-            let v = embedder.embed_one(&text).map_err(|e| format!("embed doc: {e}"))?;
+            let v = embedder
+                .embed_one(&text)
+                .map_err(|e| format!("embed doc: {e}"))?;
             doc_vecs.insert(d.id.clone(), v);
         }
     }
@@ -233,7 +244,9 @@ fn compute_policies(
                 let v = if let Some(v) = cache.get(&h) {
                     v.clone()
                 } else {
-                    let v = embedder.embed_one(&line).map_err(|e| format!("embed stmt: {e}"))?;
+                    let v = embedder
+                        .embed_one(&line)
+                        .map_err(|e| format!("embed stmt: {e}"))?;
                     cache.insert(h, v.clone());
                     cache_dirty = true;
                     v
@@ -276,8 +289,7 @@ fn compute_policies(
     // transform-gpu for hover jitter"). Surface each as a soft/strong policy row
     // so they show up in the tab. No embedding needed — it's a direct listing.
     // Skip docs already claimed by a probe match above to avoid duplicate rows.
-    let used: std::collections::HashSet<String> =
-        out.iter().map(|p| p.file_path.clone()).collect();
+    let used: std::collections::HashSet<String> = out.iter().map(|p| p.file_path.clone()).collect();
     for d in &docs {
         if d.kind != "feedback" {
             continue;

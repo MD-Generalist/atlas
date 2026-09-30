@@ -51,9 +51,11 @@ pub mod record;
 pub mod embedding;
 pub mod session;
 
-pub use global::{global_recall, promote_facts, CandidateEntry};
 pub use docstore::{DocStore, DocText};
-pub use extract::{extract, parse_extracted, should_extract, ExtractState, Extracted, TranscriptTurn, Trigger};
+pub use extract::{
+    extract, parse_extracted, should_extract, ExtractState, Extracted, TranscriptTurn, Trigger,
+};
+pub use global::{global_recall, promote_facts, CandidateEntry};
 pub use manifest::{Diff, Entry, Manifest};
 pub use provider::{MiniLmProvider, DIM, PROVIDER_NAME};
 pub use store::HnswStore;
@@ -133,8 +135,8 @@ impl MemoryEngine {
         let manifest_path = memory_dir.join("manifest.json");
         let hnsw_path = memory_dir.join("hnsw.usearch");
 
-        let manifest = Manifest::load(&manifest_path)
-            .unwrap_or_else(|_| Manifest::new(PROVIDER_NAME, DIM));
+        let manifest =
+            Manifest::load(&manifest_path).unwrap_or_else(|_| Manifest::new(PROVIDER_NAME, DIM));
 
         let docstore =
             DocStore::load(&memory_dir.join("docstore.json")).unwrap_or_else(|_| DocStore::new());
@@ -197,7 +199,11 @@ impl MemoryEngine {
         // reload vectors from the old model; persist the fresh empty state.
         let _ = std::fs::remove_file(self.memory_dir.join("hnsw.usearch"));
         self.persist()?;
-        tracing::info!(provider_name, dim, "reset memory index for new embedding model");
+        tracing::info!(
+            provider_name,
+            dim,
+            "reset memory index for new embedding model"
+        );
         Ok(())
     }
 
@@ -271,8 +277,7 @@ impl MemoryEngine {
             .map(|d| (d.id.clone(), d.content_hash.clone()))
             .collect();
         let diff = self.manifest.diff(&current);
-        let by_id: HashMap<&str, &CorpusDoc> =
-            docs.iter().map(|d| (d.id.as_str(), d)).collect();
+        let by_id: HashMap<&str, &CorpusDoc> = docs.iter().map(|d| (d.id.as_str(), d)).collect();
 
         let added = diff.add.len();
         let updated = diff.update.len();
@@ -369,7 +374,8 @@ impl MemoryEngine {
             let key = self.manifest.assign_key(&doc.id);
             let _ = self.store.remove(key);
             self.store.add(key, vector)?;
-            self.manifest.upsert(&doc.id, &doc.content_hash, &doc.corpus, 0);
+            self.manifest
+                .upsert(&doc.id, &doc.content_hash, &doc.corpus, 0);
             let (title, body) = docstore::split_embedded(&doc.text);
             self.docstore.upsert(
                 &doc.id,
@@ -537,7 +543,11 @@ mod index_corpus_tests {
             .unwrap();
 
         assert_eq!(engine.cached_vector("note:a", "h_a"), Some(axis(3)));
-        assert_eq!(engine.cached_vector("note:a", "h_changed"), None, "stale content");
+        assert_eq!(
+            engine.cached_vector("note:a", "h_changed"),
+            None,
+            "stale content"
+        );
         assert_eq!(engine.cached_vector("note:missing", "h_a"), None);
 
         // Persisted: a reopened engine still has it, and the indexer sees the
@@ -549,7 +559,6 @@ mod index_corpus_tests {
             .manifest
             .diff(&[("note:a".to_string(), "h_a".to_string())]);
         assert!(diff.add.is_empty() && diff.update.is_empty());
-
     }
 
     /// `memory_forget` deletes the record; the indexed document has to go with
@@ -561,7 +570,10 @@ mod index_corpus_tests {
         let mut engine = MemoryEngine::open(root.clone());
         engine
             .add_embedded(&[
-                (doc("shared:fact:44", "Keep me\n\nstill true", "h_keep"), axis(1)),
+                (
+                    doc("shared:fact:44", "Keep me\n\nstill true", "h_keep"),
+                    axis(1),
+                ),
                 (
                     doc("shared:fact:45", "Forget me\n\nQUOKKA-9042", "h_gone"),
                     axis(2),
@@ -601,7 +613,10 @@ mod index_corpus_tests {
         engine
             .add_embedded(&[(doc("note:b", "b", "h2"), axis(2))])
             .unwrap();
-        assert_eq!(engine.cached_vector("codebase:src/a.rs", "h1"), Some(axis(1)));
+        assert_eq!(
+            engine.cached_vector("codebase:src/a.rs", "h1"),
+            Some(axis(1))
+        );
         assert_eq!(engine.cached_vector("note:b", "h2"), Some(axis(2)));
 
         // Re-adding with new content replaces the vector in place.
@@ -610,7 +625,6 @@ mod index_corpus_tests {
             .unwrap();
         assert_eq!(engine.cached_vector("note:b", "h3"), Some(axis(9)));
         assert_eq!(engine.store.len(), 2);
-
     }
 
     /// Natural-language query over the indexed memory: best first, by doc id,
@@ -635,7 +649,6 @@ mod index_corpus_tests {
         let ids: Vec<&str> = hits.iter().map(|(id, _)| id.as_str()).collect();
         assert_eq!(ids, vec!["note:y", "claude:z"]);
         assert!(hits[0].1 > hits[1].1);
-
     }
 
     /// Full `index_corpus` against a real MiniLM model. Ignored by default; run

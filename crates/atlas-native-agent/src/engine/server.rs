@@ -95,10 +95,14 @@ impl AgentServer for EngineAgentServer {
         // no credential.
         let external_auth = self.external_auth.clone().or_else(|| {
             crate::engine::auth::registered_token_source().map(|source| {
-                Arc::new(crate::engine::auth::AtlasExternalAuth::new(source)) as Arc<dyn ExternalAuth>
+                Arc::new(crate::engine::auth::AtlasExternalAuth::new(source))
+                    as Arc<dyn ExternalAuth>
             })
         });
-        let default_mode = self.default_mode.clone().or_else(|| options.defaults.mode.clone());
+        let default_mode = self
+            .default_mode
+            .clone()
+            .or_else(|| options.defaults.mode.clone());
         // The host's MCP servers (the memory tool server) reach the engine
         // the same way they reach every ACP agent: offered per session.
         let session_mcp = options.session_mcp.clone();
@@ -198,5 +202,4 @@ mod tests {
             "and finds one at connect time",
         );
     }
-
 }

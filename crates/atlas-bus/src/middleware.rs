@@ -63,7 +63,10 @@ mod tests {
     }
     impl OutboundMiddleware<u32> for Recorder {
         fn on_event(&self, event: &u32) {
-            self.log.lock().unwrap().push(format!("{}:{event}", self.tag));
+            self.log
+                .lock()
+                .unwrap()
+                .push(format!("{}:{event}", self.tag));
         }
     }
 
@@ -71,8 +74,14 @@ mod tests {
     fn outbound_runs_in_order() {
         let log = Arc::new(Mutex::new(Vec::new()));
         let pipe = OutboundPipeline::new()
-            .with(Arc::new(Recorder { tag: "a", log: log.clone() }))
-            .with(Arc::new(Recorder { tag: "b", log: log.clone() }));
+            .with(Arc::new(Recorder {
+                tag: "a",
+                log: log.clone(),
+            }))
+            .with(Arc::new(Recorder {
+                tag: "b",
+                log: log.clone(),
+            }));
         pipe.run(&5);
         assert_eq!(*log.lock().unwrap(), vec!["a:5", "b:5"]);
     }

@@ -222,12 +222,9 @@ const ProjectRow = memo(function ProjectRow({
                   if (ws.pinned) unpin(ws.id);
                   else pin(ws.id);
                 }}
-                className={cn(
-                  "flex size-5 items-center justify-center rounded text-[var(--muted-foreground)] hover:bg-[var(--card)] hover:text-[var(--foreground)] cursor-pointer",
-                  ws.pinned
-                    ? "opacity-100"
-                    : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
-                )}
+                // Hover-only even when pinned: the "Pinned" section already
+                // says so, and a resting PinOff sat on top of the +N/−M pill.
+                className="flex size-5 items-center justify-center rounded text-[var(--muted-foreground)] opacity-0 group-hover:opacity-100 focus-visible:opacity-100 hover:bg-[var(--card)] hover:text-[var(--foreground)] cursor-pointer"
               >
                 {ws.pinned ? <PinOff size={11} /> : <Pin size={11} />}
               </button>

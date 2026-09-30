@@ -42,10 +42,16 @@ struct Capabilities {
 
 impl Capabilities {
     fn load() -> Self {
-        Self { load: true, ..Self::default() }
+        Self {
+            load: true,
+            ..Self::default()
+        }
     }
     fn resume() -> Self {
-        Self { resume: true, ..Self::default() }
+        Self {
+            resume: true,
+            ..Self::default()
+        }
     }
     fn neither() -> Self {
         Self::default()
@@ -430,7 +436,11 @@ async fn resuming_starts_an_agent_that_is_not_running() {
 
     harness.resume().await.unwrap();
 
-    assert_eq!(harness.spawns.load(Ordering::SeqCst), 1, "spawned on demand");
+    assert_eq!(
+        harness.spawns.load(Ordering::SeqCst),
+        1,
+        "spawned on demand"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

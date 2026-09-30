@@ -27,7 +27,14 @@ use crate::{Theme, ThemeVariant, NON_COLOR_BASE_TOKENS};
 
 /// The `@theme`-level tokens: appearance-independent, so shadcn puts them in
 /// `cssVars.theme` rather than repeating them under light and dark.
-const THEME_LEVEL: &[&str] = &["radius", "font-sans", "font-serif", "font-mono", "tracking-normal", "spacing"];
+const THEME_LEVEL: &[&str] = &[
+    "radius",
+    "font-sans",
+    "font-serif",
+    "font-mono",
+    "tracking-normal",
+    "spacing",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -58,7 +65,10 @@ pub fn to_shadcn_registry_item(theme: &Theme) -> ShadcnExport {
     let mut dropped_by_category: BTreeMap<String, usize> = BTreeMap::new();
     let mut variants = Vec::new();
 
-    for (appearance, variant) in [("light", theme.light.as_ref()), ("dark", theme.dark.as_ref())] {
+    for (appearance, variant) in [
+        ("light", theme.light.as_ref()),
+        ("dark", theme.dark.as_ref()),
+    ] {
         let Some(variant) = variant else { continue };
         variants.push(appearance.to_string());
         let mut block = Map::new();
@@ -67,7 +77,9 @@ pub fn to_shadcn_registry_item(theme: &Theme) -> ShadcnExport {
                 // Appearance-independent: written once, from whichever variant
                 // states it first. A theme whose variants disagree about the
                 // radius loses that disagreement, which shadcn cannot express.
-                theme_level.entry(token.clone()).or_insert_with(|| Value::String(value.clone()));
+                theme_level
+                    .entry(token.clone())
+                    .or_insert_with(|| Value::String(value.clone()));
             } else {
                 block.insert(token.clone(), Value::String(value.clone()));
             }
@@ -91,7 +103,8 @@ pub fn to_shadcn_registry_item(theme: &Theme) -> ShadcnExport {
 
     let dropped = dropped_by_category.values().sum();
     let mut notes = vec![
-        "Base tokens cross verbatim: shadcn's names are Atlas's names, so the chrome is exact.".to_string(),
+        "Base tokens cross verbatim: shadcn's names are Atlas's names, so the chrome is exact."
+            .to_string(),
     ];
     if dropped > 0 {
         notes.push(format!(
@@ -107,7 +120,12 @@ pub fn to_shadcn_registry_item(theme: &Theme) -> ShadcnExport {
         name: theme.name.clone(),
         json: serde_json::to_string_pretty(&item).unwrap_or_default() + "\n",
         variants,
-        report: ExportReport { exported, dropped, dropped_by_category, notes },
+        report: ExportReport {
+            exported,
+            dropped,
+            dropped_by_category,
+            notes,
+        },
     }
 }
 
@@ -120,7 +138,12 @@ fn count_dropped(variant: &ThemeVariant, out: &mut BTreeMap<String, usize>) {
         *out.entry(family).or_default() += 1;
     }
     debug_assert!(
-        variant.base.keys().all(|token| !NON_COLOR_BASE_TOKENS.contains(&token.as_str()) || THEME_LEVEL.contains(&token.as_str()) || token.starts_with("shadow-")),
+        variant
+            .base
+            .keys()
+            .all(|token| !NON_COLOR_BASE_TOKENS.contains(&token.as_str())
+                || THEME_LEVEL.contains(&token.as_str())
+                || token.starts_with("shadow-")),
         "a non-colour base token is neither theme-level nor a shadow",
     );
 }
@@ -132,15 +155,28 @@ mod tests {
 
     #[test]
     fn every_base_token_survives_the_export() {
-        let theme = built_in_themes().unwrap().into_iter().find(|t| t.id == "rose-pine").unwrap();
+        let theme = built_in_themes()
+            .unwrap()
+            .into_iter()
+            .find(|t| t.id == "rose-pine")
+            .unwrap();
         let export = to_shadcn_registry_item(&theme);
         let item: Value = serde_json::from_str(&export.json).unwrap();
         let dark = theme.dark.as_ref().unwrap();
         for (token, value) in &dark.base {
-            let found = item["cssVars"]["dark"].get(token).or_else(|| item["cssVars"]["theme"].get(token));
-            assert_eq!(found.and_then(Value::as_str), Some(value.as_str()), "{token}");
+            let found = item["cssVars"]["dark"]
+                .get(token)
+                .or_else(|| item["cssVars"]["theme"].get(token));
+            assert_eq!(
+                found.and_then(Value::as_str),
+                Some(value.as_str()),
+                "{token}"
+            );
         }
         assert_eq!(export.variants, ["light", "dark"]);
-        assert!(export.report.dropped > 0, "the theme keys must be reported as dropped");
+        assert!(
+            export.report.dropped > 0,
+            "the theme keys must be reported as dropped"
+        );
     }
 }

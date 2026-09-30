@@ -86,12 +86,19 @@ pub async fn preview_theme_import(input: ThemeImportInput) -> Result<ThemeImport
     // the command runtime with the UI's IPC channel, so it goes off-thread like
     // any other non-trivial work.
     tokio::task::spawn_blocking(move || {
-        let options = ImportOptions { origin: origin.clone(), ..ImportOptions::default() };
+        let options = ImportOptions {
+            origin: origin.clone(),
+            ..ImportOptions::default()
+        };
         let detected = format
             .or_else(|| atlas_theme::import::detect_format(&source))
-            .map_or_else(|| "unknown".to_string(), |format| format.label().to_string());
-        let imported = atlas_theme::import::import_themes(&source, format, base_dir.as_deref(), &options)
-            .map_err(|error| error.to_string())?;
+            .map_or_else(
+                || "unknown".to_string(),
+                |format| format.label().to_string(),
+            );
+        let imported =
+            atlas_theme::import::import_themes(&source, format, base_dir.as_deref(), &options)
+                .map_err(|error| error.to_string())?;
         Ok(ThemeImportPreview {
             origin,
             format: detected,
@@ -137,7 +144,8 @@ pub async fn commit_theme_import(
     name: String,
 ) -> Result<CommittedThemeImport, String> {
     tokio::task::spawn_blocking(move || {
-        let mut theme = atlas_theme::parse_theme(&toml, "import").map_err(|error| error.to_string())?;
+        let mut theme =
+            atlas_theme::parse_theme(&toml, "import").map_err(|error| error.to_string())?;
         let id = atlas_theme::import::slug(&id);
         if id.is_empty() {
             return Err("a theme id needs at least one letter or digit".to_string());
@@ -148,7 +156,10 @@ pub async fn commit_theme_import(
         }
         let rendered = atlas_theme::toml_writer::theme_to_toml(&theme);
         atlas_theme::write_user_theme(&rendered)
-            .map(|path| CommittedThemeImport { id, path: path.display().to_string() })
+            .map(|path| CommittedThemeImport {
+                id,
+                path: path.display().to_string(),
+            })
             .map_err(|error| error.to_string())
     })
     .await
@@ -175,9 +186,10 @@ async fn read_source(
 ) -> Result<(String, String, Option<PathBuf>), String> {
     if let Some(path) = path.filter(|path| !path.trim().is_empty()) {
         let path = PathBuf::from(path);
-        let origin = path
-            .file_name()
-            .map_or_else(|| path.display().to_string(), |name| name.to_string_lossy().into_owned());
+        let origin = path.file_name().map_or_else(
+            || path.display().to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        );
         let base_dir = path.parent().map(Path::to_path_buf);
         let label = origin.clone();
         let source =
@@ -223,12 +235,17 @@ async fn fetch(url: &str) -> Result<String, String> {
     let too_big = || format!("{url} is larger than the 4 MB a theme may be");
     // The declared length refuses early; the running total is what actually
     // holds, because a server may send no length or the wrong one.
-    if response.content_length().is_some_and(|length| length > MAX_FETCH_BYTES as u64) {
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_FETCH_BYTES as u64)
+    {
         return Err(too_big());
     }
     let mut bytes = Vec::new();
-    while let Some(chunk) =
-        response.chunk().await.map_err(|error| format!("could not read {url}: {error}"))?
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|error| format!("could not read {url}: {error}"))?
     {
         if bytes.len() + chunk.len() > MAX_FETCH_BYTES {
             return Err(too_big());

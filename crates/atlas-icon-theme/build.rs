@@ -27,7 +27,9 @@ fn main() {
     println!("cargo:rerun-if-changed={}", icons_dir.display());
     println!(
         "cargo:rerun-if-changed={}",
-        manifest_dir.join("vendor/material-icon-theme/dist/material-icons.json").display()
+        manifest_dir
+            .join("vendor/material-icon-theme/dist/material-icons.json")
+            .display()
     );
 
     let mut sources: BTreeMap<String, String> = BTreeMap::new();
@@ -44,7 +46,11 @@ fn main() {
         println!("cargo:rerun-if-changed={}", path.display());
         sources.insert(name, source);
     }
-    assert!(!sources.is_empty(), "no vendored SVGs found in {}", icons_dir.display());
+    assert!(
+        !sources.is_empty(),
+        "no vendored SVGs found in {}",
+        icons_dir.display()
+    );
 
     let mut blob = String::new();
     let mut index = String::from(

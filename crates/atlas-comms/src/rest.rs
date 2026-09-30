@@ -133,7 +133,10 @@ impl RestClient {
     /// enough to exhaust the limit for every other caller too.
     async fn token(&self) -> Result<String> {
         {
-            let cached = self.cached.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let cached = self
+                .cached
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if let Some((token, minted)) = cached.as_ref() {
                 if minted.elapsed() < TOKEN_REUSE {
                     return Ok(token.clone());
@@ -141,14 +144,20 @@ impl RestClient {
             }
         }
         let token = self.tokens.mint().await?;
-        *self.cached.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+        *self
+            .cached
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
             Some((token.clone(), std::time::Instant::now()));
         Ok(token)
     }
 
     /// Drop the cached token — on a `401`, so a rejected one is never reused.
     fn forget_token(&self) {
-        *self.cached.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        *self
+            .cached
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     }
 
     async fn request(
@@ -235,7 +244,8 @@ impl RestClient {
 
     /// The Workspaces a message may reference ([`WorkspaceList`]).
     pub async fn workspaces(&self, org: &str) -> Result<WorkspaceList> {
-        self.json(reqwest::Method::GET, "/workspaces", org, None).await
+        self.json(reqwest::Method::GET, "/workspaces", org, None)
+            .await
     }
 
     pub async fn reads(&self, org: &str) -> Result<ReadList> {
@@ -331,7 +341,11 @@ impl RestClient {
 
     /// Not idempotent, and that is the feature: membership is frozen, so
     /// "add somebody" is a *new* group with no history.
-    pub async fn create_group_dm(&self, org: &str, member_ids: Vec<String>) -> Result<Conversation> {
+    pub async fn create_group_dm(
+        &self,
+        org: &str,
+        member_ids: Vec<String>,
+    ) -> Result<Conversation> {
         let body = serde_json::json!({ "kind": "group_dm", "member_ids": member_ids });
         #[derive(Deserialize)]
         struct Wrapper {
@@ -497,12 +511,7 @@ impl RestClient {
     /// Create a draft. Title ≤ 200 chars (`CHAT_DRAFT_TITLE_MAX`) — refused,
     /// not truncated, past that. Deliberately NOT announced by the server, so
     /// the caller prepends the 201 body and everyone else learns by poll.
-    pub async fn create_draft(
-        &self,
-        org: &str,
-        conv_id: &str,
-        title: &str,
-    ) -> Result<PromptDraft> {
+    pub async fn create_draft(&self, org: &str, conv_id: &str, title: &str) -> Result<PromptDraft> {
         #[derive(Deserialize)]
         struct Wrapper {
             draft: PromptDraft,
@@ -738,8 +747,13 @@ impl RestClient {
         on_chunk: &mut (dyn FnMut(u64, u64) + Send),
     ) -> Result<Vec<u8>> {
         let res = Self::check(
-            self.request(reqwest::Method::GET, &format!("/files/{file_id}"), org, None)
-                .await?,
+            self.request(
+                reqwest::Method::GET,
+                &format!("/files/{file_id}"),
+                org,
+                None,
+            )
+            .await?,
         )
         .await?;
         Self::drain(res, on_chunk).await

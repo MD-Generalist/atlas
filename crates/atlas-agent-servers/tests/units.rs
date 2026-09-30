@@ -160,7 +160,9 @@ fn cancel_state_is_stored_per_session() {
     let _two = registered(&registry, "s2");
 
     let watching_two = registry
-        .with_session(&session_id("s2"), |session| session.cancel_signal.waiter().probe())
+        .with_session(&session_id("s2"), |session| {
+            session.cancel_signal.waiter().probe()
+        })
         .expect("s2 exists");
 
     registry.with_session(&session_id("s1"), |session| session.cancel_signal.fire());
@@ -312,9 +314,7 @@ fn reading_big_files_does_not_grow_the_ring_past_its_byte_budget() {
 
     let file = "x".repeat(2 * 1024 * 1024);
     for id in 0..60 {
-        let line = format!(
-            r#"{{"jsonrpc":"2.0","id":{id},"result":{{"content":"{file}"}}}}"#
-        );
+        let line = format!(r#"{{"jsonrpc":"2.0","id":{id},"result":{{"content":"{file}"}}}}"#);
         log.record_line(AcpDebugMessageDirection::Outgoing, &line);
     }
 
@@ -346,7 +346,8 @@ fn the_byte_budget_evicts_even_when_no_single_message_is_oversized() {
     let log = AcpDebugLog::new();
 
     let body = "z".repeat(MAX_DEBUG_MESSAGE_BYTES - 128);
-    let line = format!(r#"{{"jsonrpc":"2.0","method":"session/update","params":{{"t":"{body}"}}}}"#);
+    let line =
+        format!(r#"{{"jsonrpc":"2.0","method":"session/update","params":{{"t":"{body}"}}}}"#);
     assert!(
         line.len() <= MAX_DEBUG_MESSAGE_BYTES,
         "fixture must stay under the per-message cap or it tests elision instead"
@@ -581,7 +582,12 @@ fn advertised_capabilities_match_what_the_handlers_serve() {
 // real spawned task against a real PTY.
 
 /// A thread plus the receiver its events land on, so a test can watch them.
-fn thread_with_events(id: &str) -> (Arc<Mutex<AcpThread>>, atlas_acp_thread::EventStream<atlas_acp_thread::AcpThreadEvent>) {
+fn thread_with_events(
+    id: &str,
+) -> (
+    Arc<Mutex<AcpThread>>,
+    atlas_acp_thread::EventStream<atlas_acp_thread::AcpThreadEvent>,
+) {
     let (tx, rx) = event_channel();
     let thread = Arc::new(Mutex::new(AcpThread::new(
         session_id(id),
@@ -600,16 +606,15 @@ fn tool_call_running(
     terminal_id: &acp::TerminalId,
     terminal: Arc<atlas_terminal::command::CommandTerminal>,
 ) {
-    thread
-        .lock()
-        .unwrap()
-        .on_terminal_provider_event(atlas_acp_thread::TerminalProviderEvent::Created {
+    thread.lock().unwrap().on_terminal_provider_event(
+        atlas_acp_thread::TerminalProviderEvent::Created {
             terminal_id: terminal_id.clone(),
             label: "cmd".into(),
             cwd: None,
             output_byte_limit: Some(4096),
             terminal: Some(terminal),
-        });
+        },
+    );
     let update: acp::SessionUpdate = serde_json::from_value(serde_json::json!({
         "sessionUpdate": "tool_call",
         "toolCallId": "call-1",

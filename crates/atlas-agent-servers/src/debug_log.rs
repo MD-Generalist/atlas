@@ -131,7 +131,8 @@ impl AcpDebugMessage {
 
         // `method` + `id` is a request; `method` alone is a notification;
         // `id` alone is a response.
-        let message = if let Some(method) = object.get("method").and_then(|method| method.as_str()) {
+        let message = if let Some(method) = object.get("method").and_then(|method| method.as_str())
+        {
             match parsed_id {
                 Some(Ok(id)) => AcpDebugMessageContent::Request {
                     id,
@@ -384,7 +385,12 @@ impl AcpDebugLog {
         let state = self.lock();
         let mut lines = Vec::new();
 
-        for message in state.messages.iter().map(|retained| &retained.message).rev() {
+        for message in state
+            .messages
+            .iter()
+            .map(|retained| &retained.message)
+            .rev()
+        {
             match message.direction {
                 AcpDebugMessageDirection::Stderr => {
                     if let AcpDebugMessageContent::Stderr { line } = &message.message {

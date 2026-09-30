@@ -298,7 +298,8 @@ pub(crate) async fn apply_bespoke_event_handling(
             } else {
                 assessment.turn_id.clone()
             };
-            if assessment.status == atlas_engine_protocol::protocol::GuardianAssessmentStatus::InProgress
+            if assessment.status
+                == atlas_engine_protocol::protocol::GuardianAssessmentStatus::InProgress
                 && let Some((target_item_id, completion_item)) = pending_command_execution.as_ref()
             {
                 start_command_execution_item(
@@ -947,9 +948,11 @@ pub(crate) async fn apply_bespoke_event_handling(
 
             let turn_error = TurnError {
                 message: ev.message,
-                atlas_engine_error_info: ev.atlas_engine_error_info.map(V2AtlasEngineErrorInfo::from),
+                atlas_engine_error_info: ev
+                    .atlas_engine_error_info
+                    .map(V2AtlasEngineErrorInfo::from),
                 additional_details: None,
-                retry_delay_ms: None
+                retry_delay_ms: None,
             };
             handle_error_notification(
                 conversation_id,
@@ -965,7 +968,9 @@ pub(crate) async fn apply_bespoke_event_handling(
             // but we notify the client.
             let turn_error = TurnError {
                 message: ev.message,
-                atlas_engine_error_info: ev.atlas_engine_error_info.map(V2AtlasEngineErrorInfo::from),
+                atlas_engine_error_info: ev
+                    .atlas_engine_error_info
+                    .map(V2AtlasEngineErrorInfo::from),
                 additional_details: ev.additional_details,
                 // The only site with a wait to report: this is the notice that
                 // announces a retry, so it is the one a client can count down.
@@ -1819,7 +1824,7 @@ async fn on_request_permissions_response(
                     message,
                     atlas_engine_error_info: None,
                     additional_details: None,
-                retry_delay_ms: None
+                    retry_delay_ms: None,
                 },
                 &outgoing,
                 &thread_state,
@@ -2116,7 +2121,6 @@ mod tests {
     use anyhow::Result;
     use anyhow::anyhow;
     use anyhow::bail;
-    use chrono::Utc;
     use atlas_engine_app_server_protocol::AutoReviewDecisionSource;
     use atlas_engine_app_server_protocol::GuardianApprovalReviewStatus;
     use atlas_engine_app_server_protocol::JSONRPCErrorError;
@@ -2159,6 +2163,7 @@ mod tests {
     use atlas_engine_utils_absolute_path::AbsolutePathBuf;
     use atlas_engine_utils_absolute_path::test_support::PathBufExt;
     use atlas_engine_utils_absolute_path::test_support::test_path_buf;
+    use chrono::Utc;
     use core_test_support::load_default_config_for_test;
     use pretty_assertions::assert_eq;
     use serde_json::json;
@@ -2455,7 +2460,9 @@ mod tests {
                 completed_at_ms: Some(1_042),
                 status: atlas_engine_protocol::protocol::GuardianAssessmentStatus::Denied,
                 risk_level: Some(atlas_engine_protocol::protocol::GuardianRiskLevel::High),
-                user_authorization: Some(atlas_engine_protocol::protocol::GuardianUserAuthorization::Low),
+                user_authorization: Some(
+                    atlas_engine_protocol::protocol::GuardianUserAuthorization::Low,
+                ),
                 rationale: Some("too risky".to_string()),
                 decision_source: Some(
                     atlas_engine_protocol::protocol::GuardianAssessmentDecisionSource::Agent,
@@ -3290,7 +3297,7 @@ mod tests {
                 message: "boom".to_string(),
                 atlas_engine_error_info: Some(V2AtlasEngineErrorInfo::InternalServerError),
                 additional_details: None,
-                retry_delay_ms: None
+                retry_delay_ms: None,
             },
             &thread_state,
         )
@@ -3690,7 +3697,7 @@ mod tests {
                 message: "oops".to_string(),
                 atlas_engine_error_info: None,
                 additional_details: None,
-                retry_delay_ms: None
+                retry_delay_ms: None,
             },
             &thread_state,
         )
@@ -3741,7 +3748,7 @@ mod tests {
                 message: "bad".to_string(),
                 atlas_engine_error_info: Some(V2AtlasEngineErrorInfo::Other),
                 additional_details: None,
-                retry_delay_ms: None
+                retry_delay_ms: None,
             },
             &thread_state,
         )
@@ -3777,7 +3784,7 @@ mod tests {
                         message: "bad".to_string(),
                         atlas_engine_error_info: Some(V2AtlasEngineErrorInfo::Other),
                         additional_details: None,
-                retry_delay_ms: None
+                        retry_delay_ms: None
                     })
                 );
                 assert_eq!(n.turn.completed_at, Some(TEST_TURN_COMPLETED_AT));
@@ -3990,7 +3997,7 @@ mod tests {
                 message: "a1".to_string(),
                 atlas_engine_error_info: Some(V2AtlasEngineErrorInfo::BadRequest),
                 additional_details: None,
-                retry_delay_ms: None
+                retry_delay_ms: None,
             },
             &thread_state,
         )
@@ -4012,7 +4019,7 @@ mod tests {
                 message: "b1".to_string(),
                 atlas_engine_error_info: None,
                 additional_details: None,
-                retry_delay_ms: None
+                retry_delay_ms: None,
             },
             &thread_state,
         )
@@ -4049,7 +4056,7 @@ mod tests {
                         message: "a1".to_string(),
                         atlas_engine_error_info: Some(V2AtlasEngineErrorInfo::BadRequest),
                         additional_details: None,
-                retry_delay_ms: None
+                        retry_delay_ms: None
                     })
                 );
             }
@@ -4068,7 +4075,7 @@ mod tests {
                         message: "b1".to_string(),
                         atlas_engine_error_info: None,
                         additional_details: None,
-                retry_delay_ms: None
+                        retry_delay_ms: None
                     })
                 );
             }

@@ -2,17 +2,20 @@ import { describe, expect, it } from "vitest";
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { readCrateMatrix } from "../scripts/ci-affected.mjs";
 
 /**
  * Keeps `.github/workflows/ci.yml` bound to what is actually in the repo.
  *
- * Each crate is a standalone package, so CI names them one by one in a matrix.
- * That list is hand-maintained, which means a PR adding a crate gets a green
- * check while its tests never run — the exact failure that left 393 of this
- * repo's tests (48%) unexecuted before this suite existed. Nothing else
- * notices, because a job that was never scheduled cannot go red.
+ * Each crate is a standalone package, so CI names them one by one in a matrix
+ * (`.github/ci-crates.json`, which the `changes` job filters into the
+ * `crates` job's matrix). That list is hand-maintained, which means a PR
+ * adding a crate gets a green check while its tests never run — the exact
+ * failure that left 393 of this repo's tests (48%) unexecuted before this
+ * suite existed. Nothing else notices, because a job that was never
+ * scheduled cannot go red.
  *
- * Parsed with a line regex rather than a YAML dependency: the file is small,
+ * The workflow is parsed with a line regex rather than a YAML dependency: the file is small,
  * it is ours, and the count assertions below make a silently-unmatching regex
  * fail loudly instead of passing vacuously.
  *
@@ -77,8 +80,9 @@ function stepsOf(job: string): Step[] {
 
 /** Crate names listed in the CI matrix. */
 function cratesInWorkflow(): string[] {
-  const src = readFileSync(WORKFLOW, "utf8");
-  return [...src.matchAll(/^\s*-\s*crate:\s*([a-z0-9_-]+)\s*$/gm)].map((m) => m[1]).sort();
+  return readCrateMatrix(REPO_ROOT)
+    .map((c) => c.crate)
+    .sort();
 }
 
 describe("CI covers the repository", () => {
@@ -97,7 +101,7 @@ describe("CI covers the repository", () => {
 
   it("runs the tests of every crate in the repository", () => {
     const uncovered = onDisk.filter((c) => !inWorkflow.includes(c));
-    // Add the crate to the `crates` matrix in .github/workflows/ci.yml.
+    // Add the crate to .github/ci-crates.json.
     expect(uncovered).toEqual([]);
   });
 
