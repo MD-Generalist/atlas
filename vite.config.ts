@@ -1,15 +1,31 @@
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import path from "path";
 
 const host = process.env.TAURI_DEV_HOST;
 
-export default defineConfig(async () => ({
-  plugins: [react(), tailwindcss()],
+// Dev-only fake backend (`src/dev/mock-backend/`). Injected as its own module
+// script ahead of `main.tsx`, so it is installed before any app module calls
+// `invoke()`. `apply: "serve"` keeps it out of every build; inside the Tauri
+// window it sees `isTauri` and does nothing.
+const mockBackend: Plugin = {
+  name: "atlas-mock-backend",
+  apply: "serve",
+  transformIndexHtml: () => [
+    {
+      tag: "script",
+      attrs: { type: "module", src: "/src/dev/mock-backend/install.ts" },
+      injectTo: "head",
+    },
+  ],
+};
+
+export default defineConfig(() => ({
+  plugins: [react(), tailwindcss(), mockBackend],
   resolve: {
     alias: {
-      "@": path.resolve(__dirname, "./src"),
+      "@": path.resolve(import.meta.dirname, "./src"),
       // Force the DOM-free build of `decode-named-character-reference`. Its
       // package `browser` condition points at `index.dom.js`, which calls
       // `document.createElement` at module scope. That module is a transitive
@@ -18,22 +34,24 @@ export default defineConfig(async () => ({
       // threw `ReferenceError: Can't find variable: document`, killed the
       // worker, and forced ALL markdown parsing onto the main thread (the
       // fallback in markdown-cache.tsx). That congested the main thread during
-      // agent streaming + workspace switches. `index.js` is a table-based,
+      // agent streaming + project switches. `index.js` is a table-based,
       // DOM-free build with identical output.
       "decode-named-character-reference": path.resolve(
-        __dirname,
+        import.meta.dirname,
         "node_modules/decode-named-character-reference/index.js",
       ),
     },
-    // CRITICAL: dedupe CodeMirror + Lezer. In production the lang packages
-    // (lang-json, lang-rust, …) get lazy-imported as separate chunks and
-    // each transitively imports @codemirror/{state,view,language} and
-    // @lezer/{common,highlight,lr}. Without dedup Rollup can ship two copies;
-    // `EditorView.theme(...)` registers against copy A's StyleModule but the
-    // EditorView constructor uses copy B's, so the theme silently no-ops and
-    // text renders with default styling (often invisible against the dark
-    // background). The dev server doesn't hit this because Vite serves
-    // pre-bundled deps as a single instance.
+    // Dedupe CodeMirror + Lezer. The lang packages (lang-json, lang-rust, …)
+    // are lazy-imported as separate chunks and each transitively imports
+    // @codemirror/{state,view,language} and @lezer/{common,highlight,lr};
+    // without dedup Rollup can ship two copies, and facets/extensions from
+    // one copy are invisible to an EditorView built from the other.
+    //
+    // NOTE (2026-09-06): "CodeMirror unstyled in production, fine in dev" was
+    // NOT this. It was the Tauri CSP: a nonce injected into index.html's
+    // inline <style> disables `style-src 'unsafe-inline'`, blocking every
+    // runtime-injected stylesheet. See the comment in index.html and
+    // `dangerousDisableAssetCspModification` in src-tauri/tauri.conf.json.
     dedupe: [
       "@codemirror/state",
       "@codemirror/view",
@@ -72,10 +90,11 @@ export default defineConfig(async () => ({
       "react-markdown",
       "remark-gfm",
       "rehype-highlight",
-      "@radix-ui/react-dropdown-menu",
-      "@radix-ui/react-popover",
-      "@radix-ui/react-dialog",
-      "@radix-ui/react-context-menu",
+      "@base-ui/react/menu",
+      "@base-ui/react/popover",
+      "@base-ui/react/dialog",
+      "@base-ui/react/context-menu",
+      "@base-ui/react/tooltip",
       // Pre-bundle the Tiptap stack so opening the Knowledge tab for
       // the first time doesn't trigger Vite's "new dependencies
       // optimized → reloading" cycle (which dumps editor state and
@@ -122,60 +141,171 @@ export default defineConfig(async () => ({
     // The worker is a separate ESM entry loaded via `?url`; pre-bundling it
     // would rewrite its imports and break worker instantiation.
     exclude: ["pdfjs-dist/build/pdf.worker.min.mjs"],
+    // Serve pre-bundled deps as soon as the scanner finishes instead of
+    // holding every request until the whole crawl ends. Only matters on a
+    // cold `node_modules/.vite` (first run, lockfile or config change).
+    holdUntilCrawlEnd: false,
   },
   build: {
+    // Skip gzipping all ~200 chunks just to print compressed sizes.
+    reportCompressedSize: false,
+    // Every chunk over Vite's 500 KB default is a lazy vendor group by design
+    // (pdf.worker 1.0 MB, mermaid, markdown, tiptap, xterm — see the groups
+    // below). The limit sits just above the largest so a NEW oversize chunk
+    // still warns.
+    chunkSizeWarningLimit: 1100,
     // Vendor splitting so the initial chunk only holds what first paint
     // needs (React + the chat panel). Heavy panel-specific vendors live in
     // their own chunks and load on demand when the user opens a tab that
     // pulls them in.
-    rollupOptions: {
+    //
+    // PORTED from `rollupOptions.output.manualChunks` (a Rollup if-chain) to
+    // Rolldown's `codeSplitting.groups` when Vite 8 made Rolldown the bundler.
+    // The function form still "works" under Rolldown's compat shim, but it does
+    // NOT preserve exclusivity: measured on this repo, `clsx` was claimed by
+    // `vendor-pdf` and React's CJS build by `vendor-markdown` despite rules
+    // assigning both elsewhere, which made the entry statically import ~1 MB of
+    // lazy-panel vendors (rolldown#7473). `priority` is what fixes it — a
+    // higher-priority group matches first and its modules are REMOVED from
+    // lower-priority groups. Ordering alone cannot express that.
+    //
+    // Numbers are spaced by 10 so a rule can be slotted between two others
+    // without renumbering the file.
+    rolldownOptions: {
+      checks: {
+        // Five stores are imported dynamically by one module and statically by
+        // others (project-store from chat-store, git-store from editor-panel,
+        // …). Those `import()`s are deliberate cycle-breakers for module
+        // evaluation order, not code-splitting requests, so Rolldown's "this
+        // dynamic import won't make a chunk" notice is correct and irrelevant.
+        ineffectiveDynamicImport: false,
+      },
       output: {
-        manualChunks: (id) => {
-          if (!id.includes("node_modules")) return undefined;
-          if (id.includes("@codemirror") || id.includes("@lezer")) {
-            return "vendor-codemirror";
-          }
-          if (id.includes("@xterm") || id.includes("/xterm/") || id.includes("/xterm-")) {
-            return "vendor-xterm";
-          }
-          if (
-            id.includes("react-markdown") ||
-            id.includes("remark-") ||
-            id.includes("rehype-") ||
-            id.includes("shiki") ||
-            id.includes("highlight.js")
-          ) {
-            return "vendor-markdown";
-          }
-          if (id.includes("@radix-ui")) {
-            return "vendor-radix";
-          }
-          if (id.includes("@tanstack")) {
-            return "vendor-tanstack";
-          }
-          if (id.includes("pdfjs-dist") || id.includes("react-pdf")) {
-            return "vendor-pdf";
-          }
-          if (id.includes("@tauri-apps")) {
-            return "vendor-tauri";
-          }
-          // Keep the heavy lazy-panel libs OUT of vendor-react. `@xyflow/react`
-          // (Canvas) and `@tiptap/react` (Knowledge) are only reached through
-          // lazy() panels, so they must land in their own lazy chunks — the old
-          // `/react/` substring match pulled them into the EAGER vendor-react
-          // chunk, loading ~500KB+ at startup and defeating those lazy boundaries.
-          if (id.includes("@xyflow")) return "vendor-xyflow";
-          if (id.includes("@tiptap")) return "vendor-tiptap";
-          // Exact package roots only — NOT a `/react/` substring (which matches
-          // @xyflow/react, @tiptap/react, react-markdown, …).
-          if (
-            id.includes("/node_modules/react/") ||
-            id.includes("/node_modules/react-dom/") ||
-            id.includes("/node_modules/scheduler/")
-          ) {
-            return "vendor-react";
-          }
-          return undefined;
+        codeSplitting: {
+          groups: [
+            // Tiny shared utils, highest priority. `cn()` (clsx +
+            // tailwind-merge) is used all over the eager boot path AND by
+            // react-pdf. Left to a lower priority, clsx gets folded into
+            // `vendor-pdf`, so the entry imports a 200-byte function from a
+            // 425 KB chunk and preloads all of pdfjs before first paint —
+            // silently defeating the lazy `PdfViewer` boundary in
+            // center-panel.tsx. `\0vite/preload-helper` (the `__vitePreload`
+            // runtime) rides along for the same reason: it is needed eagerly,
+            // and wherever it lands the entry must import that chunk.
+            {
+              name: "vendor-utils",
+              priority: 100,
+              test: (id) =>
+                !id.endsWith(".css") &&
+                (id.includes("/node_modules/clsx/") ||
+                  id.includes("/node_modules/tailwind-merge/") ||
+                  id.includes("vite/preload-helper")),
+            },
+            // Exact package roots only — NOT a `/react/` substring (which
+            // matches @xyflow/react, @tiptap/react, react-markdown, …). Above
+            // vendor-markdown deliberately: react-markdown pulls React in, and
+            // at equal priority React's CJS build lands in `vendor-markdown`.
+            {
+              name: "vendor-react",
+              priority: 90,
+              test: (id) =>
+                !id.endsWith(".css") &&
+                (id.includes("/node_modules/react/") ||
+                  id.includes("/node_modules/react-dom/") ||
+                  id.includes("/node_modules/scheduler/")),
+            },
+            // `@codemirror/lang-*` is deliberately absent from every group, so
+            // each grammar keeps its own chunk. They are dynamically imported
+            // per-language in editor/lib/languages.ts; capturing them here
+            // collapses all 13 lazy boundaries into one chunk, so opening a
+            // JSON file would load every grammar. `@lezer/{common,highlight,lr}`
+            // are core runtime, not grammars, and stay with the editor chunk.
+            {
+              name: "vendor-codemirror",
+              priority: 80,
+              test: (id) =>
+                !id.endsWith(".css") &&
+                !id.includes("@codemirror/lang-") &&
+                (id.includes("@codemirror") ||
+                  /@lezer\/(common|highlight|lr)\//.test(id)),
+            },
+            {
+              name: "vendor-xterm",
+              priority: 70,
+              test: (id) =>
+                !id.endsWith(".css") &&
+                (id.includes("@xterm") || id.includes("/xterm/") || id.includes("/xterm-")),
+            },
+            // Never route a STYLESHEET into a vendor JS chunk (every `test`
+            // here guards `.css` for this reason). `highlight.js/styles/
+            // github-dark.css` matched this rule once, which made the entry
+            // emit a bare `import "./vendor-markdown.js"` purely to attach that
+            // CSS — 554 KB of JS parsed before first paint for a theme file.
+            {
+              name: "vendor-markdown",
+              priority: 60,
+              // The `node_modules` guard is not decoration: these are substring
+              // tests, and `remark-`/`rehype-` are ordinary words to name a
+              // plugin after. `features/comms/lib/remark-comms-inline.ts`
+              // matched `remark-`, which pulled app source — and everything it
+              // imported, including the comms type module — into this vendor
+              // chunk, so the eagerly-loaded comms panel statically imported
+              // 560 KB of markdown it was carefully arranged to lazy-load.
+              test: (id) =>
+                !id.endsWith(".css") &&
+                id.includes("node_modules") &&
+                (id.includes("react-markdown") ||
+                  id.includes("remark-") ||
+                  id.includes("rehype-") ||
+                  id.includes("shiki") ||
+                  id.includes("highlight.js")),
+            },
+            {
+              name: "vendor-base-ui",
+              priority: 50,
+              test: (id) => !id.endsWith(".css") && id.includes("@base-ui"),
+            },
+            {
+              name: "vendor-tanstack",
+              priority: 40,
+              test: (id) => !id.endsWith(".css") && id.includes("@tanstack"),
+            },
+            {
+              name: "vendor-pdf",
+              priority: 30,
+              test: (id) =>
+                !id.endsWith(".css") &&
+                (id.includes("pdfjs-dist") || id.includes("react-pdf")),
+            },
+            {
+              name: "vendor-tauri",
+              priority: 20,
+              test: (id) => !id.endsWith(".css") && id.includes("@tauri-apps"),
+            },
+            // posthog-js is loaded with a dynamic import after the telemetry
+            // config IPC (see posthog-client.ts); a named group keeps it a
+            // recognisable lazy chunk instead of an anonymous hash.
+            {
+              name: "vendor-posthog",
+              priority: 20,
+              test: (id) => !id.endsWith(".css") && id.includes("/node_modules/posthog-js/"),
+            },
+            // Keep the heavy lazy-panel libs OUT of vendor-react. `@xyflow/react`
+            // (Canvas) and `@tiptap/react` (Knowledge) are only reached through
+            // lazy() panels, so they must land in their own lazy chunks — an
+            // earlier `/react/` substring match pulled them into the EAGER
+            // vendor-react chunk, loading ~500KB+ at startup.
+            {
+              name: "vendor-xyflow",
+              priority: 10,
+              test: (id) => !id.endsWith(".css") && id.includes("@xyflow"),
+            },
+            {
+              name: "vendor-tiptap",
+              priority: 10,
+              test: (id) => !id.endsWith(".css") && id.includes("@tiptap"),
+            },
+          ],
         },
       },
     },
@@ -196,7 +326,7 @@ export default defineConfig(async () => ({
       // Vite's module graph; everything else in the repo is Rust, scripts,
       // docs or build output. Without ignoring them, editing ANY such file
       // while dogfooding Atlas on its own repo (e.g. tweaking `bump.sh` to
-      // watch the workspace git +/- update) makes Vite bounce the whole page.
+      // watch the project git +/- update) makes Vite bounce the whole page.
       ignored: [
         "**/src-tauri/**",
         "**/crates/**",
@@ -225,8 +355,9 @@ export default defineConfig(async () => ({
         "./src/features/layout/components/left-panel.tsx",
         "./src/features/layout/components/right-panel.tsx",
         "./src/features/layout/stores/layout-store.ts",
-        "./src/features/project/stores/project-store.ts",
-        "./src/features/project/components/welcome-screen.tsx",
+        "./src/features/app/stores/app-store.ts",
+        "./src/features/app/components/welcome-screen.tsx",
+        "./src/features/projects/stores/project-store.ts",
         "./src/features/chat/components/chat-panel.tsx",
         "./src/features/chat/components/message-input.tsx",
         "./src/features/chat/stores/chat-store.ts",

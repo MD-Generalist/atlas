@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { RailGlyph } from "@/ui/animated-icon";
+import { useScopedHotkeys } from "@/features/keybindings/lib/use-scoped-hotkeys";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { Hint } from "@/ui/tooltip";
+import { HintGroup, HintItem } from "@/ui/hint-group";
 import { useKnowledgeStore } from "../stores/knowledge-store";
 import { useKnowledgeMetaStore, usePageMeta } from "../stores/knowledge-meta-store";
 import {
@@ -9,10 +13,11 @@ import {
   useBacklinks,
   useReferencesLabel,
 } from "../stores/knowledge-links-store";
-import { useProjectStore } from "@/features/project/stores/project-store";
+import { useAppStore } from "@/features/app/stores/app-store";
 import { useLayoutStore } from "@/features/layout/stores/layout-store";
-import { useWorkspaceStore } from "@/features/workspaces/stores/workspace-store";
-import { registerFlush } from "@/features/workspaces/lib/flush-registry";
+import { openFile } from "@/lib/open-file";
+import { useProjectStore } from "@/features/projects/stores/project-store";
+import { registerFlush } from "@/features/projects/lib/flush-registry";
 import {
   TiptapEditor,
   type TiptapEditorHandle,
@@ -33,17 +38,14 @@ import { KnowledgeInspector } from "./knowledge-inspector";
 import { PageProperties } from "./page-properties";
 import { IconPicker } from "./icon-picker";
 import { CoverPicker, gradientCss } from "./cover-picker";
-import {
-  Copy,
-  ExternalLink,
-  GitBranch,
-  PanelLeft,
-  PanelRight,
-} from "lucide-react";
+import { coverCacheKey, getCachedCoverUrl, putCachedCoverUrl } from "../lib/cover-url-cache";
+import { Copy, ExternalLink, GitBranch, PanelRight } from "lucide-react";
 
 const RECENTS_MAX = 5;
 
-export function KnowledgePanel() {
+/** `tabId` scopes the panel's shortcuts to its own tab — it stays mounted
+ *  while hidden (a persistent tab type), so it must not answer ⌘S elsewhere. */
+export function KnowledgePanel({ tabId }: { tabId?: string }) {
   const entries = useKnowledgeStore.use.entries();
   const activeEntryId = useKnowledgeStore.use.activeEntryId();
   const editContent = useKnowledgeStore.use.editContent();
@@ -58,7 +60,7 @@ export function KnowledgePanel() {
     deleteEntry,
     createDir,
   } = useKnowledgeStore.use.actions();
-  const currentProject = useProjectStore.use.currentProject();
+  const currentProject = useAppStore.use.currentProject();
 
   const editorRef = useRef<TiptapEditorHandle>(null);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -88,10 +90,7 @@ export function KnowledgePanel() {
   // the panel border; mousedown captures pointer + listens for global
   // mousemove until release. `from` is the side being resized.
   const startResize = useCallback(
-    (
-      e: React.MouseEvent,
-      from: "sidebar" | "inspector",
-    ) => {
+    (e: React.MouseEvent, from: "sidebar" | "inspector") => {
       e.preventDefault();
       const startX = e.clientX;
       const startW = from === "sidebar" ? sidebarWidth : inspectorWidth;
@@ -138,8 +137,11 @@ export function KnowledgePanel() {
     clearDocCache();
   }, [currentProject?.path]);
 
-  const { bind: bindMeta, unbind: unbindMeta, drop: dropMeta } =
-    useKnowledgeMetaStore.use.actions();
+  const {
+    bind: bindMeta,
+    unbind: unbindMeta,
+    drop: dropMeta,
+  } = useKnowledgeMetaStore.use.actions();
   const {
     bind: bindLinks,
     unbind: unbindLinks,
@@ -180,11 +182,11 @@ export function KnowledgePanel() {
 
   const flushAndSave = useCallback(async () => {
     if (!currentProject || !editorRef.current) return;
-    // Capture the (workspace path, note id) this content belongs to BEFORE the
-    // async flush. The KB panel is resident across workspace switches, so a
+    // Capture the (project path, note id) this content belongs to BEFORE the
+    // async flush. The KB panel is resident across project switches, so a
     // switch (or note change) can land mid-flush; binding the triple here and
-    // re-checking it after lets us abort rather than write one workspace's
-    // content into another's file (the cross-workspace data-loss bug).
+    // re-checking it after lets us abort rather than write one project's
+    // content into another's file (the cross-project data-loss bug).
     const proj = currentProject.path;
     const id = useKnowledgeStore.getState().activeEntryId;
     if (!id) return;
@@ -196,8 +198,8 @@ export function KnowledgePanel() {
     if (!editorRef.current.isDirty()) return;
     const md = await editorRef.current.flush();
     if (md === null) return;
-    // Workspace switched or the active note changed while flushing → abort.
-    const live = useProjectStore.getState().currentProject;
+    // Project switched or the active note changed while flushing → abort.
+    const live = useAppStore.getState().currentProject;
     if (!live || live.path !== proj) return;
     if (useKnowledgeStore.getState().activeEntryId !== id) return;
     setEditContent(md);
@@ -209,11 +211,11 @@ export function KnowledgePanel() {
     void invalidateLinks();
   }, [currentProject, setEditContent, saveEntry, invalidateLinks]);
 
-  // Coordinate with workspace switching: the switch awaits `flushAll()` BEFORE
-  // it snapshots/swaps the active workspace, so register a flush that writes the
-  // editor's current buffer to the OUTGOING workspace (`ctx.path`) — not the
+  // Coordinate with project switching: the switch awaits `flushAll()` BEFORE
+  // it snapshots/swaps the active project, so register a flush that writes the
+  // editor's current buffer to the OUTGOING project (`ctx.path`) — not the
   // resident React `currentProject`, which may already have flipped. This is
-  // what guarantees a note saved in workspace A is persisted to A's file before
+  // what guarantees a note saved in project A is persisted to A's file before
   // we leave it, closing the window where a stale save could clobber it.
   useEffect(() => {
     return registerFlush("knowledge", async (ctx) => {
@@ -230,7 +232,7 @@ export function KnowledgePanel() {
   // away from the KB tab) so unsaved edits are never stranded. These are
   // boundary flushes, not a timer — autosave was removed (it caused stale,
   // racey writes); saves happen on Cmd+S, note switch, blur, unmount, and
-  // workspace switch, each gated on the editor's live dirty ref.
+  // project switch, each gated on the editor's live dirty ref.
   useEffect(() => {
     const onBlur = () => void flushAndSave();
     window.addEventListener("blur", onBlur);
@@ -243,41 +245,15 @@ export function KnowledgePanel() {
   // Cmd+; / Cmd+' — toggle KB sidebar / inspector. Picked over the old
   // Cmd+{ / Cmd+} bindings because those conflicted with the global
   // Cmd+Shift+[ / Cmd+Shift+] tab-cycle shortcut.
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (!(e.metaKey || e.ctrlKey)) return;
-      if (e.shiftKey || e.altKey) return;
-      if (e.key === ";") {
-        e.preventDefault();
-        toggleKnowledgeSidebar();
-      } else if (e.key === "'") {
-        e.preventDefault();
-        toggleKnowledgeInspector();
-      }
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [toggleKnowledgeSidebar, toggleKnowledgeInspector]);
-
-  // Cmd+F — open the KB finder, but only when focus is inside this KB panel
-  // (so it doesn't hijack the shortcut for other tabs / the app).
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key === "f") {
-        if (!rootRef.current?.contains(document.activeElement)) return;
-        e.preventDefault();
-        setFinderOpen(true);
-      }
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, []);
-
-  // Cmd+S
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "s") {
-        e.preventDefault();
+  // Bubble phase (not capture) on purpose: a focused terminal with 2+ tabs
+  // claims ⌘;/⌘' in the capture phase first, and declines them otherwise.
+  useScopedHotkeys({
+    capture: false,
+    tabId,
+    handlers: {
+      "kb.toggleSidebar": () => toggleKnowledgeSidebar(),
+      "kb.toggleInspector": () => toggleKnowledgeInspector(),
+      "kb.save": () => {
         // Force-blur the active element first. The page-header title
         // input commits its draft to `_meta.json` on blur — without
         // this, Cmd+S while typing in the title saves the body but
@@ -292,23 +268,25 @@ export function KnowledgePanel() {
         if (currentProject) {
           void flushAndSave();
         }
-      }
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [currentProject, flushAndSave]);
+      },
+    },
+  });
+
+  // Find — only while this KB tab is the focused one (so it doesn't hijack
+  // the shortcut for other tabs / the app).
+  useScopedHotkeys({
+    rootRef,
+    ...(tabId !== undefined ? { tabId } : { requireFocusWithin: true }),
+    capture: false,
+    handlers: {
+      "kb.focusFinder": () => setFinderOpen(true),
+    },
+  });
 
   // Open a non-note file (image, code) in the CodeMirror editor rather than the
   // KB note editor.
   const openInCodeMirror = useCallback((filePath: string) => {
-    useLayoutStore.getState().actions.addTab({
-      id: `editor-${filePath}`,
-      type: "editor",
-      title: filePath.split("/").pop() ?? "file",
-      closable: true,
-      dirty: false,
-      data: { filePath },
-    });
+    void openFile(filePath);
   }, []);
 
   // Import external .md files (Obsidian-style). .md → KB notes; any non-.md
@@ -351,7 +329,9 @@ export function KnowledgePanel() {
       await loadEntries(currentProject.path);
       toast.success(
         `Imported ${res.notes_imported} note${res.notes_imported === 1 ? "" : "s"}` +
-          (res.files_copied ? ` + ${res.files_copied} file${res.files_copied === 1 ? "" : "s"}` : ""),
+          (res.files_copied
+            ? ` + ${res.files_copied} file${res.files_copied === 1 ? "" : "s"}`
+            : ""),
       );
     } catch (e) {
       toast.error(`Import failed: ${e instanceof Error ? e.message : String(e)}`);
@@ -483,7 +463,7 @@ export function KnowledgePanel() {
 
   if (!currentProject) {
     return (
-      <div className="h-full flex items-center justify-center text-text-tertiary text-sm">
+      <div className="h-full flex items-center justify-center text-muted-foreground text-sm">
         Open a project first
       </div>
     );
@@ -507,7 +487,11 @@ export function KnowledgePanel() {
   );
 
   return (
-    <div ref={rootRef} className="relative h-full flex" style={{ background: "var(--bg-canvas)" }}>
+    <div
+      ref={rootRef}
+      className="relative h-full flex"
+      style={{ background: "var(--atlas-panel-background)" }}
+    >
       {finderOpen && (
         <KnowledgeFinder
           entries={sidebarEntries}
@@ -554,23 +538,19 @@ export function KnowledgePanel() {
           {/* 4px col-resize hit area; invisible until hover. */}
           <div
             onMouseDown={(e) => startResize(e, "sidebar")}
-            className="shrink-0 cursor-col-resize hover:bg-border-focus/60 transition-colors"
-            style={{ width: 4, marginLeft: -2, marginRight: -2, zIndex: 5 }}
+            className="shrink-0 cursor-col-resize hover:bg-border-strong/60 transition-colors z-panel"
+            style={{ width: 4, marginLeft: -2, marginRight: -2 }}
           />
         </>
       )}
 
       {/* Main */}
-      <main
-        className="flex-1 flex flex-col min-w-0"
-        style={{ background: "var(--bg-base)" }}
-      >
+      <main className="flex-1 flex flex-col min-w-0" style={{ background: "var(--background)" }}>
         {activeRepoName ? (
           <>
             <RepoTopbar
               name={
-                clonedRepos.find((r) => r.name === activeRepoName)?.display_name ??
-                activeRepoName
+                clonedRepos.find((r) => r.name === activeRepoName)?.display_name ?? activeRepoName
               }
               path={clonedRepos.find((r) => r.name === activeRepoName)?.path ?? ""}
               onToggleSidebar={toggleKnowledgeSidebar}
@@ -612,7 +592,7 @@ export function KnowledgePanel() {
                 this parent. */}
             <div
               className="flex-1 min-h-0 overflow-y-auto"
-              style={{ background: "var(--bg-base)" }}
+              style={{ background: "var(--background)" }}
             >
               <div
                 style={{
@@ -650,8 +630,8 @@ export function KnowledgePanel() {
                     style={{
                       marginTop: 32,
                       padding: "14px 16px",
-                      background: "var(--bg-elevated-2)",
-                      border: "1px solid var(--border-subtle)",
+                      background: "var(--card)",
+                      border: "1px solid var(--atlas-border-subtle)",
                       borderRadius: 10,
                     }}
                   >
@@ -682,22 +662,22 @@ export function KnowledgePanel() {
                           style={{
                             padding: "8px 10px",
                             borderRadius: 7,
-                            background: "var(--bg-base)",
-                            border: "1px solid var(--border-subtle)",
+                            background: "var(--background)",
+                            border: "1px solid var(--atlas-border-subtle)",
                             textAlign: "left",
                             cursor: "pointer",
                           }}
                           onMouseEnter={(e) => {
-                            e.currentTarget.style.background = "var(--bg-hover)";
+                            e.currentTarget.style.background = "var(--atlas-element-hover)";
                           }}
                           onMouseLeave={(e) => {
-                            e.currentTarget.style.background = "var(--bg-base)";
+                            e.currentTarget.style.background = "var(--background)";
                           }}
                         >
                           <div
+                            className="text-sm"
                             style={{
-                              fontSize: 12,
-                              color: "var(--text-primary)",
+                              color: "var(--foreground)",
                               fontWeight: 500,
                               marginBottom: 4,
                               overflow: "hidden",
@@ -708,9 +688,9 @@ export function KnowledgePanel() {
                             {b.fromTitle}
                           </div>
                           <div
+                            className="text-sm"
                             style={{
-                              fontSize: 11.5,
-                              color: "var(--text-tertiary)",
+                              color: "var(--muted-foreground)",
                               lineHeight: 1.5,
                               display: "-webkit-box",
                               WebkitLineClamp: 2,
@@ -735,7 +715,7 @@ export function KnowledgePanel() {
             />
           </>
         ) : (
-          <div className="h-full flex items-center justify-center text-text-tertiary text-sm">
+          <div className="h-full flex items-center justify-center text-muted-foreground text-sm">
             Select or create a note
           </div>
         )}
@@ -745,8 +725,8 @@ export function KnowledgePanel() {
         <>
           <div
             onMouseDown={(e) => startResize(e, "inspector")}
-            className="shrink-0 cursor-col-resize hover:bg-border-focus/60 transition-colors"
-            style={{ width: 4, marginLeft: -2, marginRight: -2, zIndex: 5 }}
+            className="shrink-0 cursor-col-resize hover:bg-border-strong/60 transition-colors z-panel"
+            style={{ width: 4, marginLeft: -2, marginRight: -2 }}
           />
           <KnowledgeInspector
             outline={outline.map((h) => ({ id: h.id, label: h.label, level: h.level }))}
@@ -820,15 +800,29 @@ function PageHeaderWithIcon({
   // Fetch the image as a base64 `data:` URL instead — it embeds the bytes
   // directly, so the cover renders identically in dev and bundled builds
   // without depending on the asset protocol or its scope globs.
-  const [coverUrl, setCoverUrl] = useState<string | null>(null);
+  //
+  // Cached per cover ref (see cover-url-cache) so page switches between
+  // covered pages don't re-read + re-encode + re-ship the image over IPC —
+  // that was a visible loading flash plus a main-thread parse hitch per
+  // navigation. Upload evicts (the ref is entry-id-stable, not per-upload).
+  const cacheKey = cover ? coverCacheKey(projectPath, cover) : null;
+  const [coverUrl, setCoverUrl] = useState<string | null>(() =>
+    cacheKey ? getCachedCoverUrl(cacheKey) : null,
+  );
   useEffect(() => {
-    if (!cover || isGradientCover) {
+    if (!cover || !cacheKey || isGradientCover) {
       setCoverUrl(null);
+      return;
+    }
+    const cached = getCachedCoverUrl(cacheKey);
+    if (cached) {
+      setCoverUrl(cached);
       return;
     }
     let alive = true;
     void invoke<string>("knowledge_cover_data_url", { projectPath, cover })
       .then((url) => {
+        putCachedCoverUrl(cacheKey, url);
         if (alive) setCoverUrl(url);
       })
       .catch(() => {
@@ -837,7 +831,7 @@ function PageHeaderWithIcon({
     return () => {
       alive = false;
     };
-  }, [cover, isGradientCover, projectPath]);
+  }, [cover, cacheKey, isGradientCover, projectPath]);
 
   return (
     <div style={{ marginBottom: 14 }}>
@@ -853,13 +847,11 @@ function PageHeaderWithIcon({
           style={{
             height: 180,
             borderRadius: 10,
-            border: "1px solid var(--border-subtle)",
+            border: "1px solid var(--atlas-border-subtle)",
             margin: "0 0 14px",
             background:
               gradient ??
-              (coverUrl
-                ? `center / cover no-repeat url("${coverUrl}")`
-                : "var(--bg-elevated)"),
+              (coverUrl ? `center / cover no-repeat url("${coverUrl}")` : "var(--card)"),
             position: "relative",
             cursor: "pointer",
           }}
@@ -869,11 +861,11 @@ function PageHeaderWithIcon({
       ) : null}
 
       <div
+        className="text-sm"
         style={{
           display: "flex",
           gap: 12,
-          color: "var(--text-muted)",
-          fontSize: 11.5,
+          color: "var(--muted-foreground)",
           opacity: 0.85,
           marginBottom: 4,
         }}
@@ -882,16 +874,16 @@ function PageHeaderWithIcon({
           <button
             type="button"
             onClick={(e) => setCoverAnchor(e.currentTarget.getBoundingClientRect())}
+            className="text-sm"
             style={{
               background: "transparent",
               border: 0,
               padding: 0,
-              color: "var(--text-muted)",
+              color: "var(--muted-foreground)",
               cursor: "pointer",
               display: "inline-flex",
               alignItems: "center",
               gap: 5,
-              fontSize: 11.5,
             }}
           >
             Add cover
@@ -900,26 +892,27 @@ function PageHeaderWithIcon({
       </div>
 
       <div className="flex items-start" style={{ gap: 14, marginTop: 10 }}>
-        <button
-          title="Change icon"
-          onClick={(e) => setIconAnchor(e.currentTarget.getBoundingClientRect())}
-          style={{
-            width: 44,
-            height: 44,
-            borderRadius: 9,
-            background: "var(--bg-elevated-2)",
-            border: "1px solid var(--border-subtle)",
-            fontSize: 24,
-            lineHeight: 1,
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            flex: "none",
-            cursor: "pointer",
-          }}
-        >
-          {icon}
-        </button>
+        <Hint label="Change icon">
+          <button
+            onClick={(e) => setIconAnchor(e.currentTarget.getBoundingClientRect())}
+            className="text-2xl"
+            style={{
+              width: 44,
+              height: 44,
+              borderRadius: 9,
+              background: "var(--card)",
+              border: "1px solid var(--atlas-border-subtle)",
+              lineHeight: 1,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              flex: "none",
+              cursor: "pointer",
+            }}
+          >
+            {icon}
+          </button>
+        </Hint>
         <div className="flex-1 min-w-0">
           <input
             value={titleDraft}
@@ -936,16 +929,16 @@ function PageHeaderWithIcon({
                 (e.currentTarget as HTMLInputElement).blur();
               }
             }}
+            className="text-2xl"
             style={{
               display: "block",
               width: "100%",
-              fontSize: 28,
               lineHeight: 1.15,
               margin: "2px 0 0",
               letterSpacing: "-0.03em",
-              color: "var(--text-primary)",
+              color: "var(--foreground)",
               fontWeight: 600,
-              fontFamily: "var(--font-display)",
+              fontFamily: "var(--font-sans)",
               background: "transparent",
               border: 0,
               padding: 0,
@@ -993,63 +986,65 @@ function RepoTopbar({
   return (
     <div
       className="flex items-center shrink-0 border-b border-border-subtle"
-      style={{ height: 36, gap: 8, padding: "0 14px", background: "var(--bg-canvas)" }}
+      style={{ height: 36, gap: 8, padding: "0 14px", background: "var(--atlas-panel-background)" }}
     >
       {onToggleSidebar && (
-        <button
-          onClick={onToggleSidebar}
-          className="p-1 rounded text-text-tertiary hover:bg-bg-hover hover:text-text-secondary transition-colors"
-          title={sidebarHidden ? "Show sidebar" : "Hide sidebar"}
-          style={{ width: 22, height: 22, marginLeft: -6 }}
-        >
-          <PanelLeft size={12} />
-        </button>
+        <Hint label={sidebarHidden ? "Show sidebar" : "Hide sidebar"}>
+          <button
+            onClick={onToggleSidebar}
+            className="p-1 rounded text-muted-foreground hover:bg-element-hover hover:text-secondary-foreground transition-colors"
+            style={{ width: 22, height: 22, marginLeft: -6 }}
+          >
+            <RailGlyph open={!sidebarHidden} size="sm" />
+          </button>
+        </Hint>
       )}
-      <GitBranch size={12} className="text-text-tertiary shrink-0" />
-      <span
-        className="font-mono text-text-secondary truncate flex-1 min-w-0"
-        style={{ fontSize: 12 }}
-      >
+      <GitBranch size={12} className="text-muted-foreground shrink-0" />
+      <span className="font-mono text-secondary-foreground truncate flex-1 min-w-0 text-sm">
         {name}
       </span>
-      <span className="pill pill-bare" style={{ height: 18, fontSize: 9.5, padding: "0 6px" }}>
+      <span className="pill pill-bare text-2xs" style={{ height: 18, padding: "0 6px" }}>
         REPO
       </span>
-      <button
-        onClick={() => navigator.clipboard.writeText(path)}
-        className="p-1 rounded text-text-tertiary hover:bg-bg-hover hover:text-text-secondary transition-colors cursor-pointer"
-        title="Copy path"
-        style={{ width: 22, height: 22 }}
-      >
-        <Copy size={11} />
-      </button>
-      <button
-        onClick={onToggleInspector}
-        className="p-1 rounded text-text-tertiary hover:bg-bg-hover hover:text-text-secondary transition-colors"
-        title="Toggle inspector"
-        style={{ width: 22, height: 22 }}
-      >
-        <PanelRight size={12} />
-      </button>
+      <HintGroup>
+        <HintItem label="Copy path">
+          <button
+            onClick={() => navigator.clipboard.writeText(path)}
+            className="p-1 rounded text-muted-foreground hover:bg-element-hover hover:text-secondary-foreground transition-colors cursor-pointer"
+            style={{ width: 22, height: 22 }}
+          >
+            <Copy size={11} />
+          </button>
+        </HintItem>
+        <HintItem label="Toggle inspector">
+          <button
+            onClick={onToggleInspector}
+            className="p-1 rounded text-muted-foreground hover:bg-element-hover hover:text-secondary-foreground transition-colors"
+            style={{ width: 22, height: 22 }}
+          >
+            <PanelRight size={12} />
+          </button>
+        </HintItem>
+      </HintGroup>
     </div>
   );
 }
 
 function RepoEmpty({ path }: { path: string }) {
-  // Open this repo as a workspace in the current window (Atlas is
+  // Open this repo as a project in the current window (Atlas is
   // single-window now — was: spawn a new native window).
   const open = () => {
-    void useWorkspaceStore.getState().actions.addWorkspace(path);
+    void useProjectStore.getState().actions.addProject(path);
   };
   return (
-    <div className="h-full flex flex-col items-center justify-center gap-3 text-text-tertiary">
-      <p className="text-[12px]">No README.md found</p>
+    <div className="h-full flex flex-col items-center justify-center gap-3 text-muted-foreground">
+      <p className="text-sm">No README.md found</p>
       <div className="flex items-center gap-2">
         <button
           onClick={open}
           className={cn(
-            "flex items-center gap-1 px-2 py-1 rounded border border-border-default",
-            "text-[10px] text-text-secondary hover:bg-bg-hover cursor-pointer",
+            "flex items-center gap-1 px-2 py-1 rounded border border-border",
+            "text-2xs text-secondary-foreground hover:bg-element-hover cursor-pointer",
           )}
         >
           <ExternalLink size={10} /> Open in new window
@@ -1057,8 +1052,8 @@ function RepoEmpty({ path }: { path: string }) {
         <button
           onClick={() => navigator.clipboard.writeText(path)}
           className={cn(
-            "flex items-center gap-1 px-2 py-1 rounded border border-border-default",
-            "text-[10px] text-text-secondary hover:bg-bg-hover cursor-pointer",
+            "flex items-center gap-1 px-2 py-1 rounded border border-border",
+            "text-2xs text-secondary-foreground hover:bg-element-hover cursor-pointer",
           )}
         >
           <Copy size={10} /> Copy path
@@ -1067,4 +1062,3 @@ function RepoEmpty({ path }: { path: string }) {
     </div>
   );
 }
-

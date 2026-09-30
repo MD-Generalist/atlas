@@ -6,11 +6,11 @@ import {
   RectangleHorizontal,
   Circle,
   Diamond,
-  Sparkles,
   Undo2,
   Redo2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Hint } from "@/ui/tooltip";
 import type { CanvasTool } from "../stores/canvas-store";
 
 interface ToolDef {
@@ -23,7 +23,6 @@ interface ToolDef {
 // pan, click selects) is always active; create-tools auto-revert to it. Connect
 // nodes by dragging between their edge handles (no tool needed).
 const TOOLS: ToolDef[] = [
-  { tool: "ai", icon: Sparkles, label: "Ask AI — click the canvas to generate a diagram" },
   { tool: "note", icon: StickyNote, label: "Note" },
   { tool: "text", icon: Type, label: "Text" },
 ];
@@ -40,6 +39,9 @@ const SHAPES: ToolDef[] = [
  * Floating Miro-style vertical tool palette. Presentational: create-logic lives
  * in the canvas panel. `note`/`text`/`connector` arm a tool (placed on next pane
  * click); media opens a file dialog immediately via `onInsertMedia`.
+ *
+ * Each control has its own `Hint`, opening rightward: `HintGroup` only slides
+ * horizontally, so it does not fit a vertical palette.
  */
 export function CanvasToolbar({
   activeTool,
@@ -61,49 +63,62 @@ export function CanvasToolbar({
   return (
     <div
       className={cn(
-        "absolute left-3 top-1/2 -translate-y-1/2 z-40 flex flex-col items-center gap-1 p-1",
-        "rounded-xl border border-white/10 bg-[var(--bg-secondary)]/70 backdrop-blur-2xl shadow-[var(--shadow-overlay)]",
+        "absolute left-3 top-1/2 -translate-y-1/2 z-panel flex flex-col items-center gap-1 p-1",
+        "rounded-xl border border-border-subtle bg-[var(--card)]/70 backdrop-blur-2xl shadow-md",
       )}
     >
       {TOOLS.map((t) => (
-        <ToolButton key={t.tool} def={t} active={activeTool === t.tool} onClick={() => onTool(t.tool)} />
+        <ToolButton
+          key={t.tool}
+          def={t}
+          active={activeTool === t.tool}
+          onClick={() => onTool(t.tool)}
+        />
       ))}
 
-      <div className="my-0.5 h-px w-5 bg-white/10" />
+      <div className="my-0.5 h-px w-5 bg-border-subtle" />
 
       {SHAPES.map((t) => (
-        <ToolButton key={t.tool} def={t} active={activeTool === t.tool} onClick={() => onTool(t.tool)} />
+        <ToolButton
+          key={t.tool}
+          def={t}
+          active={activeTool === t.tool}
+          onClick={() => onTool(t.tool)}
+        />
       ))}
 
-      <div className="my-0.5 h-px w-5 bg-white/10" />
-      <button
-        type="button"
-        title="Insert image"
-        onClick={onInsertMedia}
-        className="flex h-8 w-8 items-center justify-center rounded-lg text-text-secondary hover:bg-bg-hover hover:text-text-primary transition-colors cursor-pointer"
-      >
-        <ImageIcon size={16} />
-      </button>
+      <div className="my-0.5 h-px w-5 bg-border-subtle" />
+      <Hint label="Insert image" side="right">
+        <button
+          type="button"
+          onClick={onInsertMedia}
+          className="flex h-8 w-8 items-center justify-center rounded-lg text-secondary-foreground hover:bg-element-hover hover:text-foreground transition-colors cursor-pointer"
+        >
+          <ImageIcon size={16} />
+        </button>
+      </Hint>
 
-      <div className="my-0.5 h-px w-5 bg-white/10" />
-      <button
-        type="button"
-        title="Undo (⌘Z)"
-        onClick={onUndo}
-        disabled={!canUndo}
-        className="flex h-8 w-8 items-center justify-center rounded-lg text-text-secondary hover:bg-bg-hover hover:text-text-primary transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
-      >
-        <Undo2 size={16} />
-      </button>
-      <button
-        type="button"
-        title="Redo (⌘⇧Z)"
-        onClick={onRedo}
-        disabled={!canRedo}
-        className="flex h-8 w-8 items-center justify-center rounded-lg text-text-secondary hover:bg-bg-hover hover:text-text-primary transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
-      >
-        <Redo2 size={16} />
-      </button>
+      <div className="my-0.5 h-px w-5 bg-border-subtle" />
+      <Hint label="Undo" shortcut="⌘Z" side="right">
+        <button
+          type="button"
+          onClick={onUndo}
+          disabled={!canUndo}
+          className="flex h-8 w-8 items-center justify-center rounded-lg text-secondary-foreground hover:bg-element-hover hover:text-foreground transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+        >
+          <Undo2 size={16} />
+        </button>
+      </Hint>
+      <Hint label="Redo" shortcut="⌘⇧Z" side="right">
+        <button
+          type="button"
+          onClick={onRedo}
+          disabled={!canRedo}
+          className="flex h-8 w-8 items-center justify-center rounded-lg text-secondary-foreground hover:bg-element-hover hover:text-foreground transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+        >
+          <Redo2 size={16} />
+        </button>
+      </Hint>
     </div>
   );
 }
@@ -118,18 +133,19 @@ function ToolButton({
   onClick: () => void;
 }) {
   return (
-    <button
-      type="button"
-      title={def.label}
-      onClick={onClick}
-      className={cn(
-        "flex h-8 w-8 items-center justify-center rounded-lg transition-colors cursor-pointer",
-        active
-          ? "bg-[var(--accent-primary)]/20 text-[var(--text-primary)]"
-          : "text-text-secondary hover:bg-bg-hover hover:text-text-primary",
-      )}
-    >
-      <def.icon size={16} />
-    </button>
+    <Hint label={def.label} side="right">
+      <button
+        type="button"
+        onClick={onClick}
+        className={cn(
+          "flex h-8 w-8 items-center justify-center rounded-lg transition-colors cursor-pointer",
+          active
+            ? "bg-[var(--primary)]/20 text-[var(--foreground)]"
+            : "text-secondary-foreground hover:bg-element-hover hover:text-foreground",
+        )}
+      >
+        <def.icon size={16} />
+      </button>
+    </Hint>
   );
 }

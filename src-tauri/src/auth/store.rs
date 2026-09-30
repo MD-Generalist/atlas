@@ -1,21 +1,36 @@
 //! On-disk credential storage.
 //!
 //! The session token lives in `atlas-session.json` in the app's private config
-//! directory, mode `0600`, in **its own file** separate from `byok-keys.json`
+//! directory, mode `0600`, in **its own file**
 //! so that signing out is a single unlink.
 //!
 //! ## Why not the OS keychain
 //!
-//! `docs/api/atlas-auth-api.md` §12.5 says to put this in the keychain. We
-//! knowingly do not, for the same reason `commands::byok` does not: on macOS an
-//! unsigned, frequently-rebuilt binary prompts for keychain permission on
-//! *every* access. `tauri.conf.json` sets no signing identity, and the
-//! auto-updater replaces the binary on every release — which invalidates the
-//! keychain ACL and would re-prompt every user after every update. Keychain is
-//! therefore *worse* in release than in development here.
+//! `atlas-auth-api.md` §12.5 says to put this in the keychain. We knowingly do
+//! not, for the same reason `commands::byok` does not: on macOS an unsigned,
+//! frequently-rebuilt binary prompts for keychain permission on *every* access.
+//! `tauri.conf.json` sets no signing identity, and the auto-updater replaces the
+//! binary on every release — which invalidates the keychain ACL and would
+//! re-prompt every user after every update. Keychain is therefore *worse* in
+//! release than in development here.
+//!
+//! To be precise about the failure, because it is not the obvious one: the
+//! keychain item is never lost and stays readable. A keychain ACL binds to the
+//! *code signature*, so with no signing identity it pins to that exact binary;
+//! after an update macOS sees a different application asking for another app's
+//! secret. What dies is the **silent** read — every user gets a login-password
+//! dialog after every release. Training users to expect that dialog is itself a
+//! hazard in an auth flow.
 //!
 //! Revisit once a real Developer ID signing identity is configured; that also
-//! fixes the auto-update ACL problem.
+//! fixes the auto-update ACL problem, and makes the keychain strictly better.
+//!
+//! **Ratified as a recorded exception (#41, 2026-08-28)** rather than left as a
+//! silent deviation: the port spec's D14 carries the decision, and the ticket's
+//! "no credential outside secure storage" criterion was reworded to match. The
+//! cited §12.5 is in `atlas-auth-api.md`, which is **not in this repo** — the
+//! in-repo `docs/reference/atlas-ai-api.md` is the AI gateway doc and its §12
+//! ends at 12.3, so this citation cannot be followed here.
 //!
 //! The access JWT is never written here — it is minted on demand and held in
 //! memory only.
@@ -114,9 +129,11 @@ pub struct StoredIdentity {
     ///   is omitted when there is no profile yet.
     #[serde(default)]
     pub orgs: Option<Vec<StoredOrg>>,
-    /// The organisation the user last made active **on the web**, when they ever
-    /// did. Never written from the desktop: `/organization/set-active` is
-    /// ATL-36's, and this ticket is read-only.
+    /// The organisation the user last made active — **on the web**, or, since
+    /// #73, from the desktop's own org switcher (`AuthCore::set_active_org`).
+    /// The desktop write is local-only; `/organization/set-active` stays
+    /// ATL-36's. This stopped being read-only the moment the field became the
+    /// org every gateway request bills.
     ///
     /// Kept separate from "which one to display" — see [`Self::active_org`],
     /// which resolves that and has to cope with this being `None`, the common
@@ -161,6 +178,22 @@ impl StoredIdentity {
     }
 }
 
+/// The desktop's explicit organisation choice, recorded even when the choice
+/// is "a local-only org" — `org_id: None`.
+///
+/// Distinct from [`StoredIdentity::active_org_id`] because that field cannot
+/// say "chose none": `None` there means *never chose*, and [`StoredIdentity::
+/// active_org`] resolves it to the first membership. That is right for billing
+/// and display, and wrong for the chat socket — a user on a local-only org
+/// has nothing to dial, and a socket pointed at "whichever org the server
+/// listed first" was the seed of the org-switch failures. A refresh honours a
+/// pin over the web's seed, so an explicit choice survives revalidation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PinnedOrg {
+    pub org_id: Option<String>,
+}
+
 /// The persisted credential, plus who it belongs to.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -177,6 +210,13 @@ pub struct StoredSession {
     /// launch refreshes it.
     #[serde(default)]
     pub identity: Option<StoredIdentity>,
+    /// The desktop's explicit organisation choice, if one has been made this
+    /// session. Session-level rather than inside `identity` so a switch can
+    /// pin before the first profile fetch lands (the boot-reconciliation
+    /// window), and so `refresh_identity`'s `..current` carries it for free.
+    /// A fresh grant writes `None`: a new grant may be a different person.
+    #[serde(default)]
+    pub pinned_org: Option<PinnedOrg>,
 }
 
 pub(crate) fn session_path(dir: &Path) -> PathBuf {
@@ -191,12 +231,35 @@ pub(crate) fn load(dir: &Path) -> Option<StoredSession> {
     serde_json::from_str(&raw).ok()
 }
 
-/// Write the credential, owner-only.
+/// Write the credential, owner-only FROM THE FIRST BYTE.
+///
+/// The old order — `fs::write` then chmod — left two gaps: the file existed
+/// at umask permissions for the window between the two calls, and rewriting
+/// a pre-existing file never resets its mode at all. Creating the temp file
+/// with 0600 in `OpenOptions` and renaming it into place closes both, and
+/// the rename keeps the update atomic.
 pub(crate) fn save(dir: &Path, session: &StoredSession) -> Result<(), String> {
     fs::create_dir_all(dir).map_err(|e| format!("create config dir: {e}"))?;
     let path = session_path(dir);
     let json = serde_json::to_string_pretty(session).map_err(|e| e.to_string())?;
-    fs::write(&path, json).map_err(|e| format!("write session: {e}"))?;
+
+    let tmp = path.with_extension("tmp");
+    {
+        let mut opts = fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        use std::io::Write;
+        let mut f = opts.open(&tmp).map_err(|e| format!("write session: {e}"))?;
+        f.write_all(json.as_bytes())
+            .map_err(|e| format!("write session: {e}"))?;
+    }
+    fs::rename(&tmp, &path).map_err(|e| format!("write session: {e}"))?;
+    // Belt-and-braces for a file that predates this change and kept its old
+    // wider mode across the rename target's replacement.
     restrict(&path);
     Ok(())
 }

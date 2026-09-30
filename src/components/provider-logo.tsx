@@ -30,12 +30,35 @@ import Voyage from "@lobehub/icons/es/Voyage/components/Color";
 import HuggingFace from "@lobehub/icons/es/HuggingFace/components/Color";
 import Jina from "@lobehub/icons/es/Jina/components/Mono";
 import ElevenLabs from "@lobehub/icons/es/ElevenLabs/components/Mono";
+import orcaLogo from "@/assets/orcarouter.png";
 
 type IconComp = ComponentType<{
   size?: number;
   style?: CSSProperties;
   className?: string;
 }>;
+
+function OrcaRouterLogo({
+  size = 18,
+  className,
+  style,
+}: {
+  size?: number;
+  className?: string;
+  style?: CSSProperties;
+}) {
+  return (
+    <img
+      src={orcaLogo}
+      alt=""
+      aria-hidden="true"
+      width={size}
+      height={size}
+      className={cn("object-contain select-none pointer-events-none", className)}
+      style={{ width: size, height: size, ...style }}
+    />
+  );
+}
 
 // Keyed by the BYOK provider id (see features/settings/lib/providers.ts).
 const LOGOS: Record<string, IconComp> = {
@@ -60,11 +83,8 @@ const LOGOS: Record<string, IconComp> = {
   huggingface: HuggingFace,
   jina: Jina,
   elevenlabs: ElevenLabs,
+  orcarouter: OrcaRouterLogo,
 };
-
-export function hasProviderLogo(id: string): boolean {
-  return id in LOGOS;
-}
 
 /**
  * Renders a provider's brand logo by BYOK id, centered in a fixed box so rows
@@ -84,17 +104,10 @@ export function ProviderLogo({
   const box = size + 6;
   return (
     <span
-      className={cn(
-        "grid place-items-center shrink-0 text-text-secondary",
-        className,
-      )}
+      className={cn("grid place-items-center shrink-0 text-secondary-foreground", className)}
       style={{ width: box, height: box }}
     >
-      {Icon ? (
-        <Icon size={size} />
-      ) : (
-        <Boxes size={Math.round(size * 0.8)} aria-hidden />
-      )}
+      {Icon ? <Icon size={size} /> : <Boxes size={Math.round(size * 0.8)} aria-hidden />}
     </span>
   );
 }

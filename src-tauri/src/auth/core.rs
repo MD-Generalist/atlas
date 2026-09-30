@@ -165,9 +165,7 @@ impl AuthFailure {
     pub fn user_message(&self) -> String {
         match self {
             AuthFailure::NoCredential => "Sign in to sync organisations.".into(),
-            AuthFailure::Rejected => {
-                "Your Atlas session ended. Sign in again to reconnect.".into()
-            }
+            AuthFailure::Rejected => "Your Atlas session ended. Sign in again to reconnect.".into(),
             // For create, the realistic Denied is a 400 duplicate slug/name; a
             // 403 on a caller-scoped create would be a server fault. Either way
             // retrying is pointless, so the message points at the fixable cause.
@@ -247,6 +245,13 @@ pub struct AuthCore {
     /// competing codes, and is what makes a second click *resume* rather than
     /// restart — the recovery path for someone who got lost mid-flow.
     pending: Mutex<Option<PendingGrant>>,
+    /// Serialises every read-modify-write of the credential file. The store
+    /// is disk-backed with no in-memory copy, so `set_active_org` (a switch)
+    /// and the tail of `refresh_identity` (a revalidate finishing) are both
+    /// load→save sequences on the same file; unguarded, a switch landing
+    /// between the refresh's re-read and its save was silently undone. Held
+    /// only across synchronous sections — never across an await.
+    file: Mutex<()>,
     /// First retry delay for [`Self::revalidate`]. A field only so tests can
     /// exercise the loop without sleeping through a real schedule; production
     /// always uses [`backoff::BASE`].
@@ -260,8 +265,18 @@ impl AuthCore {
             dir: dir.into(),
             http,
             pending: Mutex::new(None),
+            file: Mutex::new(()),
             backoff_base: backoff::BASE,
         }
+    }
+
+    /// The credential-file lock. Poisoning is irrelevant here — the guarded
+    /// sections hold no state of their own — so a poisoned lock is recovered
+    /// rather than propagated into every later sign-in.
+    fn file_guard(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.file
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Shrink the retry schedule so a test can drive the loop through several
@@ -284,21 +299,25 @@ impl AuthCore {
     }
 
     pub fn clear_session(&self) -> Result<(), String> {
+        let _guard = self.file_guard();
         store::clear(&self.dir)
     }
 
-    /// Write a freshly granted credential, deliberately with **no identity**.
+    /// Write a freshly granted credential, deliberately with **no identity**
+    /// and no pinned organisation.
     ///
     /// A new grant can be a different person, so carrying the old snapshot over
     /// would show one user another user's name until the profile call returned.
     /// [`Self::refresh_identity`] fills it in a moment later.
     fn persist(&self, session_token: &str) -> Result<(), String> {
+        let _guard = self.file_guard();
         store::save(
             &self.dir,
             &StoredSession {
                 session_token: session_token.to_string(),
                 saved_at: chrono::Utc::now().to_rfc3339(),
                 identity: None,
+                pinned_org: None,
             },
         )
     }
@@ -316,19 +335,69 @@ impl AuthCore {
         }
         match self.stored() {
             Some(session) => {
+                let pinned = session.pinned_org;
                 let identity = session.identity;
+                let resolved = identity.as_ref().and_then(StoredIdentity::active_org);
                 AuthSnapshot::SignedIn {
                     orgs: identity.as_ref().and_then(|i| {
                         i.orgs
                             .as_ref()
                             .map(|orgs| orgs.iter().cloned().map(Into::into).collect())
                     }),
-                    active_org_id: identity.as_ref().and_then(StoredIdentity::active_org),
+                    // Billing/display keep their documented fallback; the
+                    // socket gets the desktop's explicit choice, "none"
+                    // included, and only falls back while nothing is pinned.
+                    comms_org_id: match pinned {
+                        Some(pin) => pin.org_id,
+                        None => resolved.clone(),
+                    },
+                    active_org_id: resolved,
                     user: identity.map(Into::into),
                 }
             }
             None => AuthSnapshot::SignedOut,
         }
+    }
+
+    /// Record which organisation the desktop is acting for (#73).
+    ///
+    /// This writes the same field the web's `/organization/set-active` feeds,
+    /// but locally only — the server is not told, deliberately: web and
+    /// desktop each keep their own last choice, the same independence they
+    /// had before, just symmetric now.
+    ///
+    /// The store's doc used to say this field is "never written from the
+    /// desktop". That held while it only decided which organisation the
+    /// sidebar displays — and stopped holding the moment it became the
+    /// organisation every gateway request bills: the `Atlas-Org` source reads
+    /// the snapshot per request, so a switch that never lands here keeps
+    /// billing (and entitlement-checking) the previous org, which is exactly
+    /// how an unentitled org appeared to work — its turns were quietly
+    /// charged to the entitled one.
+    ///
+    /// `None` clears the desktop's choice; display and billing then fall back
+    /// the way [`StoredIdentity::active_org`] documents (web-set value, else
+    /// the first org). An id that is not in the org list is stored anyway and
+    /// tolerated on the read side, same as the web's value — membership lists
+    /// can lag.
+    ///
+    /// The choice is also PINNED at the session level (`None` included), which
+    /// is what the chat socket follows and what a later identity refresh
+    /// preserves. Pinning does not need the identity to exist yet — a switch
+    /// during the boot window used to fail with "no identity yet" and leave
+    /// the socket on whichever org the server listed first.
+    pub fn set_active_org(&self, org_id: Option<String>) -> Result<(), String> {
+        let _guard = self.file_guard();
+        let Some(mut session) = self.stored() else {
+            return Err("not signed in".to_string());
+        };
+        session.pinned_org = Some(store::PinnedOrg {
+            org_id: org_id.clone(),
+        });
+        if let Some(identity) = session.identity.as_mut() {
+            identity.active_org_id = org_id;
+        }
+        store::save(&self.dir, &session)
     }
 
     // ---- identity --------------------------------------------------------
@@ -475,8 +544,7 @@ impl AuthCore {
             .unwrap_or_default();
         // Writes back the *pair* — a failed fetch returns the previous one
         // untouched, so a blip never trades a known-good photo for initials.
-        let avatar =
-            avatar::resolve(&self.http, &self.dir, profile.image.as_deref(), &held).await;
+        let avatar = avatar::resolve(&self.http, &self.dir, profile.image.as_deref(), &held).await;
 
         let orgs = self.resolve_orgs(access_token, previous.as_ref()).await;
 
@@ -486,9 +554,37 @@ impl AuthCore {
         // write below — a resurrected credential file would sign the user
         // straight back in on the next launch. A photo fetched into that gap
         // goes with it, since nothing will ever point at it again.
+        //
+        // The re-read and the save are ONE critical section under the file
+        // lock: a `set_active_org` landing between the two used to be
+        // overwritten by the save, which then re-pointed the socket at the
+        // org the user had just left.
+        let _guard = self.file_guard();
         let Some(current) = self.stored() else {
             avatar::discard(avatar.path.as_deref());
             return;
+        };
+
+        // The desktop's own choice survives the refresh. #73 made this field
+        // the organisation every gateway request bills, and `set_active_org`
+        // documents the independence: web and desktop each keep their own
+        // last choice. The server's value is therefore a *seed* for a session
+        // that has never chosen — never an override of one that has.
+        // Clobbering it here was what re-pointed the chat socket (and the
+        // billing header) at `orgs.first()` a few seconds after every launch,
+        // until the next manual org switch wrote it back.
+        //
+        // A pin wins outright, "none" included: with only the identity field
+        // to go on, an explicit "no organisation" (a local-only org) read as
+        // "never chose" and the web's seed came straight back on the next
+        // refresh — a retarget with no user action behind it.
+        let active_org_id = match &current.pinned_org {
+            Some(pin) => pin.org_id.clone(),
+            None => current
+                .identity
+                .as_ref()
+                .and_then(|i| i.active_org_id.clone())
+                .or(session.session.active_organization_id),
         };
 
         let _ = store::save(
@@ -501,7 +597,7 @@ impl AuthCore {
                     avatar_url: avatar.url,
                     avatar_path: avatar.path,
                     orgs,
-                    active_org_id: session.session.active_organization_id,
+                    active_org_id,
                 }),
                 ..current
             },
@@ -773,11 +869,7 @@ impl AuthCore {
     /// the same reason — the one place a credential's fate is decided lives once,
     /// not per endpoint. The body is never logged: it, and any error body coming
     /// back, are the places a token could plausibly be echoed.
-    async fn authed_post(
-        &self,
-        path: &str,
-        body: &impl Serialize,
-    ) -> Authed<reqwest::Response> {
+    async fn authed_post(&self, path: &str, body: &impl Serialize) -> Authed<reqwest::Response> {
         let Some(stored) = self.stored() else {
             return Err(AuthFailure::NoCredential);
         };
@@ -1095,7 +1187,11 @@ impl AuthCore {
             } else {
                 raw.email
             },
-            role: raw.role.as_deref().and_then(Role::from_claim).or(Some(role)),
+            role: raw
+                .role
+                .as_deref()
+                .and_then(Role::from_claim)
+                .or(Some(role)),
             status: raw.status.unwrap_or_else(|| "pending".into()),
             expires_at: raw.expires_at,
             accept_url: raw.accept_url,
@@ -1121,7 +1217,8 @@ impl AuthCore {
     /// `POST /organization/update-member-role` — change one member's role.
     ///
     /// Takes effect in the member's **next** minted token; tokens already issued
-    /// stay valid until they expire (the 10-minute TTL bound, API §6.1).
+    /// stay valid until they expire (the 10-minute TTL bound,
+    /// `docs/reference/atlas-ai-api.md` §12.2).
     pub async fn update_member_role(
         &self,
         org_id: &str,
@@ -1185,7 +1282,7 @@ impl AuthCore {
     pub async fn refresh(&self) {
         if self.stored().is_some() {
             self.refresh_identity(self.stored().and_then(|s| s.identity), None)
-            .await;
+                .await;
         }
     }
 
@@ -1290,12 +1387,18 @@ impl AuthCore {
     /// here pretends otherwise: [`Self::snapshot`] is derived from the file, so
     /// the state the caller broadcasts next is whatever is really on disk.
     ///
-    /// There is still no in-memory access token to clear. ATL-51 added none:
-    /// the JWT it needs for the `orgs` claim is minted, read, and dropped inside
-    /// a single call, and nothing else in the desktop consumes one. A cache
-    /// would buy nothing and would be one more thing this function had to
-    /// remember to clear.
+    /// One in-memory access token DOES exist elsewhere: #51 gave the native
+    /// agent's connection a cache that serves the JWT until its own `exp`,
+    /// and this function cannot reach it. The `auth_sign_out` command drops
+    /// that connection alongside calling this (#62) — a future caller of
+    /// `sign_out` from anywhere else must do the same, or the engine keeps
+    /// making org-billed calls for up to ~9 minutes on a revoked account.
+    /// (The JWT verifies statelessly against JWKS; revoking the session
+    /// token does not invalidate it.)
     pub fn sign_out(&self) -> Option<RevocationTicket> {
+        // Under the file lock as one unit, so a refresh finishing right now
+        // cannot resurrect the credential between the read and the unlink.
+        let _guard = self.file_guard();
         let stored = self.stored();
         // Before the credential, not after: the identity is where the path to
         // the cached photo is recorded, so clearing the file first would leave
@@ -1303,7 +1406,7 @@ impl AuthCore {
         if let Some(identity) = stored.as_ref().and_then(|s| s.identity.as_ref()) {
             avatar::discard(identity.avatar_path.as_deref());
         }
-        let _ = self.clear_session();
+        let _ = store::clear(&self.dir);
         stored.map(|s| RevocationTicket(s.session_token))
     }
 

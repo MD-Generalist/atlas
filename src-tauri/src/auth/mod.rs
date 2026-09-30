@@ -31,7 +31,7 @@ mod store;
 
 pub use config::auth_base;
 pub use core::{
-    AuthCore, CreatedOrg, GrantError, OrgInvitation, OrgMember, Validation,
+    AuthCore, AuthFailure, CreatedOrg, GrantError, OrgInvitation, OrgMember, Validation,
 };
 pub use store::Role;
 
@@ -140,6 +140,16 @@ pub enum AuthSnapshot {
         /// [`StoredIdentity::active_org`]. `None` whenever `orgs` is empty or
         /// not yet known.
         active_org_id: Option<String>,
+        /// The organisation team chat should connect to.
+        ///
+        /// Unlike `active_org_id` this honours an explicit desktop choice of
+        /// "none" (a local-only organisation has nothing to dial) and never
+        /// falls back to list order once a choice has been made — see
+        /// [`crate::auth::store::PinnedOrg`]. Deliberately NOT filtered by
+        /// membership: a pinned org the user was removed from lands the
+        /// socket on a visible `unavailable (not a member)` that the next
+        /// refresh retries, rather than silently turning chat off.
+        comms_org_id: Option<String>,
     },
 }
 

@@ -46,9 +46,9 @@ struct ProjectRecents {
 
 #[derive(Default)]
 pub struct RecentFilesState {
-    /// One queue per open workspace (keyed by workspace id), so multiple
-    /// resident workspaces each keep their own recent-files list.
-    per_workspace: RwLock<HashMap<String, ProjectRecents>>,
+    /// One queue per open project (keyed by project id), so multiple
+    /// resident projects each keep their own recent-files list.
+    per_project: RwLock<HashMap<String, ProjectRecents>>,
 }
 
 impl RecentFilesState {
@@ -56,9 +56,9 @@ impl RecentFilesState {
         Self::default()
     }
 
-    /// Clone the (root, items) handle for a workspace, if open.
+    /// Clone the (root, items) handle for a project, if open.
     fn snapshot(&self, key: &str) -> Option<(PathBuf, Arc<RwLock<Vec<RecentFile>>>)> {
-        self.per_workspace
+        self.per_project
             .read()
             .get(key)
             .map(|p| (p.root.clone(), p.items.clone()))
@@ -135,7 +135,7 @@ pub async fn recent_files_open_project(
 ) -> Result<Vec<RecentFile>, String> {
     let key = workspace_id.unwrap_or_else(|| project_path.clone());
     let root = PathBuf::from(&project_path);
-    // Idempotent: a resident workspace's queue is already loaded — return it.
+    // Idempotent: a resident project's queue is already loaded — return it.
     if let Some((_, items_lock)) = state.snapshot(&key) {
         return Ok(items_lock.read().clone());
     }
@@ -143,7 +143,7 @@ pub async fn recent_files_open_project(
         .await
         .map_err(|e| e.to_string())?;
     let items_arc = Arc::new(RwLock::new(items.clone()));
-    state.per_workspace.write().insert(
+    state.per_project.write().insert(
         key,
         ProjectRecents {
             root,
@@ -153,16 +153,16 @@ pub async fn recent_files_open_project(
     Ok(items)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn recent_files_close_project(
     workspace_id: Option<String>,
     state: State<'_, RecentFilesState>,
 ) {
     match workspace_id {
         Some(id) => {
-            state.per_workspace.write().remove(&id);
+            state.per_project.write().remove(&id);
         }
-        None => state.per_workspace.write().clear(),
+        None => state.per_project.write().clear(),
     }
 }
 
@@ -259,19 +259,6 @@ pub async fn recent_files_rename(
     tokio::task::spawn_blocking(move || save_to_disk(&root_for_disk, &updated_for_disk));
     emit_changed(&app, &workspace_id, &root, &updated);
     Ok(updated)
-}
-
-#[tauri::command]
-pub fn recent_files_list(
-    workspace_id: String,
-    state: State<'_, RecentFilesState>,
-) -> Vec<RecentFile> {
-    state
-        .per_workspace
-        .read()
-        .get(&workspace_id)
-        .map(|p| p.items.read().clone())
-        .unwrap_or_default()
 }
 
 #[tauri::command]

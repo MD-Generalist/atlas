@@ -16,6 +16,8 @@ use std::path::Path;
 
 use serde::Deserialize;
 
+use crate::commands::org_server::OrgLink;
+
 /// Cap how much body content a single mention can dump into the
 /// context block. Tuned for chat agents: ~32 KB is enough for a
 /// medium source file.
@@ -27,7 +29,11 @@ const MENTION_BODY_BUDGET_BYTES: usize = 32 * 1024;
 /// Rust side doesn't need (e.g. branch metadata, paper authors that
 /// only display) are still accepted but ignored where appropriate.
 #[derive(Debug, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
 #[allow(dead_code)]
 pub enum MentionSpec {
     File {
@@ -58,23 +64,10 @@ pub enum MentionSpec {
         #[serde(default)]
         inline_body: Option<String>,
     },
-    /// A reusable procedure invoked with `#skill:<name>`. The body is the
-    /// `SKILL.md` minus its frontmatter — inlined as a context block so it
-    /// rides the same delivery rail as every other mention and reaches any
-    /// ACP agent (no native-skills folder required). Mirrors `Knowledge`:
-    /// the frontend pre-fills `inline_body` via `skills_read` (already
-    /// frontmatter-stripped); `file_path` is the read fallback.
-    Skill {
-        id: String,
-        display_name: String,
-        file_path: String,
-        #[serde(default)]
-        inline_body: Option<String>,
-    },
     /// A pack-delivered component invoked with `#<kind>:<name>` — `command`,
-    /// `agent`, or `rule`. Like `Skill`, its body (frontmatter stripped) is
-    /// inlined as a context block so it reaches any ACP agent. The frontend
-    /// pre-fills `inline_body`; `file_path` is the read fallback.
+    /// `agent`, or `rule`. Its body (frontmatter stripped) is inlined as a
+    /// context block so it reaches any ACP agent. The frontend pre-fills
+    /// `inline_body`; `file_path` is the read fallback.
     Component {
         id: String,
         display_name: String,
@@ -89,9 +82,13 @@ pub enum MentionSpec {
         abs_path: String,
         has_readme: bool,
     },
-    /// Another workspace/project in the app, referenced with `@workspace:<name>`.
+    /// Another project in the app, referenced with `@workspace:<name>`.
     /// Hands the agent that project's absolute path so it can inspect a sibling
     /// project without the user copy-pasting the path.
+    ///
+    /// The variant name is a WIRE KEY, not a concept: `rename_all` turns it
+    /// into the `"workspace"` tag the frontend sends, and `@workspace:<name>`
+    /// is already sitting in saved prompts. Atlas calls these projects.
     Workspace {
         id: String,
         display_name: String,
@@ -117,14 +114,74 @@ pub enum MentionSpec {
     },
     /// A whole past agent session's transcript, referenced with
     /// `@session:<title>`. The frontend pre-reads + formats the JSONL
-    /// transcript into `inline_body` (like `Skill`); there is no Rust read
-    /// fallback since formatting a transcript lives on the JS side.
+    /// transcript into `inline_body` (like `Component`); there is no Rust
+    /// read fallback since formatting a transcript lives on the JS side.
     PastSession {
         id: String,
         display_name: String,
         session_title: String,
         #[serde(default)]
         inline_body: Option<String>,
+    },
+    /// A member of the chat's organisation, referenced with `@member:<name>`.
+    /// Rides as an organisation link carrying the user id
+    /// (`atlas-org://member/<user id>`), which the org tools take wherever
+    /// they take a member — so "send it to @Grace" needs no name resolution.
+    /// No body: the id is the payload.
+    Member {
+        /// The member's user id (never the membership id).
+        id: String,
+        display_name: String,
+    },
+    /// A channel, DM or group DM, referenced with `@conversation:<name>`;
+    /// rides as `atlas-org://conversation/<id>`.
+    Conversation {
+        id: String,
+        display_name: String,
+    },
+    /// A **recorded session** on the Workspace's board (the Timeline),
+    /// referenced with `@recorded-session:<title>`; rides as
+    /// `atlas-org://recorded-session/<Workspace id>/<session id>`.
+    ///
+    /// Not a [`MentionSpec::PastSession`]: that is a local transcript, read
+    /// from this disk and inlined; this is the organisation's record, which
+    /// the org tools read by id. The two never share a tag, a short form, a
+    /// dedupe key or a link.
+    RecordedSession {
+        /// The session id — the same on the board and on the server.
+        id: String,
+        display_name: String,
+        /// The server's Workspace id the session is recorded in.
+        workspace_id: String,
+    },
+    /// A **comment** on a recorded session, referenced with
+    /// `@comment:<author: excerpt>` — linked by the user so the agent attends
+    /// to it. Rides as `atlas-org://comment/<Workspace id>/<session id>/<comment
+    /// id>`, which the comment tools take as their `comment`, AND as a small
+    /// context block quoting it: the user pointed at these words, so the agent
+    /// should not need a tool call to learn what they say.
+    Comment {
+        /// The comment id.
+        id: String,
+        display_name: String,
+        /// The server Workspace (Project) id the session is recorded in.
+        workspace_id: String,
+        /// The recorded session the comment is on.
+        session_id: String,
+        /// Who wrote it, as the roster names them.
+        #[serde(default)]
+        author_name: Option<String>,
+        /// The comment's text as the user saw it when linking it.
+        #[serde(default)]
+        body: Option<String>,
+        /// What it hangs off — "the session", "a prompt", "a Bash call".
+        #[serde(default)]
+        anchor_label: Option<String>,
+        /// Set when it is a reply; `id` of the thread's first comment.
+        #[serde(default)]
+        parent_id: Option<String>,
+        #[serde(default)]
+        resolved: bool,
     },
 }
 
@@ -135,61 +192,205 @@ impl MentionSpec {
             | MentionSpec::Folder { id, .. }
             | MentionSpec::Symbol { id, .. }
             | MentionSpec::Knowledge { id, .. }
-            | MentionSpec::Skill { id, .. }
             | MentionSpec::Component { id, .. }
             | MentionSpec::Repo { id, .. }
             | MentionSpec::Workspace { id, .. }
             | MentionSpec::Paper { id, .. }
             | MentionSpec::Branch { id, .. }
             | MentionSpec::PastMessage { id, .. }
-            | MentionSpec::PastSession { id, .. } => id,
+            | MentionSpec::PastSession { id, .. }
+            | MentionSpec::Member { id, .. }
+            | MentionSpec::Conversation { id, .. }
+            | MentionSpec::RecordedSession { id, .. }
+            | MentionSpec::Comment { id, .. } => id,
         }
     }
 
+    /// What a send dedupes on: the kind and the id, so two mentions of
+    /// different kinds that happen to share an id — a recorded session and a
+    /// local past session, say — are never collapsed into one.
+    fn dedupe_key(&self) -> (std::mem::Discriminant<MentionSpec>, String) {
+        (std::mem::discriminant(self), self.id().to_string())
+    }
+
     fn short_form(&self) -> String {
+        let v = short_form_value;
         match self {
-            MentionSpec::File { display_name, .. } => format!("@file:{display_name}"),
-            MentionSpec::Folder { display_name, .. } => format!("@folder:{display_name}"),
-            MentionSpec::Symbol { display_name, .. } => format!("@symbol:{display_name}"),
+            MentionSpec::File { display_name, .. } => format!("@file:{}", v(display_name)),
+            MentionSpec::Folder { display_name, .. } => format!("@folder:{}", v(display_name)),
+            MentionSpec::Symbol { display_name, .. } => format!("@symbol:{}", v(display_name)),
             MentionSpec::Knowledge { id, .. } => format!("@note:{id}"),
-            MentionSpec::Skill { display_name, .. } => format!("#skill:{display_name}"),
             MentionSpec::Component {
                 component_kind,
                 display_name,
                 ..
-            } => format!("#{component_kind}:{display_name}"),
-            MentionSpec::Repo { display_name, .. } => format!("@repo:{display_name}"),
-            MentionSpec::Workspace { display_name, .. } => format!("@workspace:{display_name}"),
-            MentionSpec::Paper { display_name, .. } => format!("@paper:{display_name}"),
-            MentionSpec::Branch { display_name, .. } => format!("@branch:{display_name}"),
+            } => format!("#{component_kind}:{}", v(display_name)),
+            MentionSpec::Repo { display_name, .. } => format!("@repo:{}", v(display_name)),
+            MentionSpec::Workspace { display_name, .. } => {
+                format!("@workspace:{}", v(display_name))
+            }
+            MentionSpec::Paper { display_name, .. } => format!("@paper:{}", v(display_name)),
+            MentionSpec::Branch { display_name, .. } => format!("@branch:{}", v(display_name)),
             MentionSpec::PastMessage { id, .. } => format!("@msg:{id}"),
-            MentionSpec::PastSession { display_name, .. } => format!("@session:{display_name}"),
+            MentionSpec::PastSession { display_name, .. } => {
+                format!("@session:{}", v(display_name))
+            }
+            MentionSpec::Member { display_name, .. } => format!("@member:{}", v(display_name)),
+            MentionSpec::Conversation { display_name, .. } => {
+                format!("@conversation:{}", v(display_name))
+            }
+            MentionSpec::RecordedSession { display_name, .. } => {
+                format!("@recorded-session:{}", v(display_name))
+            }
+            MentionSpec::Comment { display_name, .. } => format!("@comment:{}", v(display_name)),
         }
     }
+}
+
+/// A short-form value, quoted when it holds whitespace: a bare value ends at the
+/// first space, so `@file:My Shot.png` would read back as `My`. Mirrors
+/// `shortFormValue` in `src/features/chat/lib/mentions.ts`, which writes the
+/// same token into the prose this function's output has to match.
+fn short_form_value(v: &str) -> std::borrow::Cow<'_, str> {
+    if v.chars().any(char::is_whitespace) {
+        std::borrow::Cow::Owned(format!("\"{v}\""))
+    } else {
+        std::borrow::Cow::Borrowed(v)
+    }
+}
+
+/// What `compose_prompt` hands back (P2.1).
+///
+/// Was a bare `String`. Path-bearing mentions now ALSO travel as structured
+/// `resourceLinks`, which the caller turns into `ContentBlock::ResourceLink` —
+/// the ACP-native way to say "here is a file, open it yourself". Every agent
+/// MUST support that block type, so there is no capability to gate on.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComposedPrompt {
+    /// Prose plus the context block for mentions that have no URI (knowledge
+    /// entries, past sessions, papers) or whose block carries instructions
+    /// rather than just a path.
+    pub prose: String,
+    pub resource_links: Vec<ResourceLinkSpec>,
+}
+
+/// One `@`-mention that points at something the agent reaches itself: a path
+/// on disk (`file://`), or an organisation member, conversation or recorded
+/// session (`atlas-org://`, read by the org tools).
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceLinkSpec {
+    /// `file://` or `atlas-org://` URI — ACP wants a URI, not a bare path.
+    pub uri: String,
+    /// What the user typed, so the agent can echo it back recognisably.
+    pub name: String,
+}
+
+/// `file://` URI for an absolute path.
+///
+/// Percent-encodes the characters that would otherwise terminate or re-scope
+/// the URI. Deliberately narrow: over-encoding a path breaks agents that
+/// naively strip the scheme and use the remainder as a path, which several do.
+fn file_uri(abs_path: &str) -> String {
+    let mut out = String::with_capacity(abs_path.len() + 8);
+    out.push_str("file://");
+    for ch in abs_path.chars() {
+        match ch {
+            ' ' => out.push_str("%20"),
+            '#' => out.push_str("%23"),
+            '?' => out.push_str("%3F"),
+            '%' => out.push_str("%25"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// The on-disk target of a mention, when it has one.
+fn mention_path(m: &MentionSpec) -> Option<&str> {
+    match m {
+        MentionSpec::File { abs_path, .. }
+        | MentionSpec::Folder { abs_path, .. }
+        | MentionSpec::Workspace { abs_path, .. }
+        | MentionSpec::Repo { abs_path, .. } => Some(abs_path),
+        _ => None,
+    }
+}
+
+/// The organisation link a mention rides as, when it is an organisation
+/// mention ([`OrgLink`], the one definition the org tools also parse).
+fn mention_org_link(m: &MentionSpec) -> Option<OrgLink> {
+    match m {
+        MentionSpec::Member { id, .. } => Some(OrgLink::Member {
+            user_id: id.clone(),
+        }),
+        MentionSpec::Conversation { id, .. } => Some(OrgLink::Conversation { id: id.clone() }),
+        MentionSpec::RecordedSession {
+            id, workspace_id, ..
+        } => Some(OrgLink::RecordedSession {
+            workspace_id: workspace_id.clone(),
+            session_id: id.clone(),
+        }),
+        MentionSpec::Comment {
+            id,
+            workspace_id,
+            session_id,
+            ..
+        } => Some(OrgLink::Comment {
+            workspace_id: workspace_id.clone(),
+            session_id: session_id.clone(),
+            comment_id: id.clone(),
+        }),
+        _ => None,
+    }
+}
+
+/// The URI a mention rides as, when it has one.
+fn mention_uri(m: &MentionSpec) -> Option<String> {
+    mention_path(m)
+        .map(file_uri)
+        .or_else(|| mention_org_link(m).map(|link| link.uri()))
 }
 
 #[tauri::command]
 pub async fn compose_prompt(
     prose: String,
     mentions: Vec<MentionSpec>,
-) -> Result<String, String> {
+) -> Result<ComposedPrompt, String> {
     if mentions.is_empty() {
-        return Ok(prose);
+        return Ok(ComposedPrompt {
+            prose,
+            resource_links: Vec::new(),
+        });
     }
 
     // Dedupe by id preserving first-seen order — a user can reference
     // the same file twice in one message but the context block should
     // only carry it once.
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut seen = std::collections::HashSet::new();
     let uniq: Vec<MentionSpec> = mentions
         .into_iter()
-        .filter(|m| seen.insert(m.id().to_string()))
+        .filter(|m| seen.insert(m.dedupe_key()))
         .collect();
 
     // Fan out body fetches in parallel. Each spawn_blocking is one
     // task on tokio's blocking pool; the join_all waits for all of
     // them. Branches have no body so they short-circuit without
     // spawning.
+    // Structured links for everything with a path (P2.1) or an organisation
+    // id (#122). Built before the bodies fan out, so the ordering matches
+    // what the user typed.
+    let links: Vec<ResourceLinkSpec> = uniq
+        .iter()
+        .filter_map(|m| {
+            mention_uri(m).map(|uri| ResourceLinkSpec {
+                uri,
+                name: m.short_form(),
+            })
+        })
+        .collect();
+
     let futures = uniq.into_iter().map(|m| async move {
         tokio::task::spawn_blocking(move || render_block(&m))
             .await
@@ -197,14 +398,19 @@ pub async fn compose_prompt(
     });
     let blocks: Vec<Option<String>> = futures::future::join_all(futures).await;
     let present: Vec<String> = blocks.into_iter().flatten().collect();
-    if present.is_empty() {
-        return Ok(prose);
-    }
+    let composed = if present.is_empty() {
+        prose
+    } else {
+        format!(
+            "{prose}\n\n---\n# Atlas context\n\n{joined}\n",
+            joined = present.join("\n\n")
+        )
+    };
 
-    Ok(format!(
-        "{prose}\n\n---\n# Atlas context\n\n{joined}\n",
-        joined = present.join("\n\n")
-    ))
+    Ok(ComposedPrompt {
+        prose: composed,
+        resource_links: links,
+    })
 }
 
 /// Synchronous body renderer for a single mention. Runs on the
@@ -213,21 +419,14 @@ pub async fn compose_prompt(
 /// payload).
 fn render_block(m: &MentionSpec) -> Option<String> {
     match m {
-        MentionSpec::File { abs_path, .. } => {
-            // Reference the file by path — let the agent read it via
-            // its own filesystem tools instead of inlining the body.
-            // Inlining a 5000-line file blows up the context for every
-            // turn forever; pointing at the path is one line and the
-            // agent can pull just what it needs.
-            Some(format!(
-                "## {sf}\n\nFile at `{abs_path}`. Use your filesystem tools to read it.",
-                sf = m.short_form()
-            ))
-        }
-        MentionSpec::Folder { abs_path, .. } => Some(format!(
-            "## {sf}\n\nDirectory at `{abs_path}`. Use your filesystem tools to explore.",
-            sf = m.short_form()
-        )),
+        // P2.1: files and folders contribute NO prose block any more — their
+        // entire payload was the path, and that now rides as a structured
+        // `ResourceLink` the agent parses instead of a sentence it has to
+        // read. The long-standing decision NOT to inline file bodies is
+        // unchanged and is exactly what ResourceLink expresses natively:
+        // "here is the file, open the part you need". Instruction-bearing
+        // mentions (project/repo) keep their block AND get a link.
+        MentionSpec::File { .. } | MentionSpec::Folder { .. } => None,
         MentionSpec::Workspace {
             abs_path,
             display_name,
@@ -239,7 +438,7 @@ fn render_block(m: &MentionSpec) -> Option<String> {
                 .map(|o| format!(" (in the “{o}” organisation)"))
                 .unwrap_or_default();
             Some(format!(
-                "## {sf}\n\nThe workspace/project **{display_name}**{org} is located at the \
+                "## {sf}\n\nThe project **{display_name}**{org} is located at the \
                  absolute path:\n`{abs_path}`\n\n\
                  Use your filesystem tools to inspect it — list its tree, read the relevant \
                  source, and apply what you find to this request. It is a SEPARATE project from \
@@ -295,40 +494,18 @@ fn render_block(m: &MentionSpec) -> Option<String> {
                 body = clip_body(&body),
             ))
         }
-        MentionSpec::Skill {
-            file_path,
-            inline_body,
-            ..
-        } => {
-            // The frontend pre-fills `inline_body` from `skills_read` (already
-            // frontmatter-stripped). Fall back to reading the `SKILL.md` and
-            // stripping its frontmatter so the agent sees only the procedure.
-            let body = match inline_body.as_deref() {
-                Some(b) if !b.is_empty() => b.to_string(),
-                _ => read_skill_body(file_path),
-            };
-            // Lead with the frontmatter `description:` — the rich "what/when to
-            // use" text Claude Code / Codex read natively from the SKILL.md
-            // header. The inline body alone drops it, and some skills ship only a
-            // thin discovery stub as their body, so without this the agent has
-            // nothing to act on but "go find the skill".
-            Some(format!(
-                "## {sf}\n\n{lead}{body}",
-                sf = m.short_form(),
-                lead = describe_lead(file_path),
-                body = clip_body(&body),
-            ))
-        }
         MentionSpec::Component {
             file_path,
             inline_body,
             ..
         } => {
-            // Same rail as Skill: inline the component body (a command/agent/rule
-            // markdown, frontmatter stripped) so any ACP agent receives it.
+            // Inline the component body (a command/agent/rule markdown,
+            // frontmatter stripped) so any ACP agent receives it. The
+            // frontend pre-fills `inline_body`; fall back to reading the
+            // file and stripping its frontmatter otherwise.
             let body = match inline_body.as_deref() {
                 Some(b) if !b.is_empty() => b.to_string(),
-                _ => read_skill_body(file_path),
+                _ => read_component_body(file_path),
             };
             Some(format!(
                 "## {sf}\n\n{lead}{body}",
@@ -390,22 +567,94 @@ fn render_block(m: &MentionSpec) -> Option<String> {
             ))
         }
         MentionSpec::Branch { .. } => None,
+        // Organisation mentions carry ids only: the link is the whole
+        // payload, and the org tools read what it names on demand.
+        MentionSpec::Member { .. }
+        | MentionSpec::Conversation { .. }
+        | MentionSpec::RecordedSession { .. } => None,
+        MentionSpec::Comment {
+            id,
+            session_id,
+            author_name,
+            body,
+            anchor_label,
+            parent_id,
+            resolved,
+            ..
+        } => Some(render_comment_block(
+            &m.short_form(),
+            id,
+            session_id,
+            author_name.as_deref(),
+            body.as_deref(),
+            anchor_label.as_deref(),
+            parent_id.as_deref(),
+            *resolved,
+        )),
     }
 }
 
-/// Read a `SKILL.md` and return just the procedure body, stripping a leading
-/// `---` frontmatter block. The frontend normally pre-fills the already-parsed
-/// body, so this is only the fallback path; it intentionally mirrors the
-/// minimal frontmatter handling in `commands::skills::parse_frontmatter`
-/// without depending on it.
-fn read_skill_body(path: &str) -> String {
+/// The block a linked comment contributes: who said what, on what, and that
+/// the user wants it attended to. The link beside it is how the agent acts on
+/// the thread (read its replies, reply, resolve) through the comment tools.
+#[allow(clippy::too_many_arguments)]
+fn render_comment_block(
+    short_form: &str,
+    comment_id: &str,
+    session_id: &str,
+    author: Option<&str>,
+    body: Option<&str>,
+    anchor: Option<&str>,
+    parent_id: Option<&str>,
+    resolved: bool,
+) -> String {
+    let author = author
+        .filter(|a| !a.trim().is_empty())
+        .unwrap_or("A teammate");
+    let kind = if parent_id.is_some() {
+        "reply"
+    } else {
+        "comment"
+    };
+    let on = anchor
+        .filter(|a| !a.trim().is_empty())
+        .map(|a| format!(" on {a}"))
+        .unwrap_or_default();
+    let state = if resolved { " (thread resolved)" } else { "" };
+    let quoted = body
+        .map(str::trim)
+        .filter(|b| !b.is_empty())
+        .map(|b| {
+            clip_body(b)
+                .lines()
+                .map(|line| format!("> {line}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_else(|| "> (comment text unavailable)".to_string());
+    format!(
+        "## {short_form}\n\n\
+         The user linked this {kind} from recorded session `{session_id}` and wants you to \
+         pay attention to it. **{author}** wrote{on}{state}:\n\n{quoted}\n\n\
+         Its id is `{comment_id}`; the organisation comment tools (`org_comments`, \
+         `org_comment_reply`, `org_comment_resolve`) accept that id or its \
+         `atlas-org://comment/…` link if you need the rest of the thread or to act on it."
+    )
+}
+
+/// Read a component markdown file (`command`/`agent`/`rule`) and return just
+/// its body, stripping a leading `---` frontmatter block. The frontend
+/// normally pre-fills the already-parsed body, so this is only the fallback
+/// path; it intentionally mirrors the minimal frontmatter handling in
+/// `commands::skills::parse_frontmatter` without depending on it.
+fn read_component_body(path: &str) -> String {
     let Ok(raw) = std::fs::read_to_string(path) else {
-        return "(unable to read skill)".to_string();
+        return "(unable to read component)".to_string();
     };
     strip_frontmatter(&raw)
 }
 
-/// Build the optional one-line lead (the skill/component `description:`, in
+/// Build the optional one-line lead (the component `description:`, in
 /// italics) prepended to an inlined body, or empty when there's no description.
 fn describe_lead(file_path: &str) -> String {
     match std::fs::read_to_string(file_path) {
@@ -507,54 +756,11 @@ mod tests {
     }
 
     #[test]
-    fn skill_short_form_and_block_use_hash_prefix() {
-        let m = MentionSpec::Skill {
-            id: "global:review-rust-diff".into(),
-            display_name: "review-rust-diff".into(),
-            file_path: "/nonexistent/SKILL.md".into(),
-            inline_body: Some("Review the diff the way I like.".into()),
-        };
-        assert_eq!(m.short_form(), "#skill:review-rust-diff");
-        let block = render_block(&m).expect("skill renders a block");
-        // No readable file → no description lead, block is body-only.
-        assert_eq!(
-            block,
-            "## #skill:review-rust-diff\n\nReview the diff the way I like."
-        );
-    }
-
-    #[test]
     fn frontmatter_description_reads_single_line_field() {
         let raw = "---\nname: x\ndescription: \"Does a thing\"\n---\n\nbody";
         assert_eq!(frontmatter_description(raw), "Does a thing");
         assert_eq!(frontmatter_description("no frontmatter here"), "");
         assert_eq!(frontmatter_description("---\nname: x\n---\nbody"), "");
-    }
-
-    #[test]
-    fn skill_block_leads_with_description_when_file_has_one() {
-        // A stub-bodied skill (like agent-browser): the useful "what/when" text
-        // lives in the frontmatter description, which must reach the agent.
-        let dir = std::env::temp_dir().join(format!("atlas-skill-lead-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("SKILL.md");
-        std::fs::write(
-            &path,
-            "---\nname: stubby\ndescription: Use for X and Y\n---\n\nThis is a discovery stub.",
-        )
-        .unwrap();
-        let m = MentionSpec::Skill {
-            id: "global:stubby".into(),
-            display_name: "stubby".into(),
-            file_path: path.to_string_lossy().into_owned(),
-            inline_body: Some("This is a discovery stub.".into()),
-        };
-        let block = render_block(&m).expect("skill renders a block");
-        assert_eq!(
-            block,
-            "## #skill:stubby\n\n_Use for X and Y_\n\nThis is a discovery stub."
-        );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 
@@ -577,4 +783,288 @@ fn read_repo_readme_body(repo_abs: &str, _repo_name: &str) -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod resource_link_tests {
+    use super::file_uri;
+
+    #[test]
+    fn a_plain_path_becomes_a_file_uri() {
+        assert_eq!(file_uri("/repo/src/main.rs"), "file:///repo/src/main.rs");
+    }
+
+    /// Spaces are the common case on macOS (`/Users/x/My Project`); an
+    /// unencoded space truncates the URI at the first word for a strict parser.
+    #[test]
+    fn spaces_are_encoded() {
+        assert_eq!(
+            file_uri("/Users/x/My Project/a.rs"),
+            "file:///Users/x/My%20Project/a.rs"
+        );
+    }
+
+    /// `#` and `?` would otherwise re-scope the rest of the path as a fragment
+    /// or query string, silently pointing the agent at the wrong file.
+    #[test]
+    fn fragment_and_query_delimiters_are_encoded() {
+        assert_eq!(file_uri("/a/b#c.rs"), "file:///a/b%23c.rs");
+        assert_eq!(file_uri("/a/b?c.rs"), "file:///a/b%3Fc.rs");
+        assert_eq!(file_uri("/a/100%.rs"), "file:///a/100%25.rs");
+    }
+
+    /// Deliberately narrow encoding: several agents strip the scheme and use
+    /// the remainder as a path, so over-encoding ordinary characters would
+    /// hand them a path that no longer exists.
+    #[test]
+    fn ordinary_path_characters_are_left_alone() {
+        for path in [
+            "/a/b-c_d.rs",
+            "/a/b.test.ts",
+            "/a/@scope/pkg/index.js",
+            "/a/b(1)/c.rs",
+            "/Users/x/Ünïcodé/файл.rs",
+        ] {
+            assert_eq!(file_uri(path), format!("file://{path}"), "{path}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod org_mention_tests {
+    use super::*;
+
+    fn spec(value: serde_json::Value) -> MentionSpec {
+        serde_json::from_value(value).expect("the frontend's mention shape")
+    }
+
+    fn member() -> serde_json::Value {
+        serde_json::json!({ "kind": "member", "id": "u-grace", "displayName": "Grace Hopper", "email": "grace@acme.dev" })
+    }
+
+    fn conversation() -> serde_json::Value {
+        serde_json::json!({ "kind": "conversation", "id": "c-general", "displayName": "general", "conversationKind": "channel" })
+    }
+
+    fn recorded() -> serde_json::Value {
+        serde_json::json!({
+            "kind": "recorded_session",
+            "id": "rs-1",
+            "displayName": "Fix the theme importer",
+            "sessionId": "rs-1",
+            "workspaceId": "ws-atlas",
+        })
+    }
+
+    fn links(composed: &ComposedPrompt) -> Vec<(String, String)> {
+        composed
+            .resource_links
+            .iter()
+            .map(|l| (l.uri.clone(), l.name.clone()))
+            .collect()
+    }
+
+    fn comment() -> serde_json::Value {
+        serde_json::json!({
+            "kind": "comment",
+            "id": "cm-7",
+            "displayName": "Grace: this retry loop never backs off",
+            "workspaceId": "ws-atlas",
+            "sessionId": "rs-1",
+            "authorName": "Grace Hopper",
+            "body": "this retry loop never backs off\nsee line 40",
+            "anchorLabel": "a Bash call",
+            "parentId": null,
+            "resolved": false,
+        })
+    }
+
+    /// A linked comment rides as a link the comment tools read AND quotes its
+    /// words, so the agent sees what the user pointed at without a tool call.
+    #[tokio::test]
+    async fn a_linked_comment_rides_as_a_link_and_quotes_what_it_says() {
+        let composed = compose_prompt("look at this".into(), vec![spec(comment())])
+            .await
+            .unwrap();
+        assert_eq!(
+            links(&composed),
+            [(
+                "atlas-org://comment/ws-atlas/rs-1/cm-7".to_string(),
+                "@comment:\"Grace: this retry loop never backs off\"".to_string(),
+            )],
+        );
+        assert_eq!(
+            OrgLink::parse(&composed.resource_links[0].uri),
+            Some(OrgLink::Comment {
+                workspace_id: "ws-atlas".into(),
+                session_id: "rs-1".into(),
+                comment_id: "cm-7".into(),
+            }),
+        );
+        let prose = &composed.prose;
+        assert!(
+            prose.starts_with("look at this\n\n---\n# Atlas context"),
+            "{prose}"
+        );
+        assert!(
+            prose.contains("**Grace Hopper** wrote on a Bash call:"),
+            "{prose}"
+        );
+        assert!(
+            prose.contains("> this retry loop never backs off\n> see line 40"),
+            "{prose}"
+        );
+        assert!(prose.contains("`cm-7`"), "{prose}");
+    }
+
+    #[test]
+    fn a_linked_reply_says_so_and_a_resolved_thread_is_marked() {
+        let block = render_comment_block(
+            "@comment:x",
+            "cm-8",
+            "rs-1",
+            None,
+            None,
+            None,
+            Some("cm-7"),
+            true,
+        );
+        assert!(block.contains("linked this reply"), "{block}");
+        assert!(
+            block.contains("**A teammate** wrote (thread resolved):"),
+            "{block}"
+        );
+        assert!(block.contains("> (comment text unavailable)"), "{block}");
+    }
+
+    #[tokio::test]
+    async fn organisation_mentions_ride_as_links_carrying_their_ids_with_a_short_label() {
+        let composed = compose_prompt(
+            "send it to them".into(),
+            vec![spec(member()), spec(conversation()), spec(recorded())],
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            links(&composed),
+            [
+                (
+                    "atlas-org://member/u-grace".to_string(),
+                    "@member:\"Grace Hopper\"".to_string()
+                ),
+                (
+                    "atlas-org://conversation/c-general".to_string(),
+                    "@conversation:general".to_string()
+                ),
+                (
+                    "atlas-org://recorded-session/ws-atlas/rs-1".to_string(),
+                    "@recorded-session:\"Fix the theme importer\"".to_string(),
+                ),
+            ],
+        );
+        assert_eq!(
+            composed.prose, "send it to them",
+            "ids only: nothing is inlined"
+        );
+    }
+
+    /// The links compose_prompt writes are the links the org tools read.
+    #[tokio::test]
+    async fn every_link_it_writes_parses_back_to_the_id_it_carries() {
+        let composed = compose_prompt(
+            String::new(),
+            vec![spec(member()), spec(conversation()), spec(recorded())],
+        )
+        .await
+        .unwrap();
+        let parsed: Vec<Option<OrgLink>> = composed
+            .resource_links
+            .iter()
+            .map(|l| OrgLink::parse(&l.uri))
+            .collect();
+        assert_eq!(
+            parsed,
+            [
+                Some(OrgLink::Member {
+                    user_id: "u-grace".into()
+                }),
+                Some(OrgLink::Conversation {
+                    id: "c-general".into()
+                }),
+                Some(OrgLink::RecordedSession {
+                    workspace_id: "ws-atlas".into(),
+                    session_id: "rs-1".into()
+                }),
+            ],
+        );
+    }
+
+    /// A recorded session and a local past session are different things, even
+    /// with the same id: the past session is inlined as a transcript and gets
+    /// no link; the recorded session is a link and inlines nothing.
+    #[tokio::test]
+    async fn a_recorded_session_and_a_past_session_are_never_conflated() {
+        let past = spec(serde_json::json!({
+            "kind": "past_session",
+            "id": "rs-1",
+            "displayName": "Fix the theme importer",
+            "sessionTitle": "Fix the theme importer",
+            "inlineBody": "### User\nfix it",
+        }));
+        let composed = compose_prompt("compare".into(), vec![spec(recorded()), past])
+            .await
+            .unwrap();
+        assert_eq!(
+            links(&composed),
+            [(
+                "atlas-org://recorded-session/ws-atlas/rs-1".to_string(),
+                "@recorded-session:\"Fix the theme importer\"".to_string(),
+            )],
+            "only the recorded session is a link",
+        );
+        assert!(
+            composed
+                .prose
+                .contains("## @session:\"Fix the theme importer\""),
+            "{}",
+            composed.prose
+        );
+        assert!(
+            composed.prose.contains("fix it"),
+            "the past session's transcript is still inlined"
+        );
+        assert!(
+            !composed.prose.contains("@recorded-session"),
+            "the recorded session inlines nothing"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_same_member_twice_is_one_link() {
+        let composed = compose_prompt(String::new(), vec![spec(member()), spec(member())])
+            .await
+            .unwrap();
+        assert_eq!(composed.resource_links.len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod short_form_tests {
+    use super::short_form_value;
+
+    /// A bare value ends at the first space, so a name with one must be quoted
+    /// or `@file:My Shot.png` reads back as a mention of `My`.
+    #[test]
+    fn a_value_with_whitespace_is_quoted() {
+        assert_eq!(
+            short_form_value("CleanShot 2026-09-15 at 10.04.08 PM@2x.png"),
+            "\"CleanShot 2026-09-15 at 10.04.08 PM@2x.png\""
+        );
+    }
+
+    #[test]
+    fn a_bare_value_is_left_alone() {
+        assert_eq!(short_form_value("src/main.rs"), "src/main.rs");
+        assert_eq!(short_form_value("Shot@2x.png"), "Shot@2x.png");
+    }
 }

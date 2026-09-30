@@ -15,13 +15,7 @@ import type { AccountUser } from "../lib/auth-api";
  * account-menu header (28px) stay the same component: the initial's colour is
  * identity, and two implementations of it would eventually disagree.
  */
-export function AccountAvatar({
-  user,
-  size,
-}: {
-  user: AccountUser;
-  size: number;
-}) {
+export function AccountAvatar({ user, size }: { user: AccountUser; size: number }) {
   // Keyed by path rather than a bare boolean, so a photo that changes gets a
   // fresh attempt instead of inheriting the previous one's failure.
   const [failedPath, setFailedPath] = useState<string | null>(null);
@@ -61,8 +55,11 @@ function Initial({ user, size }: { user: AccountUser; size: number }) {
         width: size,
         height: size,
         fontSize: Math.round(size * 0.55),
+        // ratchet-allow: an identity hue derived from the account id, not a theme colour.
         backgroundColor: `hsl(${hueFor(user.id)} 42% 40%)`,
       }}
+      // ratchet-allow: the initial rides on that same identity hue, which is
+      // saturated at a fixed lightness; white is what reads on all of them.
       className="flex items-center justify-center shrink-0 rounded-full font-medium leading-none text-white/90 select-none"
     >
       {letter}

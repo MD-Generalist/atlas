@@ -83,7 +83,20 @@ Every event carries these, and nothing else implicitly:
 | `app_version` | Atlas version, e.g. `0.2.4` |
 | `os` | `macos`, `linux`, `windows` |
 | `arch` | `aarch64`, `x86_64` |
-| `$groups` | `{ organisation: <id> }` — only while signed in with an active Organisation |
+| `$groups` | `{ organisation: <local org id> }` — whenever an Organisation is active |
+| `atlas_org_id` | The same local Organisation id, as a plain property |
+| `atlas_org_kind` | `cloud` (the org is synced) or `local` (it exists only on this machine) |
+
+**Organisation scoping.** Every event is attributed to the Organisation you are
+working in, so usage can be read per tenant rather than as one global stream.
+That includes **local-only orgs and events sent while signed out** — the active
+Organisation is a local fact, not an account one. The id that travels is always
+the *local* id: a random UUID this install minted, meaningless to anyone else.
+
+A **local** org's **name is never sent** — it is a string you typed into a box on
+your own machine. Only a synced org's name and your role in it are sent, and only
+via `$groupidentify` (both are already server-side and shared with everyone in
+that org).
 
 PostHog also records the ingest timestamp and the request's IP, which it uses for
 coarse geo-resolution. Atlas sends no other device, network, or locale information.
@@ -104,7 +117,7 @@ coarse geo-resolution. Atlas sends no other device, network, or locale informati
 | Event | When | Properties |
 | --- | --- | --- |
 | `$identify` | Sign-in, or when your account details change | `$anon_distinct_id` (device id, on the merge only), `$set` → `email`, `name`, `atlas_account`, `atlas_org_count`, `atlas_active_org_id`; `$set_once` → `atlas_device_id` |
-| `$groupidentify` | Sign-in with an active Organisation | `$group_type: organisation`, `$group_key`, `$group_set` → `name`, `role` |
+| `$groupidentify` | A **synced** Organisation becomes active (switch, sign-in, or "Turn on sync") | `$group_type: organisation`, `$group_key` (local org id), `$group_set` → `name`, `role`, `kind`. Never sent for a local-only org — there is nothing about it we are willing to describe. |
 | `auth_signed_in` | A device-authorization grant completes | `org_count`, `has_active_org` |
 | `auth_signed_out` | The user signs out from the account menu | `had_account` |
 
@@ -123,8 +136,8 @@ relaunch. Switching directly from one account to another never carries
 | `agent_turn_started` | A turn begins | `agent_family`, `plugin_id`, `session_ref`, `turn_seq` |
 | `agent_turn_completed` | A turn ends, however it ends | see below |
 
-`agent_family` is `acp` or `cersei`; `plugin_id` is the real agent (`claude-code-ts`,
-`codex`, `cersei`). `session_ref` is a salted, non-reversible 16-character digest that
+`agent_family` is `acp` or `native`; `plugin_id` is the real agent (`claude-code-ts`,
+`codex`, `atlas-agent`). `session_ref` is a salted, non-reversible 16-character digest that
 joins a start to its completion — never the agent's real session id, which for Claude
 Code appears in on-disk transcript paths. The salt is minted per launch and never
 persisted.

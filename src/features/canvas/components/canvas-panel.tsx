@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { matchesAction } from "@/features/keybindings/lib/use-scoped-hotkeys";
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -13,31 +14,26 @@ import {
   type EdgeChange,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import * as Dialog from "@radix-ui/react-dialog";
+import { Dialog } from "@base-ui/react/dialog";
 import { StickyNote } from "lucide-react";
-import { useProjectStore } from "@/features/project/stores/project-store";
-import { useCanvasStore, groupBounds, type CanvasNode, type ShapeType } from "../stores/canvas-store";
+import { useAppStore } from "@/features/app/stores/app-store";
+import { useCanvasStore, type CanvasNode, type ShapeType } from "../stores/canvas-store";
 import { canvasMediaUpload } from "../lib/canvas-api";
 import { NoteNode } from "./note-node";
 import { TextNode } from "./text-node";
 import { MediaNode } from "./media-node";
 import { ShapeNode } from "./shape-node";
-import { GroupFrameNode } from "./group-frame-node";
 import { CanvasToolbar } from "./canvas-toolbar";
 import { CanvasHeader } from "./canvas-header";
 import { CanvasExportToolbar } from "./canvas-export-toolbar";
 import { PagesPanel } from "./pages-panel";
 import { NoteEditorPanel } from "./note-editor-panel";
-import { AiInputFloat } from "./ai-input-float";
-import { AiGroupMarkers } from "./ai-group-marker";
-import { AiThreadPanel } from "./ai-thread-panel";
 
 const nodeTypes = {
   note: NoteNode,
   text: TextNode,
   media: MediaNode,
   shape: ShapeNode,
-  groupframe: GroupFrameNode,
 };
 
 export function CanvasPanel() {
@@ -49,7 +45,10 @@ export function CanvasPanel() {
   // never have two ReactFlow instances competing for state at once.
   const surface = (
     <ReactFlowProvider>
-      <CanvasSurface fullscreen={fullscreen} onToggleFullscreen={() => setFullscreen(!fullscreen)} />
+      <CanvasSurface
+        fullscreen={fullscreen}
+        onToggleFullscreen={() => setFullscreen(!fullscreen)}
+      />
     </ReactFlowProvider>
   );
 
@@ -58,18 +57,14 @@ export function CanvasPanel() {
   return (
     <Dialog.Root open onOpenChange={(open) => !open && setFullscreen(false)}>
       <Dialog.Portal>
-        <Dialog.Overlay
-          className="fixed inset-0 bg-black/60"
-          style={{ zIndex: "var(--z-overlay)" as unknown as number }}
-        />
-        <Dialog.Content
+        <Dialog.Backdrop className="fixed inset-0 z-overlay scrim" />
+        <Dialog.Popup
           aria-describedby={undefined}
-          className="fixed top-12 left-6 right-6 bottom-6 rounded-xl border border-[var(--border-default)] bg-[var(--bg-base)] overflow-hidden flex flex-col shadow-[var(--shadow-overlay)] focus:outline-none"
-          style={{ zIndex: "var(--z-modal)" as unknown as number }}
+          className="fixed top-12 left-6 right-6 bottom-6 z-modal rounded-xl border border-[var(--border)] bg-[var(--background)] overflow-hidden flex flex-col shadow-md focus:outline-none"
         >
           <Dialog.Title className="sr-only">Spaces</Dialog.Title>
           {surface}
-        </Dialog.Content>
+        </Dialog.Popup>
       </Dialog.Portal>
     </Dialog.Root>
   );
@@ -82,13 +77,12 @@ function CanvasSurface({
   fullscreen: boolean;
   onToggleFullscreen: () => void;
 }) {
-  const project = useProjectStore.use.currentProject();
+  const project = useAppStore.use.currentProject();
   const projectPath = project?.path ?? null;
 
   const storeProjectPath = useCanvasStore.use.projectPath();
   const nodes = useCanvasStore.use.nodes();
   const edges = useCanvasStore.use.edges();
-  const aiGroups = useCanvasStore.use.aiGroups();
   const tree = useCanvasStore.use.tree();
   const activePageId = useCanvasStore.use.activePageId();
   const selectedIds = useCanvasStore.use.selectedIds();
@@ -96,7 +90,6 @@ function CanvasSurface({
   const activeTool = useCanvasStore.use.activeTool();
   const canUndo = useCanvasStore.use.canUndo();
   const canRedo = useCanvasStore.use.canRedo();
-  const pendingAiThreadGroupId = useCanvasStore.use.pendingAiThreadGroupId();
   const {
     loadProject,
     addNote,
@@ -114,22 +107,14 @@ function CanvasSurface({
     beginInteraction,
     undo,
     redo,
-    consumePendingAiThread,
   } = useCanvasStore.use.actions();
 
-  // A create-tool (or Ask AI) is armed → the click overlay is active.
-  const armed =
-    activeTool === "note" ||
-    activeTool === "text" ||
-    activeTool === "ai" ||
-    activeTool.startsWith("shape:");
+  // A create-tool is armed → the click overlay is active.
+  const armed = activeTool === "note" || activeTool === "text" || activeTool.startsWith("shape:");
 
   // Which note is open in the slide-in editor (null = closed). Notes open on
   // double-click; text edits inline; media has no editor.
   const [editingId, setEditingId] = useState<string | null>(null);
-  // AI: floating composer position (after an "Ask AI" click) + open thread.
-  const [aiInput, setAiInput] = useState<{ screen: { x: number; y: number }; flow: { x: number; y: number } } | null>(null);
-  const [threadFor, setThreadFor] = useState<{ groupId: string; at: { x: number; y: number } } | null>(null);
   const [pagesOpen, setPagesOpen] = useState<boolean>(() => {
     try {
       return localStorage.getItem("atlas:canvas:pagesOpen") === "1";
@@ -162,27 +147,6 @@ function CanvasSurface({
   const rf = useReactFlow();
   const wrapperRef = useRef<HTMLDivElement>(null);
 
-  // An external caller (e.g. "Draw diagram" from a chat turn) asked us to open a
-  // group's AI thread so the user sees the live generation + can keep chatting.
-  // Center the view on the group and pop its thread panel, then consume.
-  useEffect(() => {
-    if (!pendingAiThreadGroupId) return;
-    const gid = pendingAiThreadGroupId;
-    const group = useCanvasStore.getState().aiGroups[gid];
-    consumePendingAiThread();
-    if (!group) return;
-    try {
-      rf.setCenter(group.anchor.x, group.anchor.y, { zoom: 0.9, duration: 400 });
-    } catch {
-      /* view not ready yet — the thread still opens below */
-    }
-    const rect = wrapperRef.current?.getBoundingClientRect();
-    const at = rect
-      ? { x: rect.left + rect.width / 2 - 170, y: rect.top + 96 }
-      : { x: 240, y: 120 };
-    setThreadFor({ groupId: gid, at });
-  }, [pendingAiThreadGroupId, rf, consumePendingAiThread]);
-
   // Project store data → xyflow shape. Node `type` = kind so xyflow routes to the
   // right renderer; `data` carries only what that renderer needs.
   const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
@@ -209,7 +173,7 @@ function CanvasSurface({
                   },
         draggable: true,
       })),
-    [nodes, selectedSet, projectPath]
+    [nodes, selectedSet, projectPath],
   );
   const rfEdges = useMemo<Edge[]>(
     () =>
@@ -220,39 +184,12 @@ function CanvasSurface({
         sourceHandle: e.sourceHandle ?? undefined,
         targetHandle: e.targetHandle ?? undefined,
         type: "smoothstep",
-        style: { stroke: "rgba(255,255,255,0.25)", strokeWidth: 1.5 },
+        style: { stroke: "var(--atlas-border-strong)", strokeWidth: 1.5 },
       })),
-    [edges]
+    [edges],
   );
 
-  // Subtle dashed frame per AI group, as a NON-interactive background node placed
-  // FIRST in the node array so every real node paints above the border.
-  const frameNodes = useMemo<Node[]>(
-    () =>
-      Object.keys(aiGroups).flatMap((gid) => {
-        const b = groupBounds(nodes, gid);
-        if (!b) return [];
-        return [
-          {
-            id: `frame:${gid}`,
-            type: "groupframe",
-            position: { x: b.x - 8, y: b.y - 8 },
-            width: b.width + 16,
-            height: b.height + 16,
-            selectable: false,
-            draggable: false,
-            connectable: false,
-            deletable: false,
-            focusable: false,
-            zIndex: 0,
-            style: { pointerEvents: "none" as const },
-            data: {},
-          },
-        ];
-      }),
-    [aiGroups, nodes]
-  );
-  const allNodes = useMemo(() => [...frameNodes, ...rfNodes], [frameNodes, rfNodes]);
+  const allNodes = rfNodes;
 
   // Apply position/remove/selection changes back to the store. Selection is
   // multi (marquee): fold every select change into the current set.
@@ -273,7 +210,7 @@ function CanvasSurface({
       }
       if (selChanged) setSelectedIds([...sel]);
     },
-    [moveNote, deleteNote, setSelectedIds]
+    [moveNote, deleteNote, setSelectedIds],
   );
 
   const onEdgesChange = useCallback(
@@ -282,14 +219,14 @@ function CanvasSurface({
         if (c.type === "remove") deleteEdge(c.id);
       }
     },
-    [deleteEdge]
+    [deleteEdge],
   );
 
   const onConnect = useCallback(
     (c: Connection) => {
       if (c.source && c.target) addEdge(c.source, c.target, c.sourceHandle, c.targetHandle);
     },
-    [addEdge]
+    [addEdge],
   );
 
   const viewportCenter = useCallback(
@@ -303,7 +240,7 @@ function CanvasSurface({
       });
       return { x: c.x + dx, y: c.y + dy };
     },
-    [rf]
+    [rf],
   );
 
   // Empty-canvas click just clears selection. Create-tools are handled by the
@@ -313,9 +250,12 @@ function CanvasSurface({
   // ── Drag-to-create (Excalidraw-style) ──────────────────────────────────────
   // While a create-tool is armed, an overlay captures pointer drags: press+drag
   // sizes the shape (Shift = 1:1 square), a plain click drops a default size.
-  const [preview, setPreview] = useState<{ left: number; top: number; w: number; h: number } | null>(
-    null
-  );
+  const [preview, setPreview] = useState<{
+    left: number;
+    top: number;
+    w: number;
+    h: number;
+  } | null>(null);
   const dragStart = useRef<{ sx: number; sy: number; fx: number; fy: number } | null>(null);
 
   const overlayDown = useCallback(
@@ -328,7 +268,7 @@ function CanvasSurface({
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
       setPreview(null);
     },
-    [rf]
+    [rf],
   );
 
   const overlayMove = useCallback((e: React.PointerEvent) => {
@@ -371,12 +311,6 @@ function CanvasSurface({
       const w = Math.abs(dx);
       const h = Math.abs(dy);
       const tiny = w < 8 && h < 8; // treat as a click → default size
-      if (tool === "ai") {
-        // Open the AI composer at the click point (screen = wrapper-relative).
-        setAiInput({ screen: { x: st.sx, y: st.sy }, flow: { x: st.fx, y: st.fy } });
-        setTool("select");
-        return;
-      }
       if (tool.startsWith("shape:")) {
         const type = tool.slice(6) as ShapeType;
         if (tiny) addShape(type, { x: st.fx - 65, y: st.fy - 45 });
@@ -388,7 +322,7 @@ function CanvasSurface({
       }
       setTool("select");
     },
-    [rf, addShape, addNote, addText, setTool]
+    [rf, addShape, addNote, addText, setTool],
   );
 
   // Escape disarms a create-tool (back to the default pointer/pan mode).
@@ -405,16 +339,15 @@ function CanvasSurface({
   // canvas tab is actually visible and focus isn't in a text field/editor.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (!(e.metaKey || e.ctrlKey)) return;
       const w = wrapperRef.current;
       if (!w || w.offsetParent === null) return;
       const ae = document.activeElement as HTMLElement | null;
-      if (ae && (ae.tagName === "INPUT" || ae.tagName === "TEXTAREA" || ae.isContentEditable)) return;
-      const key = e.key.toLowerCase();
-      if (key === "z" && !e.shiftKey) {
+      if (ae && (ae.tagName === "INPUT" || ae.tagName === "TEXTAREA" || ae.isContentEditable))
+        return;
+      if (matchesAction(e, "canvas.undo")) {
         e.preventDefault();
         undo();
-      } else if ((key === "z" && e.shiftKey) || key === "y") {
+      } else if (matchesAction(e, "canvas.redo")) {
         e.preventDefault();
         redo();
       }
@@ -451,7 +384,7 @@ function CanvasSurface({
     (_: unknown, vp: { x: number; y: number; zoom: number }) => {
       setViewport(vp);
     },
-    [setViewport]
+    [setViewport],
   );
 
   const jumpToNode = useCallback(
@@ -460,7 +393,7 @@ function CanvasSurface({
       if (!n) return;
       rf.setCenter(n.x + 160, n.y + 60, { duration: 350, zoom: rf.getZoom() });
     },
-    [rf]
+    [rf],
   );
 
   // Open the slide-in editor on a note double-click (text/media aren't notes).
@@ -471,10 +404,10 @@ function CanvasSurface({
 
   if (!projectPath) {
     return (
-      <div className="h-full flex flex-col items-center justify-center text-[12px] text-text-tertiary gap-2 px-6 text-center">
+      <div className="h-full flex flex-col items-center justify-center text-sm text-muted-foreground gap-2 px-6 text-center">
         <StickyNote size={18} className="opacity-60" />
         <div>No project open.</div>
-        <div className="text-[10px]">Spaces are per-project. Open a folder to start a board.</div>
+        <div className="text-2xs">Spaces are per-project. Open a folder to start a board.</div>
       </div>
     );
   }
@@ -482,114 +415,109 @@ function CanvasSurface({
   return (
     <div className="flex h-full min-h-0">
       {pagesOpen && <PagesPanel />}
-      <div ref={wrapperRef} className="relative min-h-0 min-w-0 flex-1 bg-bg-base overflow-hidden">
-      {!loaded && (
-        <div className="absolute inset-0 flex items-center justify-center text-[11px] text-text-tertiary z-30">
-          Loading…
-        </div>
-      )}
-
-      <ReactFlow
-        nodes={allNodes}
-        edges={rfEdges}
-        onNodesChange={onNodesChange}
-        onEdgesChange={onEdgesChange}
-        onConnect={onConnect}
-        onNodeDragStart={() => beginInteraction()}
-        onNodeDoubleClick={onNodeDoubleClick}
-        onPaneClick={onPaneClick}
-        onMoveEnd={onMoveEnd}
-        nodeTypes={nodeTypes}
-        connectionMode={ConnectionMode.Loose}
-        connectionRadius={40}
-        minZoom={0.2}
-        maxZoom={2}
-        fitView={false}
-        defaultViewport={useCanvasStore.getState().viewport}
-        deleteKeyCode={["Backspace", "Delete"]}
-        proOptions={{ hideAttribution: true }}
-        // Drag empty canvas to pan (hold Space also pans); click selects a node;
-        // Shift-click multi-selects. No marquee tool (it fought Space-to-pan).
-        panOnScroll
+      <div
+        ref={wrapperRef}
+        className="relative min-h-0 min-w-0 flex-1 bg-background overflow-hidden"
       >
-        <Background
-          variant={BackgroundVariant.Dots}
-          gap={20}
-          size={1.2}
-          color="rgba(255,255,255,0.18)"
-        />
-      </ReactFlow>
+        {!loaded && (
+          <div className="absolute inset-0 flex items-center justify-center text-xs text-muted-foreground z-panel">
+            Loading…
+          </div>
+        )}
 
-      {/* Drag-to-create overlay — only mounted while a create-tool is armed. */}
-      {armed && (
-        <div
-          className="absolute inset-0 z-10 cursor-crosshair"
-          onPointerDown={overlayDown}
-          onPointerMove={overlayMove}
-          onPointerUp={overlayUp}
+        <ReactFlow
+          nodes={allNodes}
+          edges={rfEdges}
+          onNodesChange={onNodesChange}
+          onEdgesChange={onEdgesChange}
+          onConnect={onConnect}
+          onNodeDragStart={() => beginInteraction()}
+          onNodeDoubleClick={onNodeDoubleClick}
+          onPaneClick={onPaneClick}
+          onMoveEnd={onMoveEnd}
+          nodeTypes={nodeTypes}
+          connectionMode={ConnectionMode.Loose}
+          connectionRadius={40}
+          minZoom={0.2}
+          maxZoom={2}
+          fitView={false}
+          defaultViewport={useCanvasStore.getState().viewport}
+          deleteKeyCode={["Backspace", "Delete"]}
+          proOptions={{ hideAttribution: true }}
+          // Drag empty canvas to pan (hold Space also pans); click selects a node;
+          // Shift-click multi-selects. No marquee tool (it fought Space-to-pan).
+          panOnScroll
         >
-          {preview && (
-            <div
-              className="absolute rounded border border-[var(--accent-primary)] bg-[var(--accent-primary)]/10 pointer-events-none"
-              style={{ left: preview.left, top: preview.top, width: preview.w, height: preview.h }}
-            />
-          )}
-        </div>
-      )}
+          <Background
+            variant={BackgroundVariant.Dots}
+            gap={20}
+            size={1.2}
+            // xyflow writes `color` into `--xy-background-pattern-color-props`
+            // and the dot's `fill` reads it back through a var chain, so a
+            // custom property survives the round trip and the grid recolours
+            // on a theme switch with no re-render. `border.strong` is the
+            // structural ramp's top rung — the same weight the dots had as a
+            // fixed 18%-white, and the only one still legible on a light
+            // variant.
+            color="var(--atlas-border-strong)"
+          />
+        </ReactFlow>
 
-      {/* Floating overlays (Miro-style) */}
-      <CanvasHeader
-        pageName={pageName}
-        pageIcon={pageIcon}
-        pagesOpen={pagesOpen}
-        onTogglePages={togglePages}
-        fullscreen={fullscreen}
-        onFit={handleFit}
-        onToggleFullscreen={onToggleFullscreen}
-      />
-      <CanvasExportToolbar />
-      <CanvasToolbar
-        activeTool={activeTool}
-        onTool={setTool}
-        onInsertMedia={handleInsertMedia}
-        canUndo={canUndo}
-        canRedo={canRedo}
-        onUndo={undo}
-        onRedo={redo}
-      />
+        {/* Drag-to-create overlay — only mounted while a create-tool is armed. */}
+        {armed && (
+          <div
+            className="absolute inset-0 z-10 cursor-crosshair"
+            onPointerDown={overlayDown}
+            onPointerMove={overlayMove}
+            onPointerUp={overlayUp}
+          >
+            {preview && (
+              <div
+                className="absolute rounded border border-[var(--primary)] bg-[var(--primary)]/10 pointer-events-none"
+                style={{
+                  left: preview.left,
+                  top: preview.top,
+                  width: preview.w,
+                  height: preview.h,
+                }}
+              />
+            )}
+          </div>
+        )}
 
-      {editingId && (
-        <NoteEditorPanel
-          key={editingId}
-          noteId={editingId}
-          projectPath={projectPath}
-          onClose={() => setEditingId(null)}
-          onJumpToNode={(id) => {
-            setEditingId(id);
-            jumpToNode(id);
-          }}
+        {/* Floating overlays (Miro-style) */}
+        <CanvasHeader
+          pageName={pageName}
+          pageIcon={pageIcon}
+          pagesOpen={pagesOpen}
+          onTogglePages={togglePages}
+          fullscreen={fullscreen}
+          onFit={handleFit}
+          onToggleFullscreen={onToggleFullscreen}
         />
-      )}
+        <CanvasExportToolbar containerRef={wrapperRef} />
+        <CanvasToolbar
+          activeTool={activeTool}
+          onTool={setTool}
+          onInsertMedia={handleInsertMedia}
+          canUndo={canUndo}
+          canRedo={canRedo}
+          onUndo={undo}
+          onRedo={redo}
+        />
 
-      {/* AI copilot: ✨ group pins, floating composer, and thread popover. */}
-      <AiGroupMarkers onOpenThread={(groupId, at) => setThreadFor({ groupId, at })} />
-      {aiInput && (
-        <AiInputFloat
-          screen={aiInput.screen}
-          flow={aiInput.flow}
-          projectPath={projectPath}
-          onClose={() => setAiInput(null)}
-        />
-      )}
-      {threadFor && (
-        <AiThreadPanel
-          key={threadFor.groupId}
-          groupId={threadFor.groupId}
-          at={threadFor.at}
-          projectPath={projectPath}
-          onClose={() => setThreadFor(null)}
-        />
-      )}
+        {editingId && (
+          <NoteEditorPanel
+            key={editingId}
+            noteId={editingId}
+            projectPath={projectPath}
+            onClose={() => setEditingId(null)}
+            onJumpToNode={(id) => {
+              setEditingId(id);
+              jumpToNode(id);
+            }}
+          />
+        )}
       </div>
     </div>
   );

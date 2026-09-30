@@ -23,12 +23,12 @@ export interface PageMetaPatch {
   owner?: string | null;
 }
 
-interface MetaFile {
+export interface MetaFile {
   version: number;
   pages: Record<string, RustPageMeta>;
 }
 
-interface RustPageMeta {
+export interface RustPageMeta {
   icon?: string | null;
   cover?: string | null;
   title?: string | null;
@@ -77,9 +77,7 @@ let unlisten: UnlistenFn | null = null;
 // without this the cache stays stuck on filename-style ids. Lazy import
 // avoids a static cycle with chat/lib/mentions (which imports this store).
 function republishMentionCache() {
-  void import("@/features/chat/lib/mentions").then((m) =>
-    m.publishKnowledgeToMentionCache(),
-  );
+  void import("@/features/chat/lib/mentions").then((m) => m.publishKnowledgeToMentionCache());
 }
 
 const store = create<KnowledgeMetaState>()((set, get) => ({

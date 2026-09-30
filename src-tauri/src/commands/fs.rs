@@ -28,7 +28,7 @@ pub async fn read_directory(path: String) -> Result<Vec<FileEntry>, String> {
 fn read_directory_sync(path: &str) -> Result<Vec<FileEntry>, String> {
     let dir = Path::new(path);
     if !dir.is_dir() {
-        return Err(format!("Not a directory: {}", path));
+        return Err(format!("Not a directory: {path}"));
     }
 
     let mut entries = Vec::new();
@@ -73,7 +73,7 @@ fn read_directory_sync(path: &str) -> Result<Vec<FileEntry>, String> {
 #[tauri::command]
 pub async fn read_file_content(path: String) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
-        fs::read_to_string(&path).map_err(|e| format!("Failed to read {}: {}", path, e))
+        fs::read_to_string(&path).map_err(|e| format!("Failed to read {path}: {e}"))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -90,7 +90,19 @@ pub async fn read_file_content(path: String) -> Result<String, String> {
 pub async fn read_file_base64(path: String) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
         use base64::Engine;
-        let bytes = fs::read(&path).map_err(|e| format!("Failed to read {}: {}", path, e))?;
+        // Sanity ceiling, not a policy: this feeds PDFs and pasted images, so
+        // it has to accept real documents — but a base64 string is 4/3 the
+        // file and every byte crosses IPC and lives in the JS heap. Above
+        // this, the asset protocol is the right transport.
+        const MAX_INLINE_BYTES: u64 = 50 * 1024 * 1024;
+        let meta = fs::metadata(&path).map_err(|e| format!("Failed to read {path}: {e}"))?;
+        if meta.len() > MAX_INLINE_BYTES {
+            return Err(format!(
+                "file is too large to inline ({} MB; 50 MB max)",
+                meta.len() / (1024 * 1024)
+            ));
+        }
+        let bytes = fs::read(&path).map_err(|e| format!("Failed to read {path}: {e}"))?;
         Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
     })
     .await
@@ -138,7 +150,7 @@ pub async fn capture_screenshot(
         let out = dir.join(format!("atlas_shot_{ts}.png"));
 
         // `-x` silences the shutter sound; `-t png` fixes the format.
-        let mut cmd = std::process::Command::new("/usr/sbin/screencapture");
+        let mut cmd = atlas_process::command("/usr/sbin/screencapture");
         if interactive {
             cmd.arg("-i");
         }
@@ -180,12 +192,11 @@ pub async fn capture_screenshot(
 pub async fn is_text_file(path: String) -> Result<bool, String> {
     tokio::task::spawn_blocking(move || {
         use std::io::Read;
-        let mut f =
-            fs::File::open(&path).map_err(|e| format!("Failed to open {}: {}", path, e))?;
+        let mut f = fs::File::open(&path).map_err(|e| format!("Failed to open {path}: {e}"))?;
         let mut buf = [0u8; 8192];
         let n = f
             .read(&mut buf)
-            .map_err(|e| format!("Failed to read {}: {}", path, e))?;
+            .map_err(|e| format!("Failed to read {path}: {e}"))?;
         let slice = &buf[..n];
         // Empty file → treat as text (an empty editor is fine).
         if slice.is_empty() {
@@ -207,17 +218,78 @@ pub async fn is_text_file(path: String) -> Result<bool, String> {
     .map_err(|e| e.to_string())?
 }
 
-/// Grant the asset protocol read access to a project directory (recursive), so
-/// the media viewer can serve images/video/audio from it via `convertFileSrc`.
-/// The static scope (tauri.conf.json) is intentionally narrow ($HOME) rather
-/// than `**`; this adds the open project's tree at runtime so projects on
-/// external volumes (outside $HOME) also work without serving the whole disk.
+/// Grant the asset protocol read access to a directory (recursive), so the
+/// media viewer can serve images/video/audio from it via `convertFileSrc`.
+///
+/// BOUNDED: the old version passed the renderer's string straight to
+/// `allow_directory`, so `asset_allow_dir("/")` made the entire filesystem
+/// readable over `asset://` for the rest of the session. A grant now has to
+/// be either (a) under a known project root — the project-open case, external
+/// volumes included — or (b) a *visible* directory under `$HOME` (the
+/// "@-mention a screenshot on the Desktop" case). Hidden directories
+/// (`~/.ssh`, `~/.aws`), `~/Library`, and system roots are refused.
 #[tauri::command]
-pub fn asset_allow_dir(path: String, app: tauri::AppHandle) -> Result<(), String> {
+pub fn asset_allow_dir(
+    path: String,
+    app: tauri::AppHandle,
+    app_state: tauri::State<'_, crate::AppStateHandle>,
+) -> Result<(), String> {
     use tauri::Manager;
+    let requested = std::path::Path::new(&path);
+    if !requested.is_absolute() {
+        return Err("asset grant must be an absolute path".into());
+    }
+    let canonical = dunce::canonicalize(requested)
+        .map_err(|e| format!("cannot grant a directory that does not resolve: {e}"))?;
+
+    let project_roots: Vec<std::path::PathBuf> = {
+        let state = app_state.lock();
+        state
+            .workspaces
+            .iter()
+            .map(|w| std::path::PathBuf::from(&w.path))
+            .collect()
+    };
+    if !asset_grant_allowed(&canonical, &project_roots, dirs::home_dir().as_deref()) {
+        return Err("that directory is outside what the media viewer may serve".into());
+    }
+
     app.asset_protocol_scope()
-        .allow_directory(&path, true)
+        .allow_directory(&canonical, true)
         .map_err(|e| e.to_string())
+}
+
+/// The asset-grant policy, pure so it is testable: a canonical directory may
+/// be granted when it sits under a known project root, or when it is a
+/// VISIBLE directory under `$HOME` — hidden dirs (`~/.ssh`), `~/Library`, and
+/// `$HOME` itself are refused, and anything else (system roots, other users)
+/// falls through to refusal.
+fn asset_grant_allowed(
+    canonical: &std::path::Path,
+    project_roots: &[std::path::PathBuf],
+    home: Option<&std::path::Path>,
+) -> bool {
+    let under_project = project_roots.iter().any(|root| {
+        let root = dunce::canonicalize(root).unwrap_or_else(|_| root.clone());
+        canonical.starts_with(&root)
+    });
+    if under_project {
+        return true;
+    }
+    home.is_some_and(|home| {
+        let Ok(rel) = canonical.strip_prefix(home) else {
+            return false;
+        };
+        match rel.components().next() {
+            // `$HOME` itself would grant every dotfile below it.
+            None => false,
+            Some(std::path::Component::Normal(first)) => {
+                let first = first.to_string_lossy();
+                !first.starts_with('.') && first != "Library"
+            }
+            Some(_) => false,
+        }
+    })
 }
 
 /// File modification time as unix milliseconds (0 if the file is missing).
@@ -241,7 +313,7 @@ pub async fn file_mtime_ms(path: String) -> Result<i64, String> {
 #[tauri::command]
 pub async fn write_file_content(path: String, content: String) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
-        fs::write(&path, &content).map_err(|e| format!("Failed to write {}: {}", path, e))
+        fs::write(&path, &content).map_err(|e| format!("Failed to write {path}: {e}"))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -257,7 +329,7 @@ pub async fn write_file_base64(path: String, contents: String) -> Result<(), Str
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(contents.as_bytes())
             .map_err(|e| format!("bad base64: {e}"))?;
-        fs::write(&path, &bytes).map_err(|e| format!("Failed to write {}: {}", path, e))
+        fs::write(&path, &bytes).map_err(|e| format!("Failed to write {path}: {e}"))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -274,12 +346,12 @@ pub async fn fs_create_file(path: String) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
         let p = Path::new(&path);
         if p.exists() {
-            return Err(format!("Already exists: {}", path));
+            return Err(format!("Already exists: {path}"));
         }
         if let Some(parent) = p.parent() {
             fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
-        fs::write(p, "").map_err(|e| format!("Failed to create {}: {}", path, e))
+        fs::write(p, "").map_err(|e| format!("Failed to create {path}: {e}"))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -290,9 +362,9 @@ pub async fn fs_create_dir(path: String) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
         let p = Path::new(&path);
         if p.exists() {
-            return Err(format!("Already exists: {}", path));
+            return Err(format!("Already exists: {path}"));
         }
-        fs::create_dir_all(p).map_err(|e| format!("Failed to mkdir {}: {}", path, e))
+        fs::create_dir_all(p).map_err(|e| format!("Failed to mkdir {path}: {e}"))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -303,7 +375,7 @@ pub async fn fs_rename(from: String, to: String) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
         let dst = Path::new(&to);
         if dst.exists() {
-            return Err(format!("Target already exists: {}", to));
+            return Err(format!("Target already exists: {to}"));
         }
         fs::rename(&from, &to).map_err(|e| format!("Failed to rename: {e}"))
     })
@@ -335,7 +407,7 @@ pub async fn fs_copy(from: String, to: String) -> Result<(), String> {
         let src = Path::new(&from);
         let dst = Path::new(&to);
         if dst.exists() {
-            return Err(format!("Target already exists: {}", to));
+            return Err(format!("Target already exists: {to}"));
         }
         if src.is_dir() {
             copy_dir_recursive(src, dst)
@@ -376,7 +448,7 @@ pub async fn fs_duplicate(path: String) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
         let src = Path::new(&path);
         if !src.exists() {
-            return Err(format!("Not found: {}", path));
+            return Err(format!("Not found: {path}"));
         }
         let parent = src.parent().ok_or("No parent dir")?;
         let stem = src
@@ -408,9 +480,8 @@ pub async fn fs_duplicate(path: String) -> Result<String, String> {
     .map_err(|e| e.to_string())?
 }
 
-/// Open a folder in the system terminal. macOS only for now —
-/// returns `Err("unsupported")` on other platforms so the frontend
-/// can show a sensible toast.
+/// Open a folder in the system terminal.
+/// Supported on macOS and Linux.
 #[tauri::command]
 pub async fn fs_open_in_terminal(path: String) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
@@ -423,7 +494,48 @@ pub async fn fs_open_in_terminal(path: String) -> Result<(), String> {
                 .map(|_| ())
                 .map_err(|e| format!("Failed to open Terminal: {e}"))
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "linux")]
+        {
+            use std::process::Command;
+            let target_path = std::path::Path::new(&path);
+            let target_dir = if target_path.is_dir() {
+                target_path
+            } else if let Some(parent) = target_path.parent() {
+                parent
+            } else {
+                target_path
+            };
+            let dir_str = target_dir.to_string_lossy();
+
+            // Modern desktop spec, common desktop terminals, and popular standalone emulators.
+            let terminals: &[(&str, &[&str])] = &[
+                ("xdg-terminal-exec", &[]),
+                ("x-terminal-emulator", &[]),
+                ("ptyxis", &["--working-directory", &dir_str]),
+                ("gnome-terminal", &["--working-directory", &dir_str]),
+                ("kitty", &["--directory", &dir_str]),
+                ("foot", &["--working-directory", &dir_str]),
+                ("alacritty", &["--working-directory", &dir_str]),
+                ("ghostty", &["--working-directory", &dir_str]),
+                ("wezterm", &["start", "--cwd", &dir_str]),
+                ("konsole", &["--workdir", &dir_str]),
+                ("xfce4-terminal", &["--working-directory", &dir_str]),
+                ("xterm", &[]),
+            ];
+
+            for (term, args) in terminals {
+                if Command::new(term)
+                    .args(*args)
+                    .current_dir(target_dir)
+                    .spawn()
+                    .is_ok()
+                {
+                    return Ok(());
+                }
+            }
+            Err("No supported terminal emulator found".to_string())
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         {
             let _ = path;
             Err::<(), String>("unsupported".to_string())
@@ -524,9 +636,7 @@ pub async fn ensure_atlas_gitignore(
         .map_err(|e| e.to_string())?
 }
 
-fn ensure_atlas_gitignore_sync(
-    project_path: &str,
-) -> Result<EnsureAtlasGitignoreResult, String> {
+fn ensure_atlas_gitignore_sync(project_path: &str) -> Result<EnsureAtlasGitignoreResult, String> {
     let root = Path::new(project_path);
     if !root.join(".git").exists() {
         return Ok(EnsureAtlasGitignoreResult::NotGitRepo);
@@ -535,7 +645,7 @@ fn ensure_atlas_gitignore_sync(
     let gitignore = root.join(".gitignore");
 
     if !gitignore.exists() {
-        fs::write(&gitignore, format!("{}\n", ATLAS_GITIGNORE_PATTERN))
+        fs::write(&gitignore, format!("{ATLAS_GITIGNORE_PATTERN}\n"))
             .map_err(|e| format!("could not create .gitignore: {e}"))?;
         tracing::info!(
             target: "atlas::gitignore",
@@ -581,4 +691,68 @@ fn atlas_pattern_present(contents: &str) -> bool {
         }
         matches!(line, ".atlas" | ".atlas/" | "/.atlas" | "/.atlas/")
     })
+}
+
+#[cfg(test)]
+mod inline_cap_tests {
+    use super::read_file_base64;
+
+    #[tokio::test]
+    async fn the_inline_ceiling_holds() {
+        let dir = std::env::temp_dir().join(format!("atlas-b64-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let small = dir.join("small.pdf");
+        std::fs::write(&small, b"pdf bytes").unwrap();
+        assert!(read_file_base64(small.to_string_lossy().into())
+            .await
+            .is_ok());
+
+        // 51MB: a real document ceiling, not a policy about content.
+        let big = dir.join("big.bin");
+        let f = std::fs::File::create(&big).unwrap();
+        f.set_len(51 * 1024 * 1024).unwrap();
+        let err = read_file_base64(big.to_string_lossy().into())
+            .await
+            .unwrap_err();
+        assert!(err.contains("too large"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod asset_grant_tests {
+    use super::asset_grant_allowed;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn the_grant_policy_table() {
+        let home = Path::new("/Users/me");
+        let ws = vec![PathBuf::from("/Volumes/ext/project")];
+
+        // Visible home dirs and project roots pass.
+        for ok in [
+            "/Users/me/Desktop/shots",
+            "/Users/me/Documents",
+            "/Volumes/ext/project/media",
+        ] {
+            assert!(asset_grant_allowed(Path::new(ok), &ws, Some(home)), "{ok}");
+        }
+        // The audit shapes: root grant, hidden dirs, Library, home itself,
+        // system paths, another user's tree.
+        for bad in [
+            "/",
+            "/Users/me",
+            "/Users/me/.ssh",
+            "/Users/me/.aws/credentials",
+            "/Users/me/Library/Keychains",
+            "/etc",
+            "/Users/other/Desktop",
+        ] {
+            assert!(
+                !asset_grant_allowed(Path::new(bad), &ws, Some(home)),
+                "{bad}"
+            );
+        }
+    }
 }

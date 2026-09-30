@@ -1,12 +1,8 @@
 import { useEffect, useRef, type CSSProperties, type ReactNode } from "react";
-import {
-  ChevronRight,
-  File as FileIcon,
-  Folder,
-  FolderOpen,
-  type LucideIcon,
-} from "lucide-react";
+import { ChevronRight, File as FileIcon, Folder, FolderOpen, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { FileIcon as ThemedFileIcon } from "@/features/icon-theme/components/file-icon";
+import { useIconThemeStore } from "@/features/icon-theme/stores/icon-theme-store";
 import { INDENT_PER_LEVEL, ROW_HEIGHT } from "../lib/tree-constants";
 
 interface TreeRowProps {
@@ -56,9 +52,13 @@ interface TreeRowProps {
   isDropTarget?: boolean;
   /** Dim this row while it's the active drag source. */
   isDragging?: boolean;
-  /** When set, paints a small git-status dot in the left gutter (e.g. a
-   *  modified/added/untracked marker). Pass a CSS color string. */
+  /** When set, paints a small git-status dot at the trailing edge. File names
+   *  use the same color; folders retain their neutral typography. */
   gitColor?: string | null;
+  /** The real path this row stands for. When present, the row's icon comes
+   *  from the active icon theme; without it the row keeps the lucide default,
+   *  which is what the knowledge tree (whose rows are pages, not files) wants. */
+  iconPath?: string;
 }
 
 /**
@@ -89,8 +89,15 @@ export function TreeRow({
   isDropTarget,
   isDragging,
   gitColor,
+  iconPath,
 }: TreeRowProps) {
   const isEditing = !!editingMode;
+  // A theme that draws its own open/closed folders asks for the twisty to go
+  // (`hidesExplorerArrows`); the spacer stays so names still line up. It only
+  // applies to rows the theme is actually drawing — a knowledge page keeps its
+  // chevron whatever a file-icon theme thinks.
+  const themeHidesArrows = useIconThemeStore.use.hidesExplorerArrows();
+  const hideArrows = themeHidesArrows && iconPath !== undefined;
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Pre-select the basename (no extension) so renames feel like
@@ -160,19 +167,19 @@ export function TreeRow({
         "absolute left-0 right-0 flex items-center gap-1.5 text-left rounded-md mx-1",
         "transition-colors group select-none",
         isEditing ? "cursor-text" : "cursor-pointer",
-        "focus:outline-none focus-visible:ring-1 focus-visible:ring-border-focus",
+        "focus:outline-none focus-visible:ring-1 focus-visible:ring-border-strong",
         // Selection fill (multi-select) takes visual priority over the
         // active-file pill; callers make the two mutually exclusive.
         isSelected
-          ? "bg-bg-selected text-text-primary"
+          ? "bg-element-selected text-foreground"
           : isActive
-            ? "bg-[var(--bg-elevated)] text-text-primary"
-            : "text-text-secondary hover:bg-bg-hover hover:text-text-primary",
+            ? "bg-[var(--card)] text-foreground"
+            : "text-secondary-foreground hover:bg-element-hover hover:text-foreground",
         // Drop-target highlight — kept deliberately subtle to match
         // Atlas's monochromatic surfaces: a muted accent fill with a
         // hairline inset accent ring, not a heavy outline.
         isDropTarget &&
-          "bg-[var(--accent-primary-muted)] ring-1 ring-inset ring-accent/40 text-text-primary",
+          "bg-[var(--atlas-primary-muted)] ring-1 ring-inset ring-primary/40 text-foreground",
         // Source row dimmed while drag is in flight.
         isDragging && "opacity-40",
         isCut && "opacity-50",
@@ -188,20 +195,14 @@ export function TreeRow({
         ...style,
       }}
     >
-      {/* Left slot: chevron (folders) / spacer (files), OR a git-status dot.
-          A COLLAPSED folder with changes shows the dot IN PLACE of its right
-          chevron (so the dot never overlaps the arrow); expanding restores the
-          down chevron (its children then carry their own dots). A changed file
-          shows the dot in its (otherwise empty) gutter slot. */}
-      {!isEditing && gitColor && (!isDir || !isExpanded) ? (
-        <span className="w-3 shrink-0 flex items-center justify-center" aria-hidden>
-          <span className="rounded-full" style={{ width: 6, height: 6, background: gitColor }} />
-        </span>
-      ) : isDir ? (
+      {/* The left slot is intentionally stable: a folder always owns its
+          chevron and a file always owns its spacer. Git state lives beside the
+          filename at the row's trailing edge, where it cannot displace either. */}
+      {isDir && !hideArrows ? (
         <ChevronRight
           size={12}
           className={cn(
-            "shrink-0 text-text-tertiary transition-transform",
+            "shrink-0 text-muted-foreground transition-transform",
             isExpanded && "rotate-90",
           )}
           strokeWidth={2}
@@ -210,33 +211,32 @@ export function TreeRow({
         <span className="w-3 shrink-0" aria-hidden />
       )}
 
-      {isDir ? (
-        isExpanded ? (
-          <FolderOpen
-            size={13}
-            className="shrink-0 text-text-tertiary"
-            strokeWidth={1.5}
-          />
-        ) : (
-          <Folder
-            size={13}
-            className="shrink-0 text-text-tertiary"
-            strokeWidth={1.5}
-          />
-        )
-      ) : leafIconNode ? (
+      {/* A caller-supplied node (the knowledge tree's page emoji) still wins:
+          it is metadata about that row, not a guess from its name. Otherwise a
+          row that stands for a real path gets the icon theme's answer, and a
+          row that does not — a knowledge page, a group — keeps lucide. */}
+      {leafIconNode && !isDir ? (
         <span
-          className="shrink-0 inline-flex items-center justify-center"
-          style={{ width: 13, height: 13, fontSize: 12, lineHeight: 1 }}
+          className="shrink-0 inline-flex items-center justify-center text-sm"
+          style={{ width: 13, height: 13, lineHeight: 1 }}
         >
           {leafIconNode}
         </span>
-      ) : (
-        <LeafIcon
+      ) : iconPath ? (
+        <ThemedFileIcon
+          path={iconPath}
+          kind={isDir ? (isExpanded ? "folderExpanded" : "folder") : "file"}
           size={13}
-          className="shrink-0 text-text-tertiary"
-          strokeWidth={1.5}
+          fallback={isDir ? undefined : LeafIcon}
         />
+      ) : isDir ? (
+        isExpanded ? (
+          <FolderOpen size={13} className="shrink-0 text-muted-foreground" strokeWidth={1.5} />
+        ) : (
+          <Folder size={13} className="shrink-0 text-muted-foreground" strokeWidth={1.5} />
+        )
+      ) : (
+        <LeafIcon size={13} className="shrink-0 text-muted-foreground" strokeWidth={1.5} />
       )}
 
       {isEditing ? (
@@ -262,20 +262,30 @@ export function TreeRow({
             else onCancel?.();
           }}
           className={cn(
-            "flex-1 min-w-0 font-mono text-[12px] leading-none bg-bg-input border border-border-default rounded px-1 py-0.5",
-            "text-text-primary outline-none focus:border-border-focus",
+            "flex-1 min-w-0 font-mono text-xs leading-4 bg-panel-input border border-border rounded px-1 py-0.5",
+            "text-foreground outline-none focus:border-border-strong",
           )}
         />
       ) : (
         <span
           className={cn(
-            "truncate font-mono text-[12px] leading-none flex-1 min-w-0",
-            isDir && "text-text-primary",
+            "truncate font-mono text-xs leading-4 flex-1 min-w-0",
+            isDir && "text-foreground",
           )}
+          style={!isDir && gitColor ? { color: gitColor } : undefined}
         >
           {name}
         </span>
       )}
+
+      {!isEditing && gitColor ? (
+        <span
+          className="ml-auto grid h-3 w-3 shrink-0 place-items-center"
+          aria-label={isDir ? "Contains changed files" : "Git status changed"}
+        >
+          <span className="h-1.5 w-1.5 rounded-full" style={{ background: gitColor }} />
+        </span>
+      ) : null}
 
       {trailing && !isEditing ? (
         <span className="shrink-0 flex items-center gap-0.5">{trailing}</span>

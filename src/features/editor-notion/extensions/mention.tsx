@@ -4,7 +4,7 @@ import { PluginKey } from "@tiptap/pm/state";
 import type { Editor } from "@tiptap/core";
 import { createRoot } from "react-dom/client";
 import { createRef } from "react";
-import { useProjectStore } from "@/features/project/stores/project-store";
+import { useAppStore } from "@/features/app/stores/app-store";
 import { useKnowledgeStore } from "@/features/knowledge/stores/knowledge-store";
 import {
   MentionPicker,
@@ -68,12 +68,16 @@ function createPopup(initialScope: "knowledge" | null = null): PopupState {
 }
 
 function destroyPopup(popup: PopupState) {
-  try { popup.root.unmount(); } catch { /* ignore */ }
+  try {
+    popup.root.unmount();
+  } catch {
+    /* ignore */
+  }
   popup.el.remove();
 }
 
 function renderPopup(popup: PopupState) {
-  const projectPath = useProjectStore.getState().currentProject?.path ?? null;
+  const projectPath = useAppStore.getState().currentProject?.path ?? null;
   popup.root.render(
     <MentionPicker
       ref={popup.pickerRef}
@@ -196,8 +200,7 @@ function buildSuggestion(
     command: ({ editor: ed, range, props }) => {
       const m = props as unknown as MentionData;
       const label = mentionLabel(m);
-      ed
-        .chain()
+      ed.chain()
         .focus()
         .insertContentAt(range, [
           {
@@ -222,7 +225,9 @@ function buildSuggestion(
               .focus()
               .deleteRange({ from: props.range.from, to: props.range.to })
               .run();
-          } catch { /* ignore */ }
+          } catch {
+            /* ignore */
+          }
         };
         renderPopup(popup);
       },

@@ -1,17 +1,13 @@
 import { useEffect, useState } from "react";
-import { toast } from "sonner";
-import {
-  RefreshCw,
-  ArrowDown,
-  ArrowUp,
-  UploadCloud,
-  Loader2,
-  GitMerge,
-} from "lucide-react";
+import { RefreshCw, ArrowDown, ArrowUp, UploadCloud, Loader2, GitMerge } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { HintGroup, HintItem } from "@/ui/hint-group";
 import { useGitStore } from "../../stores/git-store";
+import { handleGitError } from "../../lib/git-errors";
+import { fetchHint } from "../../lib/auto-fetch";
 import { BranchSwitcher } from "./branch-switcher";
 import { MergeBranchDialog } from "./merge-branch-dialog";
+import { GitErrorDialog } from "./git-error-dialog";
 import { ChangesView } from "./changes-view";
 import { HistoryView } from "./history-view";
 import { StashesView } from "./stashes-view";
@@ -22,7 +18,7 @@ type View = "changes" | "history" | "stashes";
  * Unified Source-Control manager — GitHub-Desktop-style toolbar (branch
  * switcher + fetch/pull/push with ahead/behind) over Changes / History /
  * Stashes views. Lives in the right panel and is the single place to run
- * the workspace repo's git workflow.
+ * the project repo's git workflow.
  */
 export function GitManagerPanel() {
   const isRepo = useGitStore.use.isRepo();
@@ -36,6 +32,7 @@ export function GitManagerPanel() {
   const [view, setView] = useState<View>("changes");
   const [busy, setBusy] = useState<string | null>(null);
   const [mergeOpen, setMergeOpen] = useState(false);
+  const activeOp = useGitStore.use.activeOp();
 
   useEffect(() => {
     if (repoPath) void actions.refreshAll(repoPath).catch(() => {});
@@ -53,7 +50,7 @@ export function GitManagerPanel() {
     try {
       await fn();
     } catch (e) {
-      toast.error(String(e));
+      handleGitError(e);
     } finally {
       setBusy(null);
     }
@@ -61,7 +58,7 @@ export function GitManagerPanel() {
 
   if (!isRepo) {
     return (
-      <div className="px-3 py-8 text-center text-[11px] text-text-tertiary">
+      <div className="px-3 py-8 text-center text-xs text-muted-foreground">
         Not a git repository
       </div>
     );
@@ -72,55 +69,65 @@ export function GitManagerPanel() {
   const changedCount = files.length;
 
   return (
-    <div className="h-full flex flex-col">
+    <div className="h-full flex flex-col relative">
+      {/* Weighted progress for streaming network ops (fetch/pull/push/clone). */}
+      {activeOp?.running && activeOp.progress && (
+        <div
+          className="absolute top-0 left-0 h-[2px] bg-primary transition-[width] duration-200 z-10"
+          style={{ width: `${Math.min(100, activeOp.progress.percent)}%` }}
+          title={activeOp.progress.title}
+        />
+      )}
       {/* Toolbar: branch + sync */}
-      <div className="shrink-0 flex items-center gap-1 px-1.5 h-[29px] border-b border-border-default">
-        <BranchSwitcher />
-        <button
-          onClick={() => setMergeOpen(true)}
-          className="flex items-center justify-center w-6 h-6 rounded text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors cursor-pointer shrink-0"
-          title={`Merge a branch into ${current?.name ?? "the current branch"}`}
-        >
-          <GitMerge size={12} />
-        </button>
-        <div className="ml-auto flex items-center gap-0.5">
-          <ToolbarBtn
-            onClick={() => run("fetch", () => actions.fetch())}
-            busy={busy === "fetch"}
-            title="Fetch"
-            icon={<RefreshCw size={12} />}
-          />
-          {hasUpstream ? (
-            <>
-              <ToolbarBtn
-                onClick={() => run("pull", () => actions.pull(false))}
-                busy={busy === "pull"}
-                title="Pull"
-                icon={<ArrowDown size={12} />}
-                badge={behind > 0 ? behind : undefined}
-              />
-              <ToolbarBtn
-                onClick={() => run("push", () => actions.push())}
-                busy={busy === "push"}
-                title="Push"
-                icon={<ArrowUp size={12} />}
-                badge={ahead > 0 ? ahead : undefined}
-              />
-            </>
-          ) : (
-            <ToolbarBtn
-              onClick={() => run("publish", () => actions.publishBranch())}
-              busy={busy === "publish"}
-              title="Publish branch (push -u origin)"
-              icon={<UploadCloud size={12} />}
-              label="Publish"
+      <HintGroup>
+        <div className="shrink-0 flex items-center gap-1 px-1.5 h-[29px] border-b border-border">
+          <BranchSwitcher />
+          <HintItem label={`Merge a branch into ${current?.name ?? "the current branch"}`}>
+            <button
+              onClick={() => setMergeOpen(true)}
+              className="flex items-center justify-center w-6 h-6 rounded text-secondary-foreground hover:text-foreground hover:bg-element-hover transition-colors cursor-pointer shrink-0"
+            >
+              <GitMerge size={12} />
+            </button>
+          </HintItem>
+          <div className="ml-auto flex items-center gap-0.5">
+            <FetchButton
+              repoPath={repoPath}
+              onClick={() => run("fetch", () => actions.fetch())}
+              busy={busy === "fetch"}
             />
-          )}
+            {hasUpstream ? (
+              <>
+                <ToolbarBtn
+                  onClick={() => run("pull", () => actions.pull(false))}
+                  busy={busy === "pull"}
+                  title="Pull"
+                  icon={<ArrowDown size={12} />}
+                  badge={behind > 0 ? behind : undefined}
+                />
+                <ToolbarBtn
+                  onClick={() => run("push", () => actions.push())}
+                  busy={busy === "push"}
+                  title="Push"
+                  icon={<ArrowUp size={12} />}
+                  badge={ahead > 0 ? ahead : undefined}
+                />
+              </>
+            ) : (
+              <ToolbarBtn
+                onClick={() => run("publish", () => actions.publishBranch())}
+                busy={busy === "publish"}
+                title="Publish branch (push -u origin)"
+                icon={<UploadCloud size={12} />}
+                label="Publish"
+              />
+            )}
+          </div>
         </div>
-      </div>
+      </HintGroup>
 
       {/* View tabs */}
-      <div className="shrink-0 flex items-center gap-0.5 px-1.5 h-[29px] border-b border-border-default">
+      <div className="shrink-0 flex items-center gap-0.5 px-1.5 h-[29px] border-b border-border">
         <ViewTab active={view === "changes"} onClick={() => setView("changes")}>
           Changes{changedCount > 0 ? ` (${changedCount})` : ""}
         </ViewTab>
@@ -139,7 +146,37 @@ export function GitManagerPanel() {
       </div>
 
       <MergeBranchDialog open={mergeOpen} onOpenChange={setMergeOpen} />
+      <GitErrorDialog />
     </div>
+  );
+}
+
+/** Fetch, hinting when the remote was last fetched (by auto-fetch or by
+ *  hand). Re-renders on its own every 30s so "3m ago" doesn't freeze while
+ *  the rest of the panel sits idle. */
+function FetchButton({
+  repoPath,
+  onClick,
+  busy,
+}: {
+  repoPath: string | null;
+  onClick: () => void;
+  busy: boolean;
+}) {
+  const autoFetch = useGitStore.use.autoFetch();
+  const status = repoPath ? autoFetch[repoPath] : undefined;
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick((n) => n + 1), 30_000);
+    return () => clearInterval(id);
+  }, []);
+  return (
+    <ToolbarBtn
+      onClick={onClick}
+      busy={busy}
+      title={fetchHint(status)}
+      icon={<RefreshCw size={12} />}
+    />
   );
 }
 
@@ -158,20 +195,22 @@ function ToolbarBtn({
   badge?: number;
   label?: string;
 }) {
-  return (
+  const button = (
     <button
       onClick={onClick}
       disabled={busy}
-      title={title}
-      className="flex items-center gap-1 h-6 px-1.5 rounded text-[10px] font-medium text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-colors disabled:opacity-50"
+      // A labelled button explains itself; its title only adds the detail.
+      title={label ? title : undefined}
+      className="flex items-center gap-1 h-6 px-1.5 rounded text-2xs font-medium text-muted-foreground hover:text-foreground hover:bg-element-hover transition-colors disabled:opacity-50"
     >
       {busy ? <Loader2 size={12} className="animate-spin" /> : icon}
       {label && <span>{label}</span>}
       {badge !== undefined && (
-        <span className="font-mono text-[9px] text-text-secondary">{badge}</span>
+        <span className="font-mono text-3xs text-secondary-foreground">{badge}</span>
       )}
     </button>
   );
+  return label ? button : <HintItem label={title}>{button}</HintItem>;
 }
 
 function ViewTab({
@@ -187,10 +226,10 @@ function ViewTab({
     <button
       onClick={onClick}
       className={cn(
-        "px-2 h-6 rounded text-[11px] font-medium transition-colors",
+        "px-2 h-6 rounded text-xs font-medium transition-colors",
         active
-          ? "text-text-primary bg-bg-selected"
-          : "text-text-tertiary hover:text-text-secondary hover:bg-bg-hover",
+          ? "text-foreground bg-element-selected"
+          : "text-muted-foreground hover:text-secondary-foreground hover:bg-element-hover",
       )}
     >
       {children}

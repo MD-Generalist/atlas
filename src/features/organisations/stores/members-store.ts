@@ -1,12 +1,7 @@
 import { create } from "zustand";
 import { toast } from "sonner";
 import { createSelectors } from "@/lib/create-selectors";
-import {
-  auth,
-  type OrgInvitation,
-  type OrgMember,
-  type Role,
-} from "@/features/auth/lib/auth-api";
+import { auth, type OrgInvitation, type OrgMember, type Role } from "@/features/auth/lib/auth-api";
 
 /** One org's cached roster. Keyed by the SERVER org id (`remoteId`). */
 interface OrgRoster {
@@ -47,11 +42,7 @@ interface MembersState {
     /** Optimistic removal; reverts + toasts if the server refuses. */
     remove: (orgId: string, member: OrgMember) => Promise<void>;
     /** Invite, then fold the returned invitation (with its `acceptUrl`) in. */
-    invite: (
-      orgId: string,
-      email: string,
-      role: Role,
-    ) => Promise<OrgInvitation | null>;
+    invite: (orgId: string, email: string, role: Role) => Promise<OrgInvitation | null>;
     /** Optimistic invite cancellation. */
     cancelInvite: (orgId: string, invitationId: string) => Promise<void>;
   };
@@ -65,6 +56,27 @@ const FRESH_MS = 30_000;
 /** Concurrency guard: in-flight org ids. A second `load` for the same org is a
  *  no-op rather than a second request racing the first. */
 const inFlight = new Set<string>();
+
+/**
+ * Failure bookkeeping + one scheduled retry per org.
+ *
+ * A rejected `listMembers` used to LATCH: `loadedAt` stayed null, `error` was
+ * written, and nothing anywhere retried — the comms panel then showed
+ * "Unknown" DMs until its remount refired `load`. The store now heals itself:
+ * bounded exponential backoff (2s·2ⁿ capped at 30s, 5 attempts), cleared on
+ * success or a `force` load. Timers, not effects, so recovery does not depend
+ * on any component being mounted with the right deps.
+ */
+const attempts = new Map<string, number>();
+const retryTimers = new Map<string, number>();
+
+function clearRetry(orgId: string): void {
+  const t = retryTimers.get(orgId);
+  if (t !== undefined) {
+    clearTimeout(t);
+    retryTimers.delete(orgId);
+  }
+}
 
 export const useMembersStore = createSelectors(
   create<MembersState>()((set, get) => {
@@ -80,10 +92,11 @@ export const useMembersStore = createSelectors(
         load: async (orgId, opts) => {
           if (!orgId) return;
           const current = roster(orgId);
-          const fresh =
-            current.loadedAt !== null && Date.now() - current.loadedAt < FRESH_MS;
+          const fresh = current.loadedAt !== null && Date.now() - current.loadedAt < FRESH_MS;
           if (!opts?.force && (fresh || inFlight.has(orgId))) return;
           if (inFlight.has(orgId)) return;
+          if (opts?.force) attempts.delete(orgId);
+          clearRetry(orgId);
 
           inFlight.add(orgId);
           patch(orgId, { loading: true });
@@ -102,16 +115,28 @@ export const useMembersStore = createSelectors(
                 loading: false,
                 error: typeof e === "string" ? e : "Couldn't load members.",
               });
+              const n = (attempts.get(orgId) ?? 0) + 1;
+              attempts.set(orgId, n);
+              if (n <= 5) {
+                const delay = Math.min(30_000, 2_000 * 2 ** (n - 1));
+                retryTimers.set(
+                  orgId,
+                  window.setTimeout(() => {
+                    retryTimers.delete(orgId);
+                    void get().actions.load(orgId);
+                  }, delay),
+                );
+              }
               return;
             }
             patch(orgId, {
               members: membersRes.value,
-              invitations:
-                invitesRes.status === "fulfilled" ? invitesRes.value : [],
+              invitations: invitesRes.status === "fulfilled" ? invitesRes.value : [],
               loadedAt: Date.now(),
               loading: false,
               error: null,
             });
+            attempts.delete(orgId);
           } finally {
             inFlight.delete(orgId);
           }
@@ -126,9 +151,7 @@ export const useMembersStore = createSelectors(
             await auth.updateMemberRole(orgId, memberId, role);
           } catch (e) {
             patch(orgId, { members: before }); // put it back exactly as it was
-            toast.error(
-              typeof e === "string" ? e : "Couldn't change that role.",
-            );
+            toast.error(typeof e === "string" ? e : "Couldn't change that role.");
           }
         },
 
@@ -141,9 +164,7 @@ export const useMembersStore = createSelectors(
             await auth.removeMember(orgId, member.id);
           } catch (e) {
             patch(orgId, { members: before });
-            toast.error(
-              typeof e === "string" ? e : "Couldn't remove that member.",
-            );
+            toast.error(typeof e === "string" ? e : "Couldn't remove that member.");
           }
         },
 
@@ -169,19 +190,10 @@ export const useMembersStore = createSelectors(
             await auth.cancelInvitation(invitationId);
           } catch (e) {
             patch(orgId, { invitations: before });
-            toast.error(
-              typeof e === "string" ? e : "Couldn't cancel that invite.",
-            );
+            toast.error(typeof e === "string" ? e : "Couldn't cancel that invite.");
           }
         },
       },
     };
   }),
 );
-
-/** The cached roster for `orgId`, or an empty one. Never returns undefined so
- *  callers don't each re-implement the not-loaded-yet case. */
-export function rosterFor(orgId: string | null | undefined): OrgRoster {
-  if (!orgId) return EMPTY;
-  return useMembersStore.getState().byOrg[orgId] ?? EMPTY;
-}

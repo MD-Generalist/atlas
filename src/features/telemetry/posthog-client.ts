@@ -8,8 +8,19 @@
  * browser shares the same anonymous `distinct_id` and opt-in state. Nothing is
  * sent until the user has opted in AND a PostHog key resolved server-side.
  */
-import posthog from "posthog-js";
 import { invoke } from "@tauri-apps/api/core";
+
+type PostHogClient = (typeof import("posthog-js"))["default"];
+/**
+ * The SDK, once `initTelemetry` has loaded it. `posthog-js` is ~280 KB
+ * minified and was statically imported here, which put it in the eager boot
+ * set (parsed before first paint) although nothing can use it before the
+ * `telemetry_config` IPC has answered. Loaded with a dynamic import instead;
+ * null until then, and forever on an inert build. Not `dist/module.slim`:
+ * that variant fetches its error-tracking extension remotely, which the
+ * production CSP (`script-src 'self'`) blocks.
+ */
+let posthog: PostHogClient | null = null;
 
 interface TelemetryConfig {
   enabled: boolean;
@@ -90,6 +101,7 @@ export async function initTelemetry(): Promise<void> {
   if (!cfg.key) return; // inert build → never load posthog
 
   try {
+    posthog = (await import("posthog-js")).default;
     posthog.init(cfg.key, {
       api_host: cfg.host,
       bootstrap: { distinctID: cfg.anonId },
@@ -100,13 +112,19 @@ export async function initTelemetry(): Promise<void> {
       disable_session_recording: true,
       opt_out_capturing_by_default: true,
       persistence: "localStorage",
+      // No feature flags, and — per the SDK docs — no remote config either.
+      // Remote config is a <script> from us-assets.i.posthog.com with a fetch
+      // fallback; the production CSP (script-src 'self', connect-src pinned to
+      // the ingest host) refuses both, so in a packaged build every launch
+      // logged two CSP violations for a feature this crash-only client never
+      // used. Dev never showed it: Tauri applies no CSP to the Vite dev URL.
+      advanced_disable_flags: true,
     });
     started = true;
     setEnabled(cfg.enabled);
     // Whichever arrived first wins: an identity pushed by the auth store while
     // we were still initialising, or the account Rust already knew about.
-    const boot =
-      pendingIdentity ?? (cfg.accountId ? { distinctId: cfg.accountId } : null);
+    const boot = pendingIdentity ?? (cfg.accountId ? { distinctId: cfg.accountId } : null);
     if (boot) identify(boot);
   } catch {
     /* posthog init failure must never break app boot */
@@ -124,7 +142,7 @@ export async function initTelemetry(): Promise<void> {
 export function identify(id: TelemetryIdentity): void {
   if (!id.distinctId) return;
   pendingIdentity = id;
-  if (!started || !enabled) return;
+  if (!started || !enabled || !posthog) return;
   try {
     posthog.identify(id.distinctId, {
       email: id.email,
@@ -140,6 +158,32 @@ export function identify(id: TelemetryIdentity): void {
 }
 
 /**
+ * Attribute subsequent renderer events to an Organisation.
+ *
+ * The mirror of Rust's `telemetry_set_org`: posthog-js keeps its own state, so
+ * a crash reported from the renderer would otherwise land ungrouped even while
+ * every Rust event carried the org. Registered as a super-property *as well as*
+ * a group so it survives into `$exception` events, which is the only kind this
+ * client sends.
+ *
+ * Called on every org change — including switches while signed out and to
+ * local-only orgs, which is exactly the case sign-in-driven grouping missed.
+ */
+export function setOrgGroup(orgId: string | null): void {
+  if (!started || !posthog) return;
+  try {
+    if (orgId) {
+      posthog.group("organisation", orgId);
+      posthog.register({ atlas_org_id: orgId });
+    } else {
+      posthog.unregister("atlas_org_id");
+    }
+  } catch {
+    /* never throw into the app */
+  }
+}
+
+/**
  * Return to the anonymous device person on sign-out.
  *
  * Not optional: `persistence: "localStorage"` means the account's distinct id
@@ -148,7 +192,7 @@ export function identify(id: TelemetryIdentity): void {
  */
 export function resetIdentity(): void {
   pendingIdentity = null;
-  if (!started) return;
+  if (!started || !posthog) return;
   try {
     posthog.reset();
   } catch {
@@ -159,7 +203,7 @@ export function resetIdentity(): void {
 /** Flip capturing on/off — mirrors the Settings toggle / first-run consent. */
 export function setEnabled(on: boolean): void {
   enabled = on;
-  if (!started) return;
+  if (!started || !posthog) return;
   try {
     if (on) posthog.opt_in_capturing();
     else posthog.opt_out_capturing();
@@ -175,19 +219,45 @@ export function setEnabled(on: boolean): void {
  * Report a client-side failure. No-op unless posthog is started and the user
  * has opted in. Swallows all errors so telemetry can never crash the app.
  */
-export function captureClientError(
-  error: unknown,
-  context: Record<string, unknown> = {},
-): void {
-  if (!started || !enabled) return;
+export function captureClientError(error: unknown, context: Record<string, unknown> = {}): void {
+  if (!started || !enabled || !posthog) return;
   // Drop known-benign, non-actionable noise before it hits PostHog quota.
   if (isIgnoredError(error)) return;
   try {
-    const err = error instanceof Error ? error : new Error(safeString(error));
+    const raw = error instanceof Error ? error : new Error(safeString(error));
+    // TELEMETRY.md's rule is "never send user content" — but a rejected
+    // invoke's message routinely interpolates whatever the command touched:
+    // absolute home paths, repo names, note ids, raw git/cargo stderr. Scrub
+    // to shapes (paths → placeholders) rather than trusting each of ~365
+    // command error strings to be clean, and cap the length so a stderr dump
+    // cannot ride along.
+    const err = new Error(scrubMessage(raw.message));
+    err.name = raw.name;
+    if (raw.stack) err.stack = scrubMessage(raw.stack);
     posthog.captureException(err, { $lib: "atlas-js", ...context });
   } catch {
     /* never throw into the app */
   }
+}
+
+/** Collapse identifying strings to their SHAPE. Order matters: home first.
+ *  Exported for its test only. */
+export function scrubMessage(text: string): string {
+  return (
+    text
+      // Home directories, any user: `/Users/x/…` (mac), `/home/x/…` (linux).
+      .replace(/\/(?:Users|home)\/[^/\s]+/g, "~")
+      // Anything path-like that survives — keep the extension, drop the rest.
+      .replace(/(?:~|\/)[\w.@-]+(?:\/[\w.@\-\u00C0-\uFFFF]+)+/g, (m) => {
+        // Extension from the LEAF only \u2014 a dot in a middle segment is not one.
+        const leaf = m.slice(m.lastIndexOf("/") + 1);
+        const ext = leaf.includes(".") ? leaf.slice(leaf.lastIndexOf(".")) : "";
+        return `<path${ext}>`;
+      })
+      // Bearer-ish tokens, defense in depth.
+      .replace(/\b(?:ey[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9-]{20,})\b/g, "<token>")
+      .slice(0, 600)
+  );
 }
 
 function safeString(value: unknown): string {

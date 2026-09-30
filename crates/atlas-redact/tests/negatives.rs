@@ -159,7 +159,11 @@ fn a_url_field_keeps_its_host_and_path() {
 fn json_structure_field_names_and_ids_survive() {
     let input = r#"{"session_id":"xJ3kQ9vB2mZ7pL5rT8wN4cF6yH1sD0gA","file_path":"/Users/nafiz/dev/atlas/src/lib.rs","role":"assistant"}"#;
     let out = redact_json(input);
-    assert!(!out.text.contains(PLACEHOLDER), "over-redacted: {}", out.text);
+    assert!(
+        !out.text.contains(PLACEHOLDER),
+        "over-redacted: {}",
+        out.text
+    );
     assert_eq!(out.counts.total(), 0);
 }
 
@@ -171,7 +175,7 @@ fn over_redaction_of_a_whole_transcript_would_be_visible_here() {
 I've added a token bucket keyed on org_id. The limiter lives in
 src/services/rate_limit.rs and reads RATE_LIMIT_RPM from settings.
 
-Run `cargo test --package atlas-review rate_limit` to check it. The
+Run `cargo test --package atlas-codeindex rate_limit` to check it. The
 existing test at tests/limits.rs:42 already covers the burst case.";
     assert_untouched(input);
 }

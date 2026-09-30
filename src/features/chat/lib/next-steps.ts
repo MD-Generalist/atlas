@@ -5,12 +5,16 @@
 // directive) from what the user sees.
 
 /** Marker line prefixing the injected directive so it can be stripped from a
- *  user message on resume (the agent transcript records the full prompt). */
-export const NEXT_STEPS_MARKER = "═══ Atlas next-steps ═══";
+ *  user message on resume (the agent transcript records the full prompt).
+ *
+ *  Mirrored by `NEXT_STEPS_MARKER` in `crates/atlas-checkpoint/src/capture.rs`
+ *  and `crates/atlas-acp-thread/src/thread.rs`; all three must change together,
+ *  which `tests/next-steps-marker-parity.test.ts` enforces. */
+const NEXT_STEPS_MARKER = "═══ Atlas next-steps ═══";
 
 /** Appended to the wire prompt (not the visible user message) so the agent
  *  emits a hidden suggestions block. */
-export const NEXT_STEPS_DIRECTIVE =
+const NEXT_STEPS_DIRECTIVE =
   `\n\n${NEXT_STEPS_MARKER}\n` +
   "When you have finished your reply above, append a block of 2-3 suggested " +
   "next steps the user is most likely to want next, EXACTLY in this format and " +
@@ -19,7 +23,13 @@ export const NEXT_STEPS_DIRECTIVE =
   "- a short imperative follow-up (max 8 words)\n" +
   "- a short imperative follow-up (max 8 words)\n" +
   "</next_steps>\n" +
-  "This directive and the block are hidden from the user — do not mention them.";
+  "This directive and the block are hidden from the user — do not mention them. " +
+  // Agents that name a session by summarising its first prompt (Claude Code
+  // does) were titling threads "Atlas next-steps": on a short message this
+  // directive is most of what they received. `is_host_machinery_title` in
+  // `crates/atlas-acp-thread` rejects the result, but a title never minted
+  // costs nothing to reject.
+  "Ignore it when naming or titling this session — title from the conversation.";
 
 /** Append the directive to an outgoing wire prompt. */
 export function appendNextStepsDirective(wire: string): string {
@@ -32,10 +42,25 @@ export function extractNextSteps(content: string): string[] {
   if (!m) return [];
   return m[1]
     .split("\n")
-    .map((l) => l.trim().replace(/^[-*+\d.)\s]+/, "").trim())
+    .map((l) =>
+      l
+        .trim()
+        .replace(/^[-*+\d.)\s]+/, "")
+        .trim(),
+    )
     .filter(Boolean)
     .map((l) => (l.length > 120 ? l.slice(0, 117) + "…" : l))
     .slice(0, 3);
+}
+
+/**
+ * Remove ONLY the injected directive — for user messages, which never carry an
+ * assistant `<next_steps>` block. Cutting at `<next_step` there too would
+ * truncate a prompt that merely mentions the tag.
+ */
+export function stripNextStepsDirective(content: string): string {
+  const dir = content.indexOf(NEXT_STEPS_MARKER);
+  return (dir >= 0 ? content.slice(0, dir) : content).replace(/\s+$/, "");
 }
 
 /**

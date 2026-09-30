@@ -1,6 +1,8 @@
 import { forwardRef, useState } from "react";
-import { Eye, EyeOff, Copy, Check } from "lucide-react";
+import { CopyGlyph } from "@/ui/animated-icon";
+import { Eye, EyeOff } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { HintGroup, HintItem } from "@/ui/hint-group";
 
 /**
  * SecretInput — a masked text field with reveal + copy affordances. Modular
@@ -10,11 +12,10 @@ import { cn } from "@/lib/utils";
  * Controlled like a normal input via `value`/`onChange`. `onSubmit` fires on
  * Enter. `copyable` enables the inline copy button (copies the current value).
  */
-export interface SecretInputProps
-  extends Omit<
-    React.InputHTMLAttributes<HTMLInputElement>,
-    "type" | "onSubmit"
-  > {
+export interface SecretInputProps extends Omit<
+  React.InputHTMLAttributes<HTMLInputElement>,
+  "type" | "onSubmit"
+> {
   value: string;
   onValueChange?: (next: string) => void;
   onSubmit?: () => void;
@@ -23,40 +24,40 @@ export interface SecretInputProps
   defaultRevealed?: boolean;
 }
 
-export const SecretInput = forwardRef<HTMLInputElement, SecretInputProps>(
-  function SecretInput(
-    {
-      value,
-      onValueChange,
-      onSubmit,
-      copyable = false,
-      defaultRevealed = false,
-      className,
-      onChange,
-      onKeyDown,
-      ...rest
-    },
-    ref,
-  ) {
-    const [revealed, setRevealed] = useState(defaultRevealed);
-    const [copied, setCopied] = useState(false);
+export const SecretInput = forwardRef<HTMLInputElement, SecretInputProps>(function SecretInput(
+  {
+    value,
+    onValueChange,
+    onSubmit,
+    copyable = false,
+    defaultRevealed = false,
+    className,
+    onChange,
+    onKeyDown,
+    ...rest
+  },
+  ref,
+) {
+  const [revealed, setRevealed] = useState(defaultRevealed);
+  const [copied, setCopied] = useState(false);
 
-    const copy = async () => {
-      if (!value) return;
-      try {
-        await navigator.clipboard.writeText(value);
-        setCopied(true);
-        window.setTimeout(() => setCopied(false), 1200);
-      } catch {
-        /* clipboard blocked — silently ignore */
-      }
-    };
+  const copy = async () => {
+    if (!value) return;
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1200);
+    } catch {
+      /* clipboard blocked — silently ignore */
+    }
+  };
 
-    return (
+  return (
+    <HintGroup>
       <div
         className={cn(
-          "group flex items-center gap-1 rounded-md border border-border-default bg-bg-elevated",
-          "px-2 h-8 transition-colors focus-within:border-accent",
+          "group flex items-center gap-1 rounded-md border border-border bg-card",
+          "px-2 h-8 transition-colors focus-within:border-primary",
           className,
         )}
       >
@@ -69,8 +70,8 @@ export const SecretInput = forwardRef<HTMLInputElement, SecretInputProps>(
           autoCorrect="off"
           autoComplete="off"
           className={cn(
-            "flex-1 min-w-0 bg-transparent outline-none text-[11px]",
-            "text-text-primary placeholder:text-text-tertiary font-mono",
+            "flex-1 min-w-0 bg-transparent outline-none text-xs",
+            "text-foreground placeholder:text-muted-foreground font-mono",
           )}
           onChange={(e) => {
             onValueChange?.(e.target.value);
@@ -83,23 +84,17 @@ export const SecretInput = forwardRef<HTMLInputElement, SecretInputProps>(
           {...rest}
         />
         {copyable && (
-          <IconBtn
-            label={copied ? "Copied" : "Copy"}
-            onClick={() => void copy()}
-          >
-            {copied ? <Check size={13} /> : <Copy size={13} />}
+          <IconBtn label={copied ? "Copied" : "Copy"} onClick={() => void copy()}>
+            <CopyGlyph copied={copied} size="md" />
           </IconBtn>
         )}
-        <IconBtn
-          label={revealed ? "Hide" : "Reveal"}
-          onClick={() => setRevealed((r) => !r)}
-        >
+        <IconBtn label={revealed ? "Hide" : "Reveal"} onClick={() => setRevealed((r) => !r)}>
           {revealed ? <EyeOff size={13} /> : <Eye size={13} />}
         </IconBtn>
       </div>
-    );
-  },
-);
+    </HintGroup>
+  );
+});
 
 function IconBtn({
   label,
@@ -111,15 +106,15 @@ function IconBtn({
   children: React.ReactNode;
 }) {
   return (
-    <button
-      type="button"
-      tabIndex={-1}
-      aria-label={label}
-      title={label}
-      onClick={onClick}
-      className="shrink-0 grid place-items-center h-6 w-6 rounded text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-colors"
-    >
-      {children}
-    </button>
+    <HintItem label={label} className="shrink-0">
+      <button
+        type="button"
+        tabIndex={-1}
+        onClick={onClick}
+        className="shrink-0 grid place-items-center h-6 w-6 rounded text-muted-foreground hover:text-foreground hover:bg-element-hover transition-colors"
+      >
+        {children}
+      </button>
+    </HintItem>
   );
 }

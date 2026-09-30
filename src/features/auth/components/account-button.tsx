@@ -1,6 +1,9 @@
 import { CircleUser, Loader2 } from "lucide-react";
 
+import type { ComponentProps } from "react";
+
 import { cn } from "@/lib/utils";
+import { Hint } from "@/ui/tooltip";
 import { useAuthStore } from "../stores/auth-store";
 import { AccountAvatar } from "./account-avatar";
 import { AccountMenu } from "./account-menu";
@@ -16,7 +19,7 @@ import { AccountMenu } from "./account-menu";
  * Signed out or mid-grant it is a plain button that starts (or reopens)
  * sign-in — the menu has nothing to say in either state.
  */
-export function AccountButton() {
+export function AccountButton({ compact = false }: { compact?: boolean } = {}) {
   const snapshot = useAuthStore.use.snapshot();
   const starting = useAuthStore.use.starting();
   const { beginSignIn, closeDialog } = useAuthStore.use.actions();
@@ -42,31 +45,40 @@ export function AccountButton() {
         ? "Waiting for approval in your browser…"
         : "Account and settings";
 
+  // In the dock the pill's sliding label already names this control, so only
+  // the standalone button carries a tooltip of its own.
+  const Button = compact ? "button" : HintedButton;
+
   const button = (
     // Only the connecting state keeps a click of its own. In the other two the
     // click is Radix's to handle, and one that also ran would fight the trigger
     // it is wrapped in.
-    <button
+    <Button
       onClick={connecting ? toggleDialog : undefined}
-      title={title}
       aria-label={title}
       className={cn(
-        "relative flex items-center justify-center w-6 h-6 rounded transition-all duration-150",
+        "relative flex items-center justify-center transition-all duration-150",
+        // Inside the titlebar dock the avatar is one of a row of 20px controls
+        // and the pill supplies the surrounding shape, so it loses two pixels
+        // and its own square corners.
+        compact ? "size-5 rounded-full" : "w-6 h-6 rounded",
         // A `<button>` still gets the arrow by default, and this one carries no
         // label or border — the pointer is most of what says it is pressable.
         // Matches the title bar's project-name button beside it.
-        "cursor-pointer hover:bg-[#ffffff08] outline-none focus:outline-none",
-        signedIn || connecting ? "text-[#ccc]" : "text-[#555] hover:text-[#aaa]",
+        "cursor-pointer hover:bg-element-hover outline-none focus:outline-none",
+        signedIn || connecting
+          ? "text-secondary-foreground"
+          : "text-disabled hover:text-muted-foreground",
       )}
     >
       {starting || connecting ? (
-        <Loader2 size={14} className="animate-spin" />
+        <Loader2 size={compact ? 12 : 14} className="animate-spin" />
       ) : user ? (
-        <AccountAvatar user={user} size={18} />
+        <AccountAvatar user={user} size={compact ? 16 : 18} />
       ) : (
-        <CircleUser size={14} />
+        <CircleUser size={compact ? 12 : 14} />
       )}
-    </button>
+    </Button>
   );
 
   // The menu opens signed out as well as signed in. Settings, Keybindings,
@@ -80,4 +92,18 @@ export function AccountButton() {
   // putting that behind a menu adds a step to a state that lasts seconds.
   if (snapshot.status === "connecting") return button;
   return <AccountMenu account={snapshot}>{button}</AccountMenu>;
+}
+
+/**
+ * The button with its tooltip inside. It has to be a component that forwards
+ * its props: as the element `DropdownMenu.Trigger`'s `render` clones, the trigger's
+ * props and ref land here and must reach the same `<button>` the tooltip
+ * trigger merges onto.
+ */
+function HintedButton(props: ComponentProps<"button">) {
+  return (
+    <Hint label={props["aria-label"] ?? ""}>
+      <button {...props} />
+    </Hint>
+  );
 }

@@ -1,13 +1,13 @@
 {
   "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/crates/tauri-utils/schema.json",
   "productName": "Atlas",
-  "version": "0.2.4",
+  "version": "0.4.0",
   "identifier": "dev.atlas.ide",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
     "beforeDevCommand": "bun run dev",
-    "beforeBuildCommand": "bun run build"
+    "beforeBuildCommand": "node scripts/build-frontend.mjs"
   },
   "app": {
     "macOSPrivateApi": true,
@@ -16,49 +16,74 @@
         "title": "Atlas",
         "width": 1280,
         "height": 800,
-        "minWidth": 960,
-        "minHeight": 600,
+        "minWidth": 480,
+        "minHeight": 360,
         "decorations": true,
         "transparent": false,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
         "acceptFirstMouse": true,
-        "backgroundColor": [0, 0, 0, 255]
+        "backgroundColor": [
+          0,
+          0,
+          0,
+          255
+        ]
       }
     ],
     "security": {
-      "csp": null,
+      "csp": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: asset: http://asset.localhost https://www.gravatar.com; media-src 'self' blob: asset: http://asset.localhost; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost asset: http://asset.localhost blob: data: https://us.i.posthog.com; worker-src 'self' blob:; object-src 'none'; frame-src 'none'; base-uri 'self'; form-action 'none'",
+      "dangerousDisableAssetCspModification": ["style-src"],
       "assetProtocol": {
         "enable": true,
         "scope": {
-          "allow": ["$HOME/**"],
+          "allow": [
+            "$HOME/**"
+          ],
           "deny": []
         }
-      }
+      },
+      "devCsp": "default-src 'self'; script-src 'self' http://localhost:1420 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: asset: http://asset.localhost https://www.gravatar.com; media-src 'self' blob: asset: http://asset.localhost; font-src 'self' data:; connect-src 'self' ws://localhost:1420 http://localhost:1420 ipc: http://ipc.localhost asset: http://asset.localhost blob: data: https://us.i.posthog.com; worker-src 'self' blob:; object-src 'none'; frame-src 'none'; base-uri 'self'; form-action 'none'"
     }
   },
   "plugins": {},
   "bundle": {
     "active": true,
-    "targets": ["app", "dmg"],
-    "resources": ["resources/nvm.sh"],
+    "targets": [
+      "app",
+      "dmg"
+    ],
+    "resources": {
+      "resources/nvm.sh": "resources/nvm.sh",
+      "licenses/Atlas-LICENSE.txt": "licenses/Atlas-LICENSE.txt",
+      "licenses/OpenAI-Codex-LICENSE.txt": "licenses/OpenAI-Codex-LICENSE.txt",
+      "licenses/OpenAI-Codex-NOTICE.txt": "licenses/OpenAI-Codex-NOTICE.txt",
+      "licenses/Material-Icon-Theme-LICENSE.txt": "licenses/Material-Icon-Theme-LICENSE.txt"
+    },
     "category": "DeveloperTool",
-    "shortDescription": "Atlas — agent-first ideation and planning tool",
+    "shortDescription": "Atlas \u2014 agent-first ideation and planning tool",
     "longDescription": "Atlas is a Tauri-based desktop app that hosts ACP-compatible coding agents (Claude Code, Codex, OpenCode) with first-class file, knowledge, and research integration.",
-    "copyright": "Copyright © 2026 Adib Mohsin",
+    "copyright": "https://tryatlas.cc/ Report bugs to Github: https://github.com/pacifio/atlas/issues/",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
-      "icons/icon.icns",
-      "icons/icon.ico"
+      "icons/Icon.icns",
+      "icons/icon.ico",
+      "icons/app-icons/Assets.car"
     ],
     "macOS": {
       "minimumSystemVersion": "11.0",
       "entitlements": "entitlements.plist",
       "exceptionDomain": null,
       "signingIdentity": null,
-      "providerShortName": null
+      "providerShortName": null,
+      "dmg": {
+        "background": "icons/dmg-background.png",
+        "windowSize": { "width": 512, "height": 352 },
+        "appPosition": { "x": 140, "y": 160 },
+        "applicationFolderPosition": { "x": 372, "y": 160 }
+      }
     }
   }
 }

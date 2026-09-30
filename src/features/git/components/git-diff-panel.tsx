@@ -1,17 +1,11 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { RailGlyph } from "@/ui/animated-icon";
 import { useQuery } from "@tanstack/react-query";
 import { listen } from "@tauri-apps/api/event";
-import {
-  ChevronUp,
-  ChevronDown,
-  RefreshCw,
-  ExternalLink,
-  FileCode2,
-  PanelLeftClose,
-  PanelLeftOpen,
-} from "lucide-react";
+import { ChevronUp, ChevronDown, RefreshCw, ExternalLink, FileCode2 } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { openFile } from "@/lib/open-file";
+import { HintGroup, HintItem } from "@/ui/hint-group";
 import { getLanguage } from "../lib/diff";
 import {
   ensureDiffHighlight,
@@ -19,13 +13,14 @@ import {
   warmDiffHighlightWorker,
   type LineTokens,
 } from "../lib/diff-highlight-cache";
-import { gitDiffStructured, type DiffSide, type DiffRow } from "../lib/git-diff-api";
 import {
-  Panel,
-  PanelGroup,
-  PanelResizeHandle,
-  type ImperativePanelHandle,
-} from "react-resizable-panels";
+  gitDiffStructured,
+  diffStructuredText,
+  diffQueryKey,
+  type DiffSide,
+  type DiffRow,
+} from "../lib/git-diff-api";
+import { Group, Panel, Separator, useDefaultLayout, usePanelRef } from "react-resizable-panels";
 import { useGitStore } from "../stores/git-store";
 import { ChangedFilesTree } from "./changed-files-tree";
 import { DiffMinimap } from "./diff-minimap";
@@ -69,6 +64,9 @@ function sideLen(side: DiffSide | null): number {
   return n;
 }
 
+// Kept from the v3 `autoSaveId` so existing saved tree widths still load.
+const TREE_LAYOUT_ID = "git-diff-tree";
+
 interface GitDiffPanelProps {
   /** Falls back to the active repo when opened as a standalone module. */
   repoPath?: string;
@@ -77,22 +75,39 @@ interface GitDiffPanelProps {
   staged?: boolean;
   /** When set, the diff for this file at a specific commit (via `git show`). */
   commit?: string | null;
+  /** Hide the tree's commit/branch picker — see `ChangedFilesTree.hidePicker`. */
+  hidePicker?: boolean;
+  /** Restrict the tree to these repo-relative paths — see
+   *  `ChangedFilesTree.only`. */
+  only?: string[];
+  /**
+   * Before/after text per path, bypassing git entirely.
+   *
+   * The agent chat needs this. A turn's diff is not a question git can answer:
+   * the working tree holds the CURRENT state, while a file created in turn 1,
+   * edited in turn 2 and deleted in turn 3 has three different correct diffs and
+   * only the tool arguments know which. When a path appears here, its diff is
+   * computed from these strings instead of from the repository.
+   */
+  textSources?: Record<string, { old: string; new: string }>;
+  /** Handle tree clicks instead of opening the Git Diff module tab — see
+   *  `ChangedFilesTree.onSelect`. */
+  onSelectFile?: (path: string) => void;
+  /** Fired after "Open in editor" — a modal host closes itself here, or the
+   *  editor tab lands invisibly behind it. */
+  onOpenInEditor?: () => void;
 }
 
 function sideBg(side: DiffSide | null, isLeft: boolean): string | undefined {
-  if (!side) return "rgba(255,255,255,0.018)"; // filler (no line on this side)
+  if (!side) return "color-mix(in srgb, var(--foreground) 1.8%, transparent)"; // filler (no line on this side)
   if (side.kind === "context") return undefined;
   // Left side = deletions (red), right side = additions (green). Colors follow
-  // the active editor theme's diff tokens (atlas rgba values as fallbacks).
-  return isLeft
-    ? "var(--diff-remove-side-bg, rgba(244,63,63,0.13))"
-    : "var(--diff-add-side-bg, rgba(34,197,94,0.13))";
+  // the active editor theme's diff tokens.
+  return isLeft ? "var(--atlas-diff-removed-background)" : "var(--atlas-diff-added-background)";
 }
 
 function emphBg(isLeft: boolean): string {
-  return isLeft
-    ? "var(--diff-emph-remove-bg, rgba(244,63,63,0.34))"
-    : "var(--diff-emph-add-bg, rgba(52,211,153,0.34))";
+  return isLeft ? "var(--atlas-diff-removed-emphasis)" : "var(--atlas-diff-added-emphasis)";
 }
 
 const isLeftChange = (r?: DiffRow) => !!r?.left && r.left.kind !== "context";
@@ -165,11 +180,11 @@ function SideCell({
   const bg = sideBg(side, isLeft);
   return (
     <div className="flex min-w-0">
-      <span className="w-8 shrink-0 select-none border-r border-[var(--border-subtle)] pr-[3px] pl-[3px] text-right font-mono text-[10px] leading-[18px] text-[var(--text-tertiary)]">
+      <span className="w-8 shrink-0 select-none border-r border-[var(--atlas-border-subtle)] pr-[3px] pl-[3px] text-right font-mono text-2xs leading-[18px] text-[var(--muted-foreground)]">
         {side?.lineNo ?? ""}
       </span>
       <code
-        className="diff-syntax block flex-1 overflow-hidden whitespace-pre pl-2 pr-2 font-mono leading-[18px] text-[var(--text-secondary)]"
+        className="diff-syntax block flex-1 overflow-hidden whitespace-pre pl-2 pr-2 font-mono leading-[18px] text-[var(--secondary-foreground)]"
         style={{
           fontSize: FONT_PX,
           background: bg,
@@ -203,19 +218,19 @@ function CenterMarker({ row }: { row: DiffRow }) {
   const lc = isLeftChange(row);
   const rc = isRightChange(row);
   let char = "";
-  let color = "var(--text-tertiary)";
+  let color = "var(--muted-foreground)";
   if (lc && rc) {
     char = "›";
   } else if (rc) {
     char = "»";
-    color = "var(--status-success, #22c55e)";
+    color = "var(--atlas-status-success-foreground)";
   } else if (lc) {
     char = "«";
-    color = "var(--status-error, #ef4444)";
+    color = "var(--atlas-status-error-foreground)";
   }
   return (
     <div
-      className="flex items-center justify-center border-x border-[var(--border-subtle)] font-mono text-[11px] leading-[18px] select-none"
+      className="flex items-center justify-center border-x border-[var(--atlas-border-subtle)] font-mono text-xs leading-[18px] select-none"
       style={{ color }}
     >
       {char}
@@ -283,6 +298,11 @@ export function GitDiffPanel({
   file = "",
   staged = false,
   commit = null,
+  hidePicker = false,
+  only,
+  textSources,
+  onSelectFile,
+  onOpenInEditor,
 }: GitDiffPanelProps) {
   const storeRepo = useGitStore.use.repoPath();
   const repoPath = repoPathProp || storeRepo || "";
@@ -293,16 +313,24 @@ export function GitDiffPanel({
   const lang = getLanguage(file);
 
   // Collapsible left tree (changed files + commit picker).
-  const treePanelRef = useRef<ImperativePanelHandle>(null);
+  const treePanelRef = usePanelRef();
   const [treeCollapsed, setTreeCollapsed] = useState(false);
+  // v4 replaced `autoSaveId`; same storage id, so saved tree widths carry over.
+  const { defaultLayout, onLayoutChanged } = useDefaultLayout({ id: TREE_LAYOUT_ID });
   const toggleTree = () =>
     treeCollapsed ? treePanelRef.current?.expand() : treePanelRef.current?.collapse();
 
-  const queryKey = ["git-diff", repoPath, file, staged, commit] as const;
+  // A supplied text source wins over the repository — see `textSources`.
+  const textSource = textSources?.[file];
+  const queryKey = diffQueryKey(repoPath, file, staged, commit, textSource);
   const { data, isLoading, refetch } = useQuery({
     queryKey,
-    queryFn: () => gitDiffStructured(repoPath, file, staged, commit),
-    enabled: !!repoPath && !!file,
+    queryFn: () =>
+      textSource
+        ? diffStructuredText(textSource.old, textSource.new, file)
+        : gitDiffStructured(repoPath, file, staged, commit),
+    // Text-sourced diffs need no repo, so they must not be gated on one.
+    enabled: !!file && (!!textSource || !!repoPath),
     staleTime: 10_000,
   });
 
@@ -322,7 +350,7 @@ export function GitDiffPanel({
   // `hlMap` changes identity. Keyed by file + a content signature so an edit
   // (refetch) rebuilds rather than reusing stale tokens.
   const hlKey = data
-    ? `${repoPath} ${file} ${staged} ${commit ?? ""} ${data.rows.length}:${data.stats.additions}:${data.stats.deletions}`
+    ? `${repoPath}\x00${file}\x00${staged}\x00${commit ?? ""}\x00${data.rows.length}:${data.stats.additions}:${data.stats.deletions}`
     : "";
   const [hlMap, setHlMap] = useState<LineTokens | null>(null);
   useEffect(() => {
@@ -362,8 +390,7 @@ export function GitDiffPanel({
 
   const jump = (dir: 1 | -1) => {
     if (changeBlocks.length === 0) return;
-    const next =
-      (blockCursorRef.current + dir + changeBlocks.length) % changeBlocks.length;
+    const next = (blockCursorRef.current + dir + changeBlocks.length) % changeBlocks.length;
     blockCursorRef.current = next;
     virtualizer.scrollToIndex(changeBlocks[next], { align: "center" });
   };
@@ -417,132 +444,160 @@ export function GitDiffPanel({
   }, [maxLineLen]);
 
   return (
-    <PanelGroup
-      direction="horizontal"
-      autoSaveId="git-diff-tree"
-      className="h-full bg-[var(--bg-primary)]"
+    <Group
+      id={TREE_LAYOUT_ID}
+      orientation="horizontal"
+      defaultLayout={defaultLayout}
+      onLayoutChanged={onLayoutChanged}
+      className="h-full bg-[var(--background)]"
     >
       {/* Left: resizable + collapsible tree of changed files (+ commit picker) */}
+      {/* Sizes are percentages: v4 reads bare numbers as PIXELS and unit-less
+          strings as percentages. `onCollapse`/`onExpand` are gone; with a
+          `collapsedSize` of 0 the collapsed state is exactly "zero width", so
+          `onResize` carries the same signal. */}
       <Panel
-        ref={treePanelRef}
+        id="git-diff-tree-files"
+        panelRef={treePanelRef}
         collapsible
-        collapsedSize={0}
-        defaultSize={22}
-        minSize={12}
-        maxSize={45}
+        collapsedSize="0"
+        defaultSize="22"
+        minSize="12"
+        maxSize="45"
         className="min-w-0"
-        onCollapse={() => setTreeCollapsed(true)}
-        onExpand={() => setTreeCollapsed(false)}
+        onResize={(size) => setTreeCollapsed(size.inPixels === 0)}
       >
-        <ChangedFilesTree repoPath={repoPath} staged={staged} currentFile={file} commit={commit} />
+        <ChangedFilesTree
+          repoPath={repoPath}
+          staged={staged}
+          currentFile={file}
+          commit={commit}
+          hidePicker={hidePicker}
+          only={only}
+          onSelect={onSelectFile}
+        />
       </Panel>
-      <PanelResizeHandle className="w-px bg-border-default hover:bg-accent data-[resize-handle-active]:bg-accent transition-colors cursor-col-resize" />
+      <Separator className="w-px bg-border hover:bg-accent data-[separator=active]:bg-accent transition-colors cursor-col-resize" />
 
       {/* Main column: toolbar + diff body */}
-      <Panel className="min-w-0">
-      <div className="flex h-full min-w-0 flex-col">
-      {/* Toolbar */}
-      <div className="flex h-8 shrink-0 items-center gap-2 border-b border-[var(--border-default)] px-3">
-        <button
-          onClick={toggleTree}
-          className="-ml-1 rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer"
-          title={treeCollapsed ? "Show changed files" : "Hide changed files"}
-        >
-          {treeCollapsed ? <PanelLeftOpen size={12} /> : <PanelLeftClose size={12} />}
-        </button>
-        <FileCode2 size={12} className="shrink-0 text-[var(--text-tertiary)]" />
-        <span className="truncate font-mono text-[11px] text-[var(--text-secondary)]">
-          {file || "Git Diff"}
-        </span>
-        {staged && (
-          <span className="shrink-0 rounded bg-[var(--bg-elevated)] px-1.5 py-px text-[9px] uppercase tracking-wide text-[var(--text-tertiary)]">
-            staged
-          </span>
-        )}
-        {stats && (
-          <span className="shrink-0 font-mono text-[10px]">
-            <span className="text-[var(--status-success)]">+{stats.additions}</span>{" "}
-            <span className="text-[var(--status-error)]">-{stats.deletions}</span>
-          </span>
-        )}
-        {!!file && (
-        <div className="ml-auto flex items-center gap-0.5">
-          <span className="mr-1 font-mono text-[10px] text-[var(--text-tertiary)] tabular-nums">
-            {diffCount} diff{diffCount !== 1 ? "s" : ""}
-          </span>
-          <button
-            onClick={() => jump(-1)}
-            disabled={diffCount === 0}
-            className="rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] disabled:opacity-30 cursor-pointer"
-            title="Previous change"
-          >
-            <ChevronUp size={12} />
-          </button>
-          <button
-            onClick={() => jump(1)}
-            disabled={diffCount === 0}
-            className="rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] disabled:opacity-30 cursor-pointer"
-            title="Next change"
-          >
-            <ChevronDown size={12} />
-          </button>
-          <button
-            onClick={() => void refetch()}
-            className="rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer"
-            title="Refresh"
-          >
-            <RefreshCw size={11} />
-          </button>
-          <button
-            onClick={() => void openFile(`${repoPath}/${file}`)}
-            className="rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer"
-            title="Open in editor"
-          >
-            <ExternalLink size={11} />
-          </button>
-        </div>
-        )}
-      </div>
+      <Panel id="git-diff-tree-diff" className="min-w-0">
+        <div className="flex h-full min-w-0 flex-col">
+          {/* Toolbar */}
+          <HintGroup>
+            <div className="flex h-8 shrink-0 items-center gap-2 border-b border-[var(--border)] px-3">
+              <HintItem label={treeCollapsed ? "Show changed files" : "Hide changed files"}>
+                <button
+                  onClick={toggleTree}
+                  className="-ml-1 rounded p-1 text-[var(--muted-foreground)] hover:bg-[var(--atlas-element-hover)] hover:text-[var(--foreground)] cursor-pointer"
+                >
+                  <RailGlyph open={!treeCollapsed} size="sm" />
+                </button>
+              </HintItem>
+              <FileCode2 size={12} className="shrink-0 text-[var(--muted-foreground)]" />
+              <span className="truncate font-mono text-xs text-[var(--secondary-foreground)]">
+                {file || "Git Diff"}
+              </span>
+              {staged && (
+                <span className="shrink-0 rounded bg-[var(--card)] px-1.5 py-px text-3xs uppercase tracking-wide text-[var(--muted-foreground)]">
+                  staged
+                </span>
+              )}
+              {stats && (
+                <span className="shrink-0 font-mono text-2xs">
+                  <span className="text-[var(--atlas-status-success-foreground)]">
+                    +{stats.additions}
+                  </span>{" "}
+                  <span className="text-[var(--atlas-status-error-foreground)]">
+                    -{stats.deletions}
+                  </span>
+                </span>
+              )}
+              {!!file && (
+                <div className="ml-auto flex items-center gap-0.5">
+                  <span className="mr-1 font-mono text-2xs text-[var(--muted-foreground)] tabular-nums">
+                    {diffCount} diff{diffCount !== 1 ? "s" : ""}
+                  </span>
+                  <HintItem label="Previous change">
+                    <button
+                      onClick={() => jump(-1)}
+                      disabled={diffCount === 0}
+                      className="rounded p-1 text-[var(--muted-foreground)] hover:bg-[var(--atlas-element-hover)] hover:text-[var(--foreground)] disabled:opacity-30 cursor-pointer"
+                    >
+                      <ChevronUp size={12} />
+                    </button>
+                  </HintItem>
+                  <HintItem label="Next change">
+                    <button
+                      onClick={() => jump(1)}
+                      disabled={diffCount === 0}
+                      className="rounded p-1 text-[var(--muted-foreground)] hover:bg-[var(--atlas-element-hover)] hover:text-[var(--foreground)] disabled:opacity-30 cursor-pointer"
+                    >
+                      <ChevronDown size={12} />
+                    </button>
+                  </HintItem>
+                  <HintItem label="Refresh">
+                    <button
+                      onClick={() => void refetch()}
+                      className="rounded p-1 text-[var(--muted-foreground)] hover:bg-[var(--atlas-element-hover)] hover:text-[var(--foreground)] cursor-pointer"
+                    >
+                      <RefreshCw size={11} />
+                    </button>
+                  </HintItem>
+                  <HintItem label="Open in editor">
+                    <button
+                      onClick={() => {
+                        void openFile(`${repoPath}/${file}`);
+                        onOpenInEditor?.();
+                      }}
+                      className="rounded p-1 text-[var(--muted-foreground)] hover:bg-[var(--atlas-element-hover)] hover:text-[var(--foreground)] cursor-pointer"
+                    >
+                      <ExternalLink size={11} />
+                    </button>
+                  </HintItem>
+                </div>
+              )}
+            </div>
+          </HintGroup>
 
-      {/* Body */}
-      {!file ? (
-        <div className="flex flex-1 items-center justify-center px-3 text-center text-[11px] text-[var(--text-tertiary)]">
-          Pick a file from the left to view its diff — or choose a commit to browse.
+          {/* Body */}
+          {!file ? (
+            <div className="flex flex-1 items-center justify-center px-3 text-center text-xs text-[var(--muted-foreground)]">
+              Pick a file from the left to view its diff — or choose a commit to browse.
+            </div>
+          ) : isLoading ? (
+            <div className="px-3 py-8 text-center text-xs text-[var(--muted-foreground)]">
+              Loading diff…
+            </div>
+          ) : data?.isBinary ? (
+            <div className="px-3 py-8 text-center text-xs text-[var(--muted-foreground)]">
+              Binary file — no text diff to show.
+            </div>
+          ) : rows.length === 0 ? (
+            <div className="px-3 py-8 text-center text-xs text-[var(--muted-foreground)]">
+              No changes.
+            </div>
+          ) : (
+            <div className="flex min-h-0 flex-1">
+              <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto hide-scrollbar">
+                <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
+                  {items.map((vr) => (
+                    <DiffRow
+                      key={vr.index}
+                      row={rows[vr.index]}
+                      prev={rows[vr.index - 1]}
+                      next={rows[vr.index + 1]}
+                      hlMap={hlMap}
+                      top={vr.start}
+                    />
+                  ))}
+                </div>
+              </div>
+              {/* Right: change minimap synced to the diff scroll position */}
+              <DiffMinimap rows={rows} scrollRef={scrollRef} />
+            </div>
+          )}
         </div>
-      ) : isLoading ? (
-        <div className="px-3 py-8 text-center text-[11px] text-[var(--text-tertiary)]">
-          Loading diff…
-        </div>
-      ) : data?.isBinary ? (
-        <div className="px-3 py-8 text-center text-[11px] text-[var(--text-tertiary)]">
-          Binary file — no text diff to show.
-        </div>
-      ) : rows.length === 0 ? (
-        <div className="px-3 py-8 text-center text-[11px] text-[var(--text-tertiary)]">
-          No changes.
-        </div>
-      ) : (
-        <div className="flex min-h-0 flex-1">
-        <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto hide-scrollbar">
-          <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
-            {items.map((vr) => (
-              <DiffRow
-                key={vr.index}
-                row={rows[vr.index]}
-                prev={rows[vr.index - 1]}
-                next={rows[vr.index + 1]}
-                hlMap={hlMap}
-                top={vr.start}
-              />
-            ))}
-          </div>
-        </div>
-        {/* Right: change minimap synced to the diff scroll position */}
-        <DiffMinimap rows={rows} scrollRef={scrollRef} />
-        </div>
-      )}
-      </div>
       </Panel>
-    </PanelGroup>
+    </Group>
   );
 }

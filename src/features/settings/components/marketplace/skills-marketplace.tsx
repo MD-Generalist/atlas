@@ -9,33 +9,21 @@
 // default view is a cached "Popular" merge of a few seed queries, and detail is
 // fetched lazily on open.
 
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  useSyncExternalStore,
-} from "react";
-import { Boxes, Check, Copy, Download, Github, Loader2, Search, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { Boxes, Check, Copy, Download, Loader2, Search, X } from "lucide-react";
+import { GithubIcon } from "@/components/github-icon";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { toast } from "sonner";
 
 import { cn } from "@/lib/utils";
+import { Hint } from "@/ui/tooltip";
 import { packs as packsApi } from "@/features/packs/lib/packs-api";
 import { skills as skillsApi } from "@/features/skills/lib/skills-api";
 import { SKILLS_CHANGED_EVENT } from "@/features/skills/lib/skills-events";
-import {
-  SkillModalShell,
-  SkillDescriptions,
-  ModalAction,
-} from "./skill-modal";
-import type {
-  ComponentKind,
-  Pack,
-  PackSearchHit,
-  Scope,
-} from "@/features/packs/lib/types";
+import { SkillModalShell, SkillDescriptions, ModalAction } from "./skill-modal";
+import { TrendSparkline } from "@/components/trend-sparkline";
+import { installTrend } from "@/features/packs/lib/install-trends";
+import type { ComponentKind, Pack, PackSearchHit, Scope } from "@/features/packs/lib/types";
 
 const POPULAR_SEEDS = ["agent", "react", "design", "review", "database", "python"];
 const POPULAR_LS_KEY = "atlas:skills:popular:v1";
@@ -59,11 +47,7 @@ function notifyInstalling() {
   installVersion++;
   installSubs.forEach((f) => f());
 }
-async function runInstall(
-  hit: PackSearchHit,
-  scope: Scope,
-  projectPath: string | null,
-) {
+async function runInstall(hit: PackSearchHit, scope: Scope, projectPath: string | null) {
   if (installingIds.has(hit.id)) return;
   installingIds.add(hit.id);
   notifyInstalling();
@@ -112,14 +96,19 @@ const KIND_LABEL: Record<ComponentKind, string> = {
 };
 
 // Shared column widths (header + rows line up). Skill grows; the rest fixed.
+// Shared column widths (header + rows line up). SOURCE takes the slack, not the
+// skill name: names are short slugs ("video-edit") while sources are full
+// `owner/repo` paths that were truncating at 200px, so the growing column
+// belongs to the one with something to show.
 const COL = {
   rank: "w-[34px] shrink-0",
-  skill: "flex-1 min-w-[220px]",
-  source: "w-[200px] shrink-0",
+  skill: "w-[220px] shrink-0",
+  source: "flex-1 min-w-[200px]",
   installs: "w-[110px] shrink-0",
+  trend: "w-[84px] shrink-0",
   action: "w-[96px] shrink-0",
 } as const;
-const TABLE_MIN_W = 34 + 220 + 200 + 110 + 96;
+const TABLE_MIN_W = 34 + 220 + 200 + 110 + 84 + 96;
 
 export function SkillsMarketplace({
   scope,
@@ -181,9 +170,7 @@ export function SkillsMarketplace({
     if (loadPopularCache()) return; // already have it
     let cancelled = false;
     void (async () => {
-      const batches = await Promise.allSettled(
-        POPULAR_SEEDS.map((q) => packsApi.search(q)),
-      );
+      const batches = await Promise.allSettled(POPULAR_SEEDS.map((q) => packsApi.search(q)));
       if (cancelled) return;
       const byId = new Map<string, PackSearchHit>();
       for (const b of batches) {
@@ -236,29 +223,31 @@ export function SkillsMarketplace({
     <div className="flex h-full min-h-0 flex-col">
       {/* Search — full-width flush bar (mixed into the content), like the
           GitHub panel's search. */}
-      <div className="flex h-[32px] shrink-0 items-center gap-1.5 border-b border-border-default bg-bg-primary px-3">
-        <Search size={11} className="shrink-0 text-text-tertiary" />
+      <div className="flex h-[32px] shrink-0 items-center gap-1.5 border-b border-border bg-background px-3">
+        <Search size={11} className="shrink-0 text-muted-foreground" />
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search the skills registry…"
           spellCheck={false}
-          className="min-w-0 flex-1 bg-transparent text-[11px] text-text-primary outline-none placeholder:text-text-tertiary"
+          className="min-w-0 flex-1 bg-transparent text-xs text-foreground outline-none placeholder:text-muted-foreground"
         />
-        {loading && <Loader2 size={11} className="animate-spin text-text-tertiary" />}
+        {loading && <Loader2 size={11} className="animate-spin text-muted-foreground" />}
         {query && (
-          <button
-            type="button"
-            onClick={() => setQuery("")}
-            className="shrink-0 text-text-tertiary hover:text-text-primary cursor-pointer"
-          >
-            <X size={11} />
-          </button>
+          <Hint label="Clear search">
+            <button
+              type="button"
+              onClick={() => setQuery("")}
+              className="shrink-0 text-muted-foreground hover:text-foreground cursor-pointer"
+            >
+              <X size={11} />
+            </button>
+          </Hint>
         )}
       </div>
 
       {error && (
-        <div className="mx-3 mb-2 rounded-md border border-error/30 bg-error/10 px-3 py-2 text-[11px] text-error">
+        <div className="mx-3 mb-2 rounded-md border border-error/30 bg-error/10 px-3 py-2 text-xs text-error">
           {error}
         </div>
       )}
@@ -267,16 +256,17 @@ export function SkillsMarketplace({
       <div className="min-h-0 flex-1 overflow-auto hide-scrollbar">
         <div style={{ minWidth: TABLE_MIN_W }}>
           {/* sticky header */}
-          <div className="sticky top-0 z-10 flex items-center h-[28px] border-b border-border-default bg-bg-base px-3 text-[10px] uppercase tracking-wider text-text-tertiary">
+          <div className="sticky top-0 z-10 flex items-center h-[28px] border-b border-border bg-background px-3 text-2xs uppercase tracking-wider text-muted-foreground">
             <span className={cn(COL.rank, "text-right pr-2")}>#</span>
             <span className={COL.skill}>{query.trim() ? "Results" : "Popular"}</span>
             <span className={COL.source}>Source</span>
             <span className={cn(COL.installs, "text-right")}>Installs</span>
+            <span className={cn(COL.trend, "text-right")}>Trend</span>
             <span className={COL.action} />
           </div>
 
           {rows.length === 0 ? (
-            <div className="grid h-[180px] place-items-center text-[11px] text-text-tertiary">
+            <div className="grid h-[180px] place-items-center text-xs text-muted-foreground">
               {loading
                 ? "Searching…"
                 : query.trim()
@@ -296,34 +286,42 @@ export function SkillsMarketplace({
                   onKeyDown={(e) => {
                     if (e.key === "Enter" || e.key === " ") setSelected(hit);
                   }}
-                  className="flex w-full cursor-pointer items-center h-[40px] border-b border-border-subtle px-3 text-left transition-colors hover:bg-bg-hover"
+                  className="flex w-full cursor-pointer items-center h-[40px] border-b border-border-subtle px-3 text-left transition-colors hover:bg-element-hover"
                 >
                   <span
                     className={cn(
                       COL.rank,
-                      "text-right pr-2 font-mono text-[11px] tabular-nums text-text-tertiary",
+                      "text-right pr-2 font-mono text-xs tabular-nums text-muted-foreground",
                     )}
                   >
                     {i + 1}
                   </span>
-                  <span className={cn(COL.skill, "truncate text-[12px] text-text-primary")}>
+                  <span className={cn(COL.skill, "truncate text-sm text-foreground")}>
                     {hit.name}
                   </span>
                   <span
-                    className={cn(
-                      COL.source,
-                      "truncate font-mono text-[10px] text-text-tertiary",
-                    )}
+                    className={cn(COL.source, "truncate font-mono text-2xs text-muted-foreground")}
                   >
                     {hit.source}
                   </span>
                   <span
                     className={cn(
                       COL.installs,
-                      "text-right font-mono text-[11px] tabular-nums text-text-secondary",
+                      "text-right font-mono text-xs tabular-nums text-secondary-foreground",
                     )}
                   >
                     {hit.installs.toLocaleString()}
+                  </span>
+                  {/* Aesthetic, not analytic: no value labels, no hover
+                      readout — the shape reads as momentum and the exact number
+                      is already in the Installs column beside it. */}
+                  <span className={cn(COL.trend, "flex justify-end pr-2")}>
+                    <TrendSparkline
+                      points={installTrend(hit.id, hit.installs).points}
+                      width={64}
+                      height={20}
+                      label="Installs over the last 6 months"
+                    />
                   </span>
                   <span className={cn(COL.action, "flex justify-end")}>
                     <InstallButton
@@ -365,7 +363,7 @@ function InstallButton({
 }) {
   if (installed) {
     return (
-      <span className="inline-flex items-center gap-1 text-[11px] text-text-tertiary">
+      <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
         <Check size={12} /> Added
       </span>
     );
@@ -375,7 +373,7 @@ function InstallButton({
       type="button"
       disabled={installing}
       onClick={onClick}
-      className="inline-flex items-center gap-1.5 rounded-md border border-border-default px-2.5 py-1 text-[11px] font-medium text-text-secondary transition-colors hover:bg-bg-hover hover:text-text-primary disabled:opacity-50"
+      className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs font-medium text-secondary-foreground transition-colors hover:bg-element-hover hover:text-foreground disabled:opacity-50"
     >
       {installing ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
       Install
@@ -400,7 +398,7 @@ function SkillDetailModal({
 }) {
   // Seed synchronously from cache so a re-opened modal paints instantly.
   const [preview, setPreview] = useState<Pack | null>(
-    hit ? previewCache.get(hit.source) ?? null : null,
+    hit ? (previewCache.get(hit.source) ?? null) : null,
   );
   const [loading, setLoading] = useState(false);
 
@@ -483,7 +481,7 @@ function SkillDetailModal({
           <ModalAction icon={Copy} label="Copy as markdown" onClick={copyMarkdown} />
           {hit && (
             <ModalAction
-              icon={Github}
+              icon={GithubIcon}
               label="View on GitHub"
               onClick={() => void openUrl(githubUrl)}
             />
@@ -492,13 +490,13 @@ function SkillDetailModal({
       }
     >
       {loading ? (
-        <div className="flex items-center gap-2 text-[12px] text-text-tertiary">
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <Loader2 size={13} className="animate-spin" /> Loading details…
         </div>
       ) : preview ? (
         <>
           {preview.manifest?.description && (
-            <p className="mb-3 text-[13px] leading-relaxed text-text-secondary">
+            <p className="mb-3 text-base leading-relaxed text-secondary-foreground">
               {preview.manifest.description}
             </p>
           )}
@@ -508,7 +506,7 @@ function SkillDetailModal({
               {otherCounts.map(([kind, n]) => (
                 <span
                   key={kind}
-                  className="inline-flex items-center gap-1 rounded-full border border-border-default bg-bg-base px-2 py-0.5 text-[10px] text-text-tertiary"
+                  className="inline-flex items-center gap-1 rounded-full border border-border bg-background px-2 py-0.5 text-2xs text-muted-foreground"
                 >
                   <Boxes size={10} />
                   {n} {KIND_LABEL[kind]}
@@ -520,13 +518,11 @@ function SkillDetailModal({
           {!preview.manifest?.description &&
             modalSkills.length === 0 &&
             otherCounts.length === 0 && (
-              <div className="text-[12px] text-text-tertiary">
-                No additional details published.
-              </div>
+              <div className="text-sm text-muted-foreground">No additional details published.</div>
             )}
         </>
       ) : (
-        <div className="text-[12px] text-text-tertiary">
+        <div className="text-sm text-muted-foreground">
           Couldn’t load details — you can still install.
         </div>
       )}

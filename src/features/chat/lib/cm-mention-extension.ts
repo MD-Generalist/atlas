@@ -19,12 +19,7 @@
 // state mutation so other extensions (e.g. an `update` listener that wants
 // to surface mention changes to React) can observe them.
 
-import {
-  Range,
-  RangeSet,
-  StateEffect,
-  StateField,
-} from "@codemirror/state";
+import { Range, RangeSet, StateEffect, StateField } from "@codemirror/state";
 import {
   Decoration,
   type DecorationSet,
@@ -40,7 +35,18 @@ import type { MentionData, MentionKind } from "./mentions";
 import { toShortForm } from "./mentions";
 
 // ── Media hover preview (image/video `@file` chips) ──────────────────────────
-const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "avif", "bmp", "svg", "heic", "heif"]);
+const IMAGE_EXTS = new Set([
+  "png",
+  "jpg",
+  "jpeg",
+  "gif",
+  "webp",
+  "avif",
+  "bmp",
+  "svg",
+  "heic",
+  "heif",
+]);
 const VIDEO_EXTS = new Set(["mp4", "mov", "webm", "m4v", "avi", "mkv", "ogv"]);
 
 function mediaKindOf(path: string): "image" | "video" | null {
@@ -57,14 +63,24 @@ function parentDirOf(path: string): string {
 
 function imageMime(path: string): string {
   switch (path.split(".").pop()?.toLowerCase() ?? "") {
-    case "jpg": case "jpeg": return "image/jpeg";
-    case "gif": return "image/gif";
-    case "webp": return "image/webp";
-    case "svg": return "image/svg+xml";
-    case "bmp": return "image/bmp";
-    case "avif": return "image/avif";
-    case "heic": case "heif": return "image/heic";
-    default: return "image/png";
+    case "jpg":
+    case "jpeg":
+      return "image/jpeg";
+    case "gif":
+      return "image/gif";
+    case "webp":
+      return "image/webp";
+    case "svg":
+      return "image/svg+xml";
+    case "bmp":
+      return "image/bmp";
+    case "avif":
+      return "image/avif";
+    case "heic":
+    case "heif":
+      return "image/heic";
+    default:
+      return "image/png";
   }
 }
 
@@ -196,20 +212,17 @@ export interface MentionTrigger {
  *  runs after the view finishes committing. */
 export function mentionTriggerPlugin(
   onChange: (trigger: MentionTrigger | null) => void,
-  // Returns whether the `#` skill picker is enabled. Read live so the active
-  // agent (e.g. Cersei, which has no skills) can toggle it without remounting.
-  allowSkill: () => boolean = () => true
 ): ViewPlugin<{ last: MentionTrigger | null; pending: number }> {
   return ViewPlugin.define((view) => {
     const state = {
       last: null as MentionTrigger | null,
       pending: 0,
     };
-    schedule(view, state, onChange, allowSkill);
+    schedule(view, state, onChange);
     return {
       update(u: ViewUpdate) {
         if (!u.docChanged && !u.selectionSet && !u.viewportChanged) return;
-        schedule(u.view, state, onChange, allowSkill);
+        schedule(u.view, state, onChange);
       },
     };
   });
@@ -219,13 +232,12 @@ function schedule(
   view: EditorView,
   state: { last: MentionTrigger | null; pending: number },
   onChange: (t: MentionTrigger | null) => void,
-  allowSkill: () => boolean
 ): void {
   const ticket = ++state.pending;
   queueMicrotask(() => {
     // Drop the stale schedule if another update has fired since.
     if (ticket !== state.pending) return;
-    recompute(view, state, onChange, allowSkill);
+    recompute(view, state, onChange);
   });
 }
 
@@ -233,12 +245,11 @@ function recompute(
   view: EditorView,
   state: { last: MentionTrigger | null; pending: number },
   onChange: (t: MentionTrigger | null) => void,
-  allowSkill: () => boolean
 ): void {
   // The view may have been destroyed between the queueMicrotask schedule
   // and its callback firing (e.g. component unmount inside the same tick).
   if (!view.dom.isConnected) return;
-  const trig = detectTrigger(view, allowSkill);
+  const trig = detectTrigger(view);
   if (sameTrigger(state.last, trig)) return;
   state.last = trig;
   onChange(trig);
@@ -257,10 +268,7 @@ function sameTrigger(a: MentionTrigger | null, b: MentionTrigger | null): boolea
   );
 }
 
-function detectTrigger(
-  view: EditorView,
-  allowSkill: () => boolean
-): MentionTrigger | null {
+function detectTrigger(view: EditorView): MentionTrigger | null {
   const sel = view.state.selection.main;
   if (!sel.empty) return null;
   const caret = sel.head;
@@ -272,10 +280,11 @@ function detectTrigger(
   for (let i = lineBefore.length - 1; i >= 0; i--) {
     const ch = lineBefore[i];
     // `@` → unscoped picker; `~` → knowledge-only (mirrors the Tiptap KB
-    // editor's `~` shortcut so chat and notes behave the same); `#` →
-    // skills-only (the `#skill:` invoke rail). The whitespace-precedence
-    // guard below keeps `C#`, `issue#3`, `a@b` from opening the picker.
-    if (ch === "@" || ch === "~" || (ch === "#" && allowSkill())) {
+    // editor's `~` shortcut so chat and notes behave the same). `#`
+    // (skills-only invoke) was retired — skills are invoked through the `/`
+    // picker's passthrough now (ADR 0001). The whitespace-precedence guard
+    // below keeps `C#`, `issue#3`, `a@b` from opening the picker.
+    if (ch === "@" || ch === "~") {
       const prev = i > 0 ? lineBefore[i - 1] : "";
       if (prev && !/\s/.test(prev) && prev !== "(" && prev !== "[") {
         return null;
@@ -296,7 +305,7 @@ function detectTrigger(
         to: caret,
         query,
         anchor: { x: coords.left, y: coords.top },
-        scope: ch === "~" ? "knowledge" : ch === "#" ? "skill" : null,
+        scope: ch === "~" ? "knowledge" : null,
       };
     }
     if (/\s/.test(ch)) {
@@ -311,18 +320,14 @@ function detectTrigger(
 /** A key passes through this when the picker is open. The interceptor is a
  *  mutable ref the parent sets; CodeMirror's keymap looks it up live so we
  *  don't have to reconfigure the view every time the picker opens. */
-export type MentionKey = "Up" | "Down" | "Enter" | "Escape" | "Backspace";
+export type MentionKey = "Up" | "Down" | "Enter" | "Escape" | "Backspace" | "Tab";
 export type MentionKeyInterceptor = (key: MentionKey) => boolean;
 
-export const mentionKeymap = (
-  getInterceptor: () => MentionKeyInterceptor | null
-) => {
-  const tryIntercept =
-    (key: MentionKey) =>
-    () => {
-      const fn = getInterceptor();
-      return fn ? fn(key) : false;
-    };
+export const mentionKeymap = (getInterceptor: () => MentionKeyInterceptor | null) => {
+  const tryIntercept = (key: MentionKey) => () => {
+    const fn = getInterceptor();
+    return fn ? fn(key) : false;
+  };
   return [
     { key: "ArrowDown", run: tryIntercept("Down") },
     { key: "ArrowUp", run: tryIntercept("Up") },
@@ -333,6 +338,10 @@ export const mentionKeymap = (
     // The interceptor returns false to let CM's default delete handler run
     // when there's nothing to back-navigate to.
     { key: "Backspace", run: tryIntercept("Backspace") },
+    // Tab-to-complete for the slash picker only — the mention picker's
+    // interceptor returns false for "Tab" so list-indent Tab keeps working
+    // when a mention/knowledge picker happens to be open.
+    { key: "Tab", run: tryIntercept("Tab") },
   ];
 };
 
@@ -347,14 +356,14 @@ export interface MentionRange {
 /** Insert a mention. The provided `from`/`to` is the slice of doc the
  *  shortform string already occupies — the caller is expected to have
  *  produced that text in the same transaction (see `insertMention`). */
-export const addMentionEffect = StateEffect.define<MentionRange>();
+const addMentionEffect = StateEffect.define<MentionRange>();
 
 /** Drop a mention by id without changing the doc. The doc text remains
  *  but loses chip rendering and atomic behavior. (We don't currently use
  *  this — kept for parity with `addMentionEffect`.) */
-export const removeMentionEffect = StateEffect.define<{ id: string }>();
+const removeMentionEffect = StateEffect.define<{ id: string }>();
 
-export const mentionField = StateField.define<MentionRange[]>({
+const mentionField = StateField.define<MentionRange[]>({
   create: () => [],
   update(value, tr) {
     // Map existing ranges through the doc changes first.
@@ -470,11 +479,6 @@ const ICON_FOLDER_GIT = lucideSvg(
     `<path d="M18 19c-2.8 0-5-2.2-5-5v8"/>` +
     `<circle cx="20" cy="19" r="2"/>`,
 );
-const ICON_NEWSPAPER = lucideSvg(
-  `<path d="M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-2 2Zm0 0a2 2 0 0 1-2-2v-9c0-1.1.9-2 2-2h2"/>` +
-    `<path d="M18 14h-8"/><path d="M15 18h-5"/>` +
-    `<path d="M10 6h8v4h-8V6Z"/>`,
-);
 const ICON_GIT_BRANCH = lucideSvg(
   `<line x1="6" x2="6" y1="3" y2="15"/>` +
     `<circle cx="18" cy="6" r="3"/>` +
@@ -484,43 +488,95 @@ const ICON_GIT_BRANCH = lucideSvg(
 const ICON_MESSAGE_SQUARE = lucideSvg(
   `<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>`,
 );
-// Lucide "zap" — skill mentions (the `#skill:` invoke rail). Keep in sync
-// with the `Zap` icon used in mention-picker.tsx's CategoryIcon.
-const ICON_ZAP = lucideSvg(
-  `<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>`,
+// Lucide "user", "messages-square" and "layers" — the organisation kinds
+// (issue 122). Keep in sync with `CategoryIcon` in mention-picker.tsx; "layers" is
+// the Timeline tab's icon, so a recorded session never reads as a past session.
+const ICON_USER = lucideSvg(
+  `<path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>`,
 );
+const ICON_MESSAGES_SQUARE = lucideSvg(
+  `<path d="M16 10a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 14.286V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>` +
+    `<path d="M20 9a2 2 0 0 1 2 2v10.286a.71.71 0 0 1-1.212.502l-2.202-2.202A2 2 0 0 0 17.172 19H10a2 2 0 0 1-2-2v-1"/>`,
+);
+const ICON_LAYERS = lucideSvg(
+  `<path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z"/>` +
+    `<path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12"/>` +
+    `<path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17"/>`,
+);
+// Lucide "message-square-quote" — a linked comment. Keep in sync with
+// `CategoryIcon` in mention-picker.tsx and `MENTION_GLYPH` in markdown-render.ts.
+const ICON_MESSAGE_SQUARE_QUOTE = lucideSvg(
+  `<path d="M14 14a2 2 0 0 0 2-2V8h-2"/>` +
+    `<path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"/>` +
+    `<path d="M8 14a2 2 0 0 0 2-2V8H8"/>`,
+);
+// Lucide "zap" — pack-component mentions. Keep in sync with the `Zap` icon
+// used in mention-picker.tsx's CategoryIcon.
+const ICON_ZAP = lucideSvg(`<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>`);
 
 function kindGlyph(kind: MentionKind): string {
   switch (kind) {
-    case "file":         return ICON_FILE;
-    case "folder":       return ICON_FOLDER;
-    case "symbol":       return ICON_HASH;
-    case "knowledge":    return ICON_BOOK_OPEN;
-    case "skill":        return ICON_ZAP;
-    case "component":    return ICON_ZAP;
-    case "repo":         return ICON_FOLDER_GIT;
-    case "workspace":    return ICON_FOLDER_GIT;
-    case "paper":        return ICON_NEWSPAPER;
-    case "branch":       return ICON_GIT_BRANCH;
-    case "past_message": return ICON_MESSAGE_SQUARE;
-    case "past_session": return ICON_MESSAGE_SQUARE;
+    case "file":
+      return ICON_FILE;
+    case "folder":
+      return ICON_FOLDER;
+    case "symbol":
+      return ICON_HASH;
+    case "knowledge":
+      return ICON_BOOK_OPEN;
+    case "component":
+      return ICON_ZAP;
+    case "repo":
+      return ICON_FOLDER_GIT;
+    case "workspace":
+      return ICON_FOLDER_GIT;
+    case "branch":
+      return ICON_GIT_BRANCH;
+    case "past_message":
+      return ICON_MESSAGE_SQUARE;
+    case "past_session":
+      return ICON_MESSAGE_SQUARE;
+    case "member":
+      return ICON_USER;
+    case "conversation":
+      return ICON_MESSAGES_SQUARE;
+    case "recorded_session":
+      return ICON_LAYERS;
+    case "comment":
+      return ICON_MESSAGE_SQUARE_QUOTE;
   }
 }
 
 function chipTitle(m: MentionData): string {
   switch (m.kind) {
-    case "file":         return m.absPath;
-    case "folder":       return m.absPath;
-    case "symbol":       return `${m.symbolKind} · ${m.filePath}:${m.line}`;
-    case "knowledge":    return `${m.source} · ${m.filePath}`;
-    case "skill":        return m.description || m.displayName;
-    case "component":    return m.description || m.displayName;
-    case "repo":         return m.absPath;
-    case "workspace":    return m.absPath;
-    case "paper":        return m.authors.length ? m.authors.join(", ") : "paper";
-    case "branch":       return `${m.refKind} · ${m.sha.slice(0, 7)}`;
-    case "past_message": return m.sessionTitle;
-    case "past_session": return `session · ${m.sessionTitle}`;
+    case "file":
+      return m.absPath;
+    case "folder":
+      return m.absPath;
+    case "symbol":
+      return `${m.symbolKind} · ${m.filePath}:${m.line}`;
+    case "knowledge":
+      return `${m.source} · ${m.filePath}`;
+    case "component":
+      return m.description || m.displayName;
+    case "repo":
+      return m.absPath;
+    case "workspace":
+      return m.absPath;
+    case "branch":
+      return `${m.refKind} · ${m.sha.slice(0, 7)}`;
+    case "past_message":
+      return m.sessionTitle;
+    case "past_session":
+      return `session · ${m.sessionTitle}`;
+    case "member":
+      return `member · ${m.email}`;
+    case "conversation":
+      return `conversation · ${m.displayName}`;
+    case "recorded_session":
+      return `recorded session · ${m.displayName}`;
+    case "comment":
+      return `${m.parentId ? "reply" : "comment"} on ${m.anchorLabel} · ${m.authorName}: ${m.body}`;
   }
 }
 
@@ -531,7 +587,7 @@ function buildDecorations(ranges: readonly MentionRange[]): DecorationSet {
     Decoration.replace({
       widget: new ChipWidget(r.mention),
       inclusive: false,
-    }).range(r.from, r.to)
+    }).range(r.from, r.to),
   );
   return Decoration.set(decos, /* sort */ true);
 }
@@ -544,7 +600,7 @@ function mentionAtomicRanges(view: EditorView): RangeSet<Decoration> {
   if (ranges.length === 0) return RangeSet.empty;
   return RangeSet.of(
     ranges.map((r) => Decoration.mark({}).range(r.from, r.to)),
-    true
+    true,
   );
 }
 
@@ -565,7 +621,7 @@ export function insertMention(
   view: EditorView,
   mention: MentionData,
   from: number,
-  to: number
+  to: number,
 ): void {
   const shortform = toShortForm(mention);
   const insertText = shortform + " ";

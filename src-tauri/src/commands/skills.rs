@@ -1,29 +1,45 @@
 //! Skills feature — Phase 1 backend (on-disk authoring + multi-agent enable).
 //!
-//! Atlas manages agent "skills" the same way the `skills` CLI does: a single
-//! **canonical store** holds the authored `SKILL.md`, and each agent that should
-//! "see" the skill gets a **symlink** into its own skills directory. Disk *is*
-//! the state — there is no separate enable/disable file.
+//! Atlas manages agent "skills" the same way the `skills` CLI and Zed do: a
+//! single **canonical store** — `~/.agents/skills` (global) / `<project>/.agents/skills`
+//! (project) — holds the authored `SKILL.md`, and each agent that should "see"
+//! the skill gets a **symlink** into its own skills directory. Disk *is* the
+//! state — there is no separate enable/disable file. See
+//! `docs/adr/0003-agents-skills-is-the-canonical-store-acp-advertisement-is-the-picker.md`:
+//! Atlas does not run its own second store anymore, it reads/writes the same
+//! `.agents/skills` tree skills.sh and Zed already use.
 //!
 //! ```text
 //! canonical (= installed, managed by Atlas):
-//!   <root>/.atlas/skills/<name>/SKILL.md
+//!   <root>/.agents/skills/<name>/SKILL.md
 //! enablement (= symlink present, what the agent reads):
-//!   <root>/.claude/skills/<name> -> ../../.atlas/skills/<name>
+//!   <root>/.claude/skills/<name> -> ../../.agents/skills/<name>
 //! ```
 //!
 //! `<root>` is the home dir (global scope) or the project path (project scope).
 //! The agent registry is a static table for v1 (Claude Code + Codex); detection
-//! is "does the agent's config dir exist under `<root>`?".
+//! is "does the agent's config dir exist under `<root>`?". Note Codex's own
+//! *project*-scope skills dir was already `.agents/skills` before this store
+//! converged onto the same path — see [`project`]'s native-location guard.
 //!
-//! Discovery also surfaces **external** skills: real directories that live
-//! directly in an agent's skills dir (e.g. `~/.claude/skills/<name>/SKILL.md`)
-//! that Atlas did not author. These are `managed = false`; the "Make for all
-//! agents" (adopt) command copies them into the canonical store and fans them
-//! out to every detected agent via symlink.
+//! Discovery also surfaces **external** skills: real directories (or symlinks
+//! to directories, e.g. a skills.sh/Zed projection) that live directly in an
+//! agent's skills dir (e.g. `~/.claude/skills/<name>/SKILL.md`) and are not the
+//! canonical store's own entries. These are `managed = false`; the "Make for
+//! all agents" (adopt) command copies them into the canonical store and fans
+//! them out to every detected agent via symlink.
+//!
+//! A pre-convergence Atlas install may still have content sitting in the old
+//! `.atlas/skills` store; [`migrate_legacy_skills`] moves it into the new
+//! canonical store the first time it's discovered.
+//!
+//! A fourth, read-only discovery channel — [`list_plugin_skills`] — surfaces
+//! Claude Code plugin marketplace skills (`~/.claude/plugins/marketplaces/*/skills/`)
+//! purely for the Skills UI's browsing surface; they are never installable or
+//! projectable through Atlas (ADR 0003).
 //!
 //! Security: skill names are sanitized and every resolved path is verified to
-//! stay inside `<root>/.atlas/skills` so a crafted name can't escape via `..`.
+//! stay inside `<root>/.agents/skills` so a crafted name can't escape via `..`.
 //!
 //! Mirrors conventions from `byok.rs` (`#[tauri::command]` + `Result<T,String>`),
 //! `shared_memory.rs` (atomic tmp+rename writes), and `agent_memory.rs`
@@ -54,13 +70,15 @@ pub struct SkillMeta {
     pub path: String,
     /// Capability tier from the registry (default `"native-dir"`).
     pub delivery: String,
-    /// `true` when this skill exists in Atlas's canonical `.atlas/skills` store
-    /// (Atlas authored/adopted it). `false` for external skills that only exist
+    /// `true` when this skill exists in the canonical `.agents/skills` store
+    /// (Atlas authored/adopted it, or it was placed there by skills.sh/Zed/another
+    /// tool — the store is shared). `false` for external skills that only exist
     /// as a real directory inside one or more agent skills dirs.
     pub managed: bool,
     /// When this skill is *provided by an installed pack* (rather than authored
     /// in the canonical store), the originating pack name. `None` for authored
-    /// or external skills. Pack-provided skills are still `#skill:`-invokable.
+    /// or external skills. Pack-provided skills are still invokable — the
+    /// bound agent advertises them over ACP like any other skill.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pack: Option<String>,
 }
@@ -385,9 +403,9 @@ const TOOL_REGISTRY: &[ToolDef] = &[
     ToolDef {
         id: "atlas",
         display_name: "Atlas",
-        // The native in-process "Atlas" (cersei) agent. Enabled skills are
+        // The native in-process "Atlas" agent. Enabled skills are
         // symlinked into a DEDICATED dir that only the in-process `AtlasSkillTool`
-        // reads — kept separate from `.atlas/skills` (the canonical store) so this
+        // reads — kept separate from `.agents/skills` (the canonical store) so this
         // toggle is the exclusive gate (no `~/.claude`/bundled-skill leakage). Same
         // path at both scopes (`~/.atlas/agent-skills`, `<root>/.atlas/agent-skills`).
         global_skills_dir: ".atlas/agent-skills",
@@ -452,7 +470,7 @@ fn root_for(scope: &str, project_path: Option<&str>) -> Result<PathBuf, String> 
             let path = PathBuf::from(p);
             // Lexically reject parent-dir traversal. The project root may not
             // exist yet, so we cannot canonicalize; instead refuse any `..`
-            // segment so a crafted path can't escape `.atlas/skills` later.
+            // segment so a crafted path can't escape `.agents/skills` later.
             if path.components().any(|c| matches!(c, Component::ParentDir)) {
                 return Err(
                     "invalid projectPath: parent-directory segments are not allowed".to_string(),
@@ -470,9 +488,164 @@ fn home_dir() -> Option<PathBuf> {
     dirs::home_dir().or_else(|| std::env::var_os("HOME").map(PathBuf::from))
 }
 
-/// `<root>/.atlas/skills` — the canonical (Atlas-managed) store base.
+/// `<root>/.agents/skills` — the canonical store base. This is the same
+/// `.agents/skills` layout skills.sh and Zed already read/write (ADR 0003);
+/// Atlas does not keep a separate store.
 fn skills_base(root: &Path) -> PathBuf {
+    root.join(".agents").join("skills")
+}
+
+/// `<root>/.atlas/skills` — the pre-convergence canonical store. Superseded by
+/// [`skills_base`]; only consulted by [`migrate_legacy_skills`] to move any
+/// leftover content from an Atlas install that predates the store convergence.
+fn legacy_skills_base(root: &Path) -> PathBuf {
     root.join(".atlas").join("skills")
+}
+
+/// One-time migration of anything still sitting in the pre-convergence
+/// `.atlas/skills` store into the new canonical `.agents/skills` store.
+/// Best-effort and idempotent: called on every discovery pass, but becomes a
+/// no-op as soon as the legacy dir is empty (no sentinel file needed) — on the
+/// maintainer's machine this never had content, but other users who installed
+/// skills through Atlas before the convergence do. A skill name already present
+/// in the new store wins; the legacy copy is left in place rather than
+/// clobbered. Renames when possible (same volume), copies as a fallback.
+fn migrate_legacy_skills(root: &Path) {
+    let legacy = legacy_skills_base(root);
+    let Ok(entries) = fs::read_dir(&legacy) else {
+        return;
+    };
+    let new_base = skills_base(root);
+    for entry in entries.flatten() {
+        if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            continue; // e.g. the legacy `.projections.json` ledger file
+        }
+        if !entry.path().join("SKILL.md").is_file() {
+            continue;
+        }
+        let Some(raw_name) = entry.file_name().to_str().map(str::to_string) else {
+            continue;
+        };
+        let Ok(safe_name) = sanitize_name(&raw_name) else {
+            continue;
+        };
+        let Ok(dst) = canonical_skill_dir(&new_base, &safe_name) else {
+            continue;
+        };
+        if dst.exists() {
+            continue; // new store already has this skill — don't clobber
+        }
+        if let Some(parent) = dst.parent() {
+            if fs::create_dir_all(parent).is_err() {
+                continue;
+            }
+        }
+        let src = entry.path();
+        if fs::rename(&src, &dst).is_ok() {
+            eprintln!(
+                "skills: migrated legacy skill '{safe_name}' from {} to {}",
+                src.display(),
+                dst.display()
+            );
+        } else if copy_dir_all(&src, &dst).is_ok() {
+            // Cross-device rename failed — fall back to copy, leaving the
+            // legacy copy in place (best-effort, not fatal to discovery).
+            eprintln!(
+                "skills: copied legacy skill '{safe_name}' from {} to {} (legacy copy left in place)",
+                src.display(),
+                dst.display()
+            );
+        } else {
+            // Both rename and copy failed (permissions, disk full, …) — not
+            // fatal to discovery, but worth a trace instead of vanishing
+            // silently; the skill stays in the legacy dir and migration
+            // retries on the next discovery pass.
+            eprintln!(
+                "skills: failed to migrate legacy skill '{safe_name}' from {} — left in place, will retry",
+                src.display()
+            );
+        }
+    }
+}
+
+// ── Bundled skills (issue #64) ──────────────────────────────────────────────
+
+/// Content of the Atlas-owned `atlas-self-configure` skill, compiled into the
+/// binary so installing/upgrading it needs no separate resource-bundling
+/// config — it's just a string embedded at build time.
+const ATLAS_SELF_CONFIGURE_SKILL_MD: &str =
+    include_str!("../../resources/skills/atlas-self-configure/SKILL.md");
+
+/// Name of the one bundled skill Atlas ships today. A second one would want
+/// this generalized into a table; not done speculatively for a list of one.
+const BUNDLED_SKILL_NAME: &str = "atlas-self-configure";
+
+/// Sidecar file recording the hash of the bundled content Atlas itself last
+/// wrote, so a later upgrade can tell "the user never touched this" (safe to
+/// overwrite with the new bundled version) apart from "the user edited this"
+/// (must not clobber their changes — surface drift instead).
+const BUNDLED_HASH_FILE: &str = ".bundled-hash";
+
+fn sha256_hex(content: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(content.as_bytes());
+    digest.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Install or upgrade the bundled `atlas-self-configure` skill into the
+/// canonical **global** store (`~/.agents/skills/atlas-self-configure`), so
+/// it's discoverable through the exact same `list_skills`/`skills_project`
+/// machinery as any other managed skill — no second delivery path.
+///
+/// Idempotent and safe to call on every launch:
+/// - Missing entirely → write it fresh.
+/// - Present, and its content hash matches the last hash *this function*
+///   recorded → the user never touched it since; safe to overwrite with
+///   whatever this build ships (a normal version upgrade).
+/// - Present, but the hash doesn't match (or the sidecar is missing/
+///   unreadable) → treat as user-modified and leave it alone entirely,
+///   including not touching the sidecar, so the next launch keeps re-
+///   detecting the drift rather than adopting the user's edit as "new
+///   baseline" behind their back.
+///
+/// Global-only, matching the design record: no per-project duplicate.
+pub fn ensure_bundled_skills() {
+    let Some(home) = home_dir() else {
+        return;
+    };
+    ensure_bundled_skills_at(&home);
+}
+
+/// The root-parameterized core of `ensure_bundled_skills`, split out so tests
+/// can point it at a temp dir instead of the real `$HOME` — mirrors every
+/// other function in this file (`root_for`, `skills_base`, `project`, ...)
+/// taking `root: &Path` rather than resolving it internally.
+fn ensure_bundled_skills_at(root: &Path) {
+    let dir = skills_base(root).join(BUNDLED_SKILL_NAME);
+    let skill_md = dir.join("SKILL.md");
+    let hash_file = dir.join(BUNDLED_HASH_FILE);
+    let bundled_hash = sha256_hex(ATLAS_SELF_CONFIGURE_SKILL_MD);
+
+    if skill_md.exists() {
+        let recorded_hash = fs::read_to_string(&hash_file).ok();
+        let on_disk_matches_recorded = fs::read_to_string(&skill_md)
+            .ok()
+            .zip(recorded_hash.as_deref())
+            .map(|(disk, recorded)| sha256_hex(&disk) == recorded.trim())
+            .unwrap_or(false);
+        if !on_disk_matches_recorded {
+            // User-modified (or a pre-#64 install with no sidecar yet) —
+            // never overwrite silently.
+            return;
+        }
+    }
+
+    if fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    if fs::write(&skill_md, ATLAS_SELF_CONFIGURE_SKILL_MD).is_ok() {
+        let _ = fs::write(&hash_file, &bundled_hash);
+    }
 }
 
 /// Sanitize a skill name into a safe single path segment.
@@ -511,7 +684,7 @@ fn sanitize_name(name: &str) -> Result<String, String> {
 }
 
 /// Resolve the canonical skill directory for a sanitized name and verify it
-/// stays inside `<root>/.atlas/skills` (no `..` escape).
+/// stays inside `<root>/.agents/skills` (no `..` escape).
 fn canonical_skill_dir(base: &Path, safe_name: &str) -> Result<PathBuf, String> {
     let dir = base.join(safe_name);
     // The only non-base component must be exactly `safe_name`.
@@ -571,7 +744,10 @@ fn parse_frontmatter(raw: &str) -> (Frontmatter, String) {
 fn render_skill_md(name: &str, description: &str, body: &str) -> String {
     // Keep values single-line; frontmatter is scalar-only here.
     let desc = description.replace(['\n', '\r'], " ");
-    format!("---\nname: {name}\ndescription: {desc}\n---\n\n{}\n", body.trim_end())
+    format!(
+        "---\nname: {name}\ndescription: {desc}\n---\n\n{}\n",
+        body.trim_end()
+    )
 }
 
 // ── Disk helpers ───────────────────────────────────────────────────────────────
@@ -610,23 +786,18 @@ fn tool_has_entry(root: &Path, def: &ToolDef, scope: &str, safe_name: &str) -> b
 }
 
 /// Compute the relative symlink target from a tool's skills dir up to the
-/// canonical `<root>/.atlas/skills/<name>`. Used only for `<root>`-relative dirs
+/// canonical `<root>/.agents/skills/<name>`. Used only for `<root>`-relative dirs
 /// (the common case). For env-relocated absolute dirs we fall back to an absolute
 /// target via [`canonical_symlink_target`].
 fn relative_symlink_target(skills_dir_rel: &Path, safe_name: &str) -> PathBuf {
     let up = "../".repeat(skills_dir_rel.components().count());
-    PathBuf::from(format!("{up}.atlas/skills/{safe_name}"))
+    PathBuf::from(format!("{up}.agents/skills/{safe_name}"))
 }
 
 /// Best symlink target for a projection: relative when the tool dir is under
 /// `<root>` (keeps the link valid if the tree moves), absolute otherwise (env
 /// override relocated the dir outside `<root>`).
-fn canonical_symlink_target(
-    root: &Path,
-    def: &ToolDef,
-    scope: &str,
-    safe_name: &str,
-) -> PathBuf {
+fn canonical_symlink_target(root: &Path, def: &ToolDef, scope: &str, safe_name: &str) -> PathBuf {
     let dir = tool_skills_dir(def, scope, root);
     if let Ok(rel) = dir.strip_prefix(root) {
         relative_symlink_target(rel, safe_name)
@@ -650,12 +821,7 @@ fn clear_entry(link: &Path) -> Result<(), String> {
 
 /// Create a relative symlink from the tool skills dir to the canonical skill.
 /// Idempotent: a stale entry is removed first, then recreated.
-fn create_symlink(
-    root: &Path,
-    def: &ToolDef,
-    scope: &str,
-    safe_name: &str,
-) -> Result<(), String> {
+fn create_symlink(root: &Path, def: &ToolDef, scope: &str, safe_name: &str) -> Result<(), String> {
     let link = tool_link_path(root, def, scope, safe_name);
     if let Some(parent) = link.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -666,12 +832,7 @@ fn create_symlink(
 }
 
 /// Materialize a copy projection: recursively copy canonical → tool dir.
-fn create_copy(
-    root: &Path,
-    def: &ToolDef,
-    scope: &str,
-    safe_name: &str,
-) -> Result<(), String> {
+fn create_copy(root: &Path, def: &ToolDef, scope: &str, safe_name: &str) -> Result<(), String> {
     let canonical = canonical_skill_dir(&skills_base(root), safe_name)?;
     if !canonical.join("SKILL.md").is_file() {
         return Err(format!("canonical skill not found: {safe_name}"));
@@ -685,12 +846,7 @@ fn create_copy(
 }
 
 /// Remove a tool's projection for a skill (symlink or copy). Best-effort.
-fn remove_symlink(
-    root: &Path,
-    def: &ToolDef,
-    scope: &str,
-    safe_name: &str,
-) -> Result<(), String> {
+fn remove_symlink(root: &Path, def: &ToolDef, scope: &str, safe_name: &str) -> Result<(), String> {
     let link = tool_link_path(root, def, scope, safe_name);
     clear_entry(&link)
 }
@@ -768,7 +924,8 @@ fn collect_files(base: &Path, dir: &Path, out: &mut Vec<(String, PathBuf)>) {
 /// the canonical hash at push time (for drift detection on copies).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct LedgerEntry {
-    /// `"symlink"` | `"copy"`.
+    /// `"symlink"` | `"copy"` | `"native"` (the tool's own skills dir IS the
+    /// canonical store at this scope — see [`project`]'s native-location guard).
     mode: String,
     /// Canonical content hash at the moment of projection.
     hash: String,
@@ -781,11 +938,13 @@ struct LedgerEntry {
 
 /// `skip_serializing_if` predicate: a `Skill` kind is the implicit default and is
 /// never written to the ledger JSON.
+// The reference is serde's contract for `skip_serializing_if`, not a choice.
+#[allow(clippy::trivially_copy_pass_by_ref)]
 fn is_skill_kind(kind: &ComponentKind) -> bool {
     *kind == ComponentKind::Skill
 }
 
-/// `<root>/.atlas/skills/.projections.json` — one ledger per root (home for
+/// `<root>/.agents/skills/.projections.json` — one ledger per root (home for
 /// global, project for project). Map: skill → toolId → entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Ledger {
@@ -821,13 +980,7 @@ fn write_ledger(root: &Path, ledger: &Ledger) -> Result<(), String> {
     atomic_write(&ledger_path(root), &payload)
 }
 
-fn ledger_record(
-    ledger: &mut Ledger,
-    safe_name: &str,
-    tool_id: &str,
-    mode: &str,
-    hash: &str,
-) {
+fn ledger_record(ledger: &mut Ledger, safe_name: &str, tool_id: &str, mode: &str, hash: &str) {
     ledger
         .projections
         .entry(safe_name.to_string())
@@ -855,7 +1008,7 @@ fn ledger_remove(ledger: &mut Ledger, safe_name: &str, tool_id: &str) {
 //
 // Packs own their own projection ledger (`.atlas/packs/.pack-projections.json`).
 // The Skills subsystem reads it one-directionally — never writes it — so that a
-// pack-delivered skill is a first-class, `#skill:`-invokable skill and so the
+// pack-delivered skill is a first-class skill in every listing and so the
 // Skills side never silently clobbers a projection a pack owns.
 
 /// Every skill shipped by an installed pack, as `(pack_name, safe_skill_name,
@@ -937,9 +1090,21 @@ fn project(
         return Err(format!("canonical skill not found: {safe_name}"));
     }
 
+    let link = tool_link_path(root, def, scope, safe_name);
+
+    // Store convergence (ADR 0003): Codex's own *project*-scope skills dir was
+    // already `.agents/skills`, the same path the canonical store now uses, so
+    // for that (tool, scope) pair `link` and `canonical` are the same directory.
+    // The skill already lives where the tool reads it — nothing to symlink/copy,
+    // just record it as projected.
+    if link == canonical {
+        let mut ledger = read_ledger(root);
+        ledger_record(&mut ledger, safe_name, def.id, "native", &canonical_hash);
+        return write_ledger(root, &ledger);
+    }
+
     // Non-destructive guard: if a real (non-symlink) dir already sits at the
     // target, only overwrite when the caller forces it.
-    let link = tool_link_path(root, def, scope, safe_name);
     if !force {
         if let Ok(meta) = link.symlink_metadata() {
             if !meta.file_type().is_symlink() && meta.is_dir() {
@@ -954,8 +1119,7 @@ fn project(
         }
         // Cross-ledger guard: never silently clobber a projection an installed
         // pack owns. The pack ledger is only read here — Skills never writes it.
-        if let Some(owner) =
-            pack_owner_of_skill(root, &read_pack_proj(root), def, scope, safe_name)
+        if let Some(owner) = pack_owner_of_skill(root, &read_pack_proj(root), def, scope, safe_name)
         {
             return Err(format!(
                 "'{safe_name}' in {} is managed by pack '{owner}' — manage it from the Packs tab (or use force)",
@@ -983,8 +1147,18 @@ fn project(
     write_ledger(root, &ledger)
 }
 
-/// Remove a projection (symlink or copy) and drop its ledger entry.
+/// Remove a projection (symlink or copy) and drop its ledger entry. Refuses to
+/// act on a native-location pair (see [`project`]) — `clear_entry` would delete
+/// the canonical skill itself rather than a projection of it.
 fn unproject(root: &Path, def: &ToolDef, scope: &str, safe_name: &str) -> Result<(), String> {
+    let canonical = canonical_skill_dir(&skills_base(root), safe_name)?;
+    let link = tool_link_path(root, def, scope, safe_name);
+    if link == canonical {
+        return Err(format!(
+            "cannot disable {} for '{safe_name}': its {scope}-scope skills dir is the canonical store itself",
+            def.id
+        ));
+    }
     remove_symlink(root, def, scope, safe_name)?;
     let mut ledger = read_ledger(root);
     ledger_remove(&mut ledger, safe_name, def.id);
@@ -994,10 +1168,14 @@ fn unproject(root: &Path, def: &ToolDef, scope: &str, safe_name: &str) -> Result
 // ── Core (testable, no Tauri) ──────────────────────────────────────────────────
 
 fn list_skills(root: &Path, scope: &str) -> Result<Vec<SkillMeta>, String> {
+    // One-time move of anything left in the pre-convergence `.atlas/skills`
+    // store into the new canonical `.agents/skills` store. No-op once migrated.
+    migrate_legacy_skills(root);
+
     // Keyed by the sanitized skill name so canonical + external entries dedupe.
     let mut by_name: BTreeMap<String, SkillMeta> = BTreeMap::new();
 
-    // ── 1. Canonical (managed) skills under `<root>/.atlas/skills/*`. ──────────
+    // ── 1. Canonical (managed) skills under `<root>/.agents/skills/*`. ─────────
     let base = skills_base(root);
     if let Ok(entries) = fs::read_dir(&base) {
         for entry in entries.flatten() {
@@ -1040,22 +1218,22 @@ fn list_skills(root: &Path, scope: &str) -> Result<Vec<SkillMeta>, String> {
     }
 
     // ── 2. External (unmanaged) skills living directly in each tool dir. ───────
-    // A top-level entry that is a *real directory* with its own `SKILL.md` and
-    // is NOT one of our canonical skills is an external tool skill. Symlinks
-    // resolving into the canonical store are already accounted for above, so we
-    // skip them here. Container dirs without a top-level `SKILL.md` (e.g.
-    // `~/.claude/skills/ecc/`) are skipped — no recursion (v1).
+    // A top-level entry — real directory OR symlink to one — with its own
+    // `SKILL.md` and NOT one of our canonical skills is an external tool skill.
+    // Symlinks are followed rather than rejected (ADR 0003): most of them are
+    // exactly the `.agents/skills` projections skills.sh/Zed/Atlas itself write,
+    // and those resolving into our own canonical store are already accounted for
+    // above (the `by_name.contains_key` check below skips them). Container dirs
+    // without a top-level `SKILL.md` (e.g. `~/.claude/skills/ecc/`) are skipped —
+    // no recursion (v1).
     for def in TOOL_REGISTRY {
         let dir = tool_skills_dir(def, scope, root);
         let Ok(entries) = fs::read_dir(&dir) else {
             continue;
         };
         for entry in entries.flatten() {
-            // Only real directories — skip symlinks (managed) and files.
-            let Ok(meta) = entry.path().symlink_metadata() else {
-                continue;
-            };
-            if meta.file_type().is_symlink() || !meta.is_dir() {
+            // Follow symlinks: only reject non-directories (files, broken links).
+            if !entry.path().is_dir() {
                 continue;
             }
             let skill_md = entry.path().join("SKILL.md");
@@ -1077,16 +1255,18 @@ fn list_skills(root: &Path, scope: &str) -> Result<Vec<SkillMeta>, String> {
             };
             let (fm, _body) = parse_frontmatter(&raw);
 
-            let meta = by_name.entry(safe_name.clone()).or_insert_with(|| SkillMeta {
-                name: fm.name.clone().unwrap_or_else(|| safe_name.clone()),
-                description: fm.description.clone().unwrap_or_default(),
-                scope: scope.to_string(),
-                enabled_agents: Vec::new(),
-                path: skill_md.to_string_lossy().to_string(),
-                delivery: "native-dir".to_string(),
-                managed: false,
-                pack: None,
-            });
+            let meta = by_name
+                .entry(safe_name.clone())
+                .or_insert_with(|| SkillMeta {
+                    name: fm.name.clone().unwrap_or_else(|| safe_name.clone()),
+                    description: fm.description.clone().unwrap_or_default(),
+                    scope: scope.to_string(),
+                    enabled_agents: Vec::new(),
+                    path: skill_md.to_string_lossy().to_string(),
+                    delivery: "native-dir".to_string(),
+                    managed: false,
+                    pack: None,
+                });
             if !meta.enabled_agents.iter().any(|a| a == def.id) {
                 meta.enabled_agents.push(def.id.to_string());
             }
@@ -1094,10 +1274,10 @@ fn list_skills(root: &Path, scope: &str) -> Result<Vec<SkillMeta>, String> {
     }
 
     // ── 3. Pack-provided skills (installed packs' `Skill` components). ─────────
-    // A skill shipped by an installed pack is a first-class, `#skill:`-invokable
-    // skill even before it is projected into a tool. Surface it here (badged with
-    // its pack) so both My Skills and the `#skill:` picker see it. An authored or
-    // external skill of the same name wins — don't downgrade it.
+    // A skill shipped by an installed pack is a first-class skill even before
+    // it is projected into a tool. Surface it here (badged with its pack) so
+    // My Skills sees it. An authored or external skill of the same name
+    // wins — don't downgrade it.
     for (pack_name, safe_name, skill_md) in pack_provided_skills(root) {
         if by_name.contains_key(&safe_name) {
             continue;
@@ -1139,7 +1319,7 @@ fn read_skill(root: &Path, name: &str) -> Result<SkillContent, String> {
     let raw = match fs::read_to_string(&skill_md) {
         Ok(raw) => raw,
         // Not in the canonical store — fall back to an installed pack that ships
-        // a skill of this name, so pack-provided skills are `#skill:`-readable.
+        // a skill of this name, so pack-provided skills are readable too.
         Err(_) => pack_skill_md(root, &safe)
             .and_then(|p| fs::read_to_string(&p).ok())
             .ok_or_else(|| format!("skill not found: {safe}"))?,
@@ -1437,6 +1617,10 @@ pub struct ReconcileView {
 /// Build the reconciled matrix for `scope`. `home` is always needed for global
 /// detection facts even when reconciling a project scope.
 fn reconcile(root: &Path, scope: &str, home: &Path) -> Result<ReconcileView, String> {
+    // Same one-time legacy migration as `list_skills` — reconcile is a discovery
+    // entry point too and is called independently of the list view.
+    migrate_legacy_skills(root);
+
     let tools: Vec<ToolInfo> = TOOL_REGISTRY
         .iter()
         .map(|def| ToolInfo {
@@ -1489,6 +1673,7 @@ fn reconcile(root: &Path, scope: &str, home: &Path) -> Result<ReconcileView, Str
     }
 
     // Pre-scan external/real dirs per tool (name → (display, desc, hash)).
+    // Follows symlinks (ADR 0003) same as `list_skills`'s external scan.
     let mut external: BTreeMap<String, BTreeMap<String, (String, String, String)>> =
         BTreeMap::new();
     for def in TOOL_REGISTRY {
@@ -1497,10 +1682,7 @@ fn reconcile(root: &Path, scope: &str, home: &Path) -> Result<ReconcileView, Str
             continue;
         };
         for entry in entries.flatten() {
-            let Ok(meta) = entry.path().symlink_metadata() else {
-                continue;
-            };
-            if meta.file_type().is_symlink() || !meta.is_dir() {
+            if !entry.path().is_dir() {
                 continue;
             }
             if !entry.path().join("SKILL.md").is_file() {
@@ -1575,10 +1757,7 @@ fn reconcile(root: &Path, scope: &str, home: &Path) -> Result<ReconcileView, Str
                 .as_ref()
                 .map(|m| !m.file_type().is_symlink() && m.is_dir())
                 .unwrap_or(false);
-            let ledger_entry = ledger
-                .projections
-                .get(name)
-                .and_then(|t| t.get(def.id));
+            let ledger_entry = ledger.projections.get(name).and_then(|t| t.get(def.id));
 
             let (status, mode) = if is_symlink {
                 // A symlink projection always reflects canonical (it IS the file).
@@ -1598,7 +1777,7 @@ fn reconcile(root: &Path, scope: &str, home: &Path) -> Result<ReconcileView, Str
                     // No canonical twin → external (or external-conflict).
                     ("external".to_string(), None)
                 }
-            } else if !entry_meta.is_some() {
+            } else if entry_meta.is_none() {
                 // Nothing on disk for this tool.
                 if !detected {
                     ("absent".to_string(), None)
@@ -1671,7 +1850,7 @@ fn reconcile(root: &Path, scope: &str, home: &Path) -> Result<ReconcileView, Str
 // ── Freeze (CP.3 uninstall safety) ───────────────────────────────────────────────
 
 /// Convert every Atlas-authored *symlink* projection in the ledger into a real
-/// copy, so removing `~/.atlas/skills` leaves each tool with a working,
+/// copy, so removing `~/.agents/skills` leaves each tool with a working,
 /// self-contained skill dir. Idempotent (copies are left as-is).
 fn freeze(root: &Path, scope: &str) -> Result<(), String> {
     let mut ledger = read_ledger(root);
@@ -1699,8 +1878,8 @@ fn freeze(root: &Path, scope: &str) -> Result<(), String> {
 
 // ── Promote (CP.4 scenario 4) ────────────────────────────────────────────────────
 
-/// Promote a project skill to global: copy `<proj>/.atlas/skills/<name>` →
-/// `~/.atlas/skills/<name>`, then re-project into every detected tool at global
+/// Promote a project skill to global: copy `<proj>/.agents/skills/<name>` →
+/// `~/.agents/skills/<name>`, then re-project into every detected tool at global
 /// scope. The project copy is kept (the repo still travels with it).
 fn promote(project_root: &Path, home: &Path, name: &str) -> Result<SkillMeta, String> {
     let safe = sanitize_name(name)?;
@@ -1739,6 +1918,24 @@ fn promote(project_root: &Path, home: &Path, name: &str) -> Result<SkillMeta, St
         pack: None,
     })
 }
+
+// ── Plugin skills (read-only fourth discovery channel, ADR 0003) ─────────────────
+//
+// Claude Code plugin marketplaces ship their own bundled skills under
+// `~/.claude/plugins/marketplaces/<marketplace>/skills/<name>/SKILL.md`. These
+// are a genuinely foreign channel: never installable, projectable, or
+// uninstallable through Atlas. They already reach the picker because the
+// *agent* advertises them over ACP — Atlas only needs to find them so the
+// Skills UI's browsing surface can show they exist. Not merged into
+// `SkillMeta`/`list_skills`: that type's `managed`/`enabled_agents` fields
+// describe things Atlas can toggle, which is exactly what these are not.
+
+// TODO(codex plugin skills): Codex's plugin directory layout is unverified —
+// `~/.codex/plugins/` exists on the maintainer's machine but contains only a
+// `cache/` dir, not a `marketplaces/*/skills` tree like Claude Code's. Add a
+// `list_codex_plugin_skills(home)` here (same read-only pattern, folded into
+// `list_plugin_skills` below) once a real Codex plugin install reveals the
+// actual layout — don't guess at a path that might be wrong.
 
 // ── Tauri commands ─────────────────────────────────────────────────────────────
 
@@ -1779,16 +1976,32 @@ pub async fn skills_set_enabled(
 ) -> Result<(), String> {
     let root = root_for(&scope, project_path.as_deref())?;
     let (name_ev, agent_ev) = (name.clone(), agent.clone());
-    let res = tokio::task::spawn_blocking(move || set_enabled(&root, &scope, &name, &agent, enabled))
-        .await
-        .map_err(|e| e.to_string())?;
+    let res =
+        tokio::task::spawn_blocking(move || set_enabled(&root, &scope, &name, &agent, enabled))
+            .await
+            .map_err(|e| e.to_string())?;
     if res.is_ok() {
-        app.state::<Arc<crate::telemetry::TelemetryClient>>().capture(
-            if enabled { "skill_enabled" } else { "skill_disabled" },
-            serde_json::json!({ "skill": name_ev, "agent": agent_ev }),
-        );
+        app.state::<Arc<crate::telemetry::TelemetryClient>>()
+            .capture(
+                if enabled {
+                    "skill_enabled"
+                } else {
+                    "skill_disabled"
+                },
+                serde_json::json!({ "skill": telemetry_skill_id(&name_ev), "agent": agent_ev }),
+            );
     }
     res
+}
+
+/// A skill name is user-authored for project-scoped skills, so the analytics
+/// event carries a stable hash instead — enough to count and correlate,
+/// nothing to read.
+fn telemetry_skill_id(name: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    name.hash(&mut h);
+    format!("sk_{:016x}", h.finish())
 }
 
 /// Delete a skill: remove every agent symlink, then the canonical dir.
@@ -1805,10 +2018,11 @@ pub async fn skills_delete(
         .await
         .map_err(|e| e.to_string())?;
     if res.is_ok() {
-        app.state::<Arc<crate::telemetry::TelemetryClient>>().capture(
-            "skill_deleted",
-            serde_json::json!({ "skill": name_ev, "scope": scope_ev }),
-        );
+        app.state::<Arc<crate::telemetry::TelemetryClient>>()
+            .capture(
+                "skill_deleted",
+                serde_json::json!({ "skill": telemetry_skill_id(&name_ev), "scope": scope_ev }),
+            );
     }
     res
 }
@@ -1848,11 +2062,9 @@ pub async fn agents_list_skill_targets(
     project_path: Option<String>,
 ) -> Result<Vec<AgentTarget>, String> {
     let root = root_for(&scope, project_path.as_deref())?;
-    Ok(
-        tokio::task::spawn_blocking(move || list_targets(&root, &scope))
-            .await
-            .map_err(|e| e.to_string())?,
-    )
+    tokio::task::spawn_blocking(move || list_targets(&root, &scope))
+        .await
+        .map_err(|e| e.to_string())
 }
 
 // ── Tauri commands (Control Plane) ───────────────────────────────────────────────
@@ -1864,11 +2076,9 @@ pub async fn tools_list(
     project_path: Option<String>,
 ) -> Result<Vec<AgentTarget>, String> {
     let root = root_for(&scope, project_path.as_deref())?;
-    Ok(
-        tokio::task::spawn_blocking(move || list_targets(&root, &scope))
-            .await
-            .map_err(|e| e.to_string())?,
-    )
+    tokio::task::spawn_blocking(move || list_targets(&root, &scope))
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Build the reconciled skill × tool matrix for a scope.
@@ -1924,10 +2134,7 @@ pub async fn skills_unproject(
 
 /// Promote a project skill to the global library + re-project at global scope.
 #[tauri::command]
-pub async fn skills_promote(
-    name: String,
-    project_path: String,
-) -> Result<SkillMeta, String> {
+pub async fn skills_promote(name: String, project_path: String) -> Result<SkillMeta, String> {
     let project_root = root_for("project", Some(&project_path))?;
     let home = home_dir().ok_or_else(|| "could not resolve home directory".to_string())?;
     tokio::task::spawn_blocking(move || promote(&project_root, &home, &name))
@@ -1937,10 +2144,7 @@ pub async fn skills_promote(
 
 /// Freeze every Atlas symlink projection into a real copy (uninstall safety).
 #[tauri::command]
-pub async fn skills_freeze(
-    scope: String,
-    project_path: Option<String>,
-) -> Result<(), String> {
+pub async fn skills_freeze(scope: String, project_path: Option<String>) -> Result<(), String> {
     let root = root_for(&scope, project_path.as_deref())?;
     tokio::task::spawn_blocking(move || freeze(&root, &scope))
         .await
@@ -1987,7 +2191,7 @@ fn repo_name_from_source(source: &str) -> String {
     source
         .trim()
         .trim_end_matches('/')
-        .rsplit(|c| c == '/' || c == ':')
+        .rsplit(['/', ':'])
         .next()
         .unwrap_or(source)
         .trim_end_matches(".git")
@@ -2072,7 +2276,12 @@ fn collect_kind(
                     dir.file_name().map(|s| s.to_string_lossy().to_string()),
                 ) {
                     let description = read_component_description(kind, &dir);
-                    out.push(PackComponent { kind, rel_path: rel, name, description });
+                    out.push(PackComponent {
+                        kind,
+                        rel_path: rel,
+                        name,
+                        description,
+                    });
                 }
             }
         }
@@ -2089,7 +2298,12 @@ fn collect_kind(
             (pack_rel(pack_root, &file), component_file_name(kind, &file))
         {
             let description = read_component_description(kind, &file);
-            out.push(PackComponent { kind, rel_path: rel, name, description });
+            out.push(PackComponent {
+                kind,
+                rel_path: rel,
+                name,
+                description,
+            });
         }
     }
 }
@@ -2147,7 +2361,12 @@ fn collect_manifest_path(
             component_file_name(kind, &candidate),
         ) {
             let description = read_component_description(kind, &candidate);
-            out.push(PackComponent { kind, rel_path, name, description });
+            out.push(PackComponent {
+                kind,
+                rel_path,
+                name,
+                description,
+            });
         }
     }
 }
@@ -2197,7 +2416,7 @@ fn pack_parse(dir: &Path) -> Result<Pack, String> {
 
 /// Inspect a pack directory on disk and return its manifest + component listing.
 /// Read-only — nothing is installed, projected, or executed.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn pack_inspect(dir: String) -> Result<Pack, String> {
     pack_parse(Path::new(&dir))
 }
@@ -2404,7 +2623,7 @@ fn now_unix_secs() -> u64 {
 /// HEAD commit SHA. Never prompts — auth failures fail fast.
 fn git_clone_shallow(owner: &str, repo: &str, dest: &Path) -> Result<String, String> {
     let url = format!("https://github.com/{owner}/{repo}.git");
-    let out = std::process::Command::new("git")
+    let out = atlas_process::command("git")
         .args(["clone", "--depth", "1", "--no-tags", "--"])
         .arg(&url)
         .arg(dest)
@@ -2418,7 +2637,7 @@ fn git_clone_shallow(owner: &str, repo: &str, dest: &Path) -> Result<String, Str
             String::from_utf8_lossy(&out.stderr).trim()
         ));
     }
-    let rev = std::process::Command::new("git")
+    let rev = atlas_process::command("git")
         .arg("-C")
         .arg(dest)
         .args(["rev-parse", "HEAD"])
@@ -2432,7 +2651,7 @@ fn git_clone_shallow(owner: &str, repo: &str, dest: &Path) -> Result<String, Str
 /// prompts. Used to detect whether an installed pack is behind its source.
 fn git_ls_remote_head(owner: &str, repo: &str) -> Result<String, String> {
     let url = format!("https://github.com/{owner}/{repo}.git");
-    let out = std::process::Command::new("git")
+    let out = atlas_process::command("git")
         .args(["ls-remote", "--quiet"])
         .arg(&url)
         .arg("HEAD")
@@ -2642,14 +2861,15 @@ pub async fn pack_install_remote(
     .await
     .map_err(|e| e.to_string())?;
     if let Ok(result) = &res {
-        app.state::<Arc<crate::telemetry::TelemetryClient>>().capture(
-            "pack_installed",
-            serde_json::json!({
-                "source": source_ev,
-                "scope": scope_ev,
-                "skill_count": result.pack.components.len(),
-            }),
-        );
+        app.state::<Arc<crate::telemetry::TelemetryClient>>()
+            .capture(
+                "pack_installed",
+                serde_json::json!({
+                    "source": source_ev,
+                    "scope": scope_ev,
+                    "skill_count": result.pack.components.len(),
+                }),
+            );
     }
     res
 }
@@ -2683,13 +2903,29 @@ fn install_skill_from_dir(
     }
     copy_dir_all(&src_dir, &dst)?;
 
+    // Project immediately into every currently-detected agent, the way
+    // `npx skills add` does (ADR 0003) — a freshly installed skill must be
+    // visible right away, not stuck until the user finds the per-agent toggles
+    // in another tab. Same fan-out `adopt_skill`/`promote` use; the per-agent
+    // toggles remain for changing your mind later.
+    let mut enabled_agents = Vec::new();
+    for def in TOOL_REGISTRY {
+        if !tool_detected(root, def) || def.delivery == "inject-only" {
+            continue;
+        }
+        project(root, def, scope, &safe, false)?;
+        enabled_agents.push(def.id.to_string());
+    }
+    enabled_agents.sort();
+    enabled_agents.dedup();
+
     let raw = fs::read_to_string(dst.join("SKILL.md")).map_err(|e| e.to_string())?;
     let (fm, _b) = parse_frontmatter(&raw);
     Ok(SkillMeta {
         name: fm.name.unwrap_or_else(|| safe.clone()),
         description: fm.description.unwrap_or_default(),
         scope: scope.to_string(),
-        enabled_agents: Vec::new(), // not projected yet — user toggles per agent
+        enabled_agents,
         path: dst.join("SKILL.md").to_string_lossy().to_string(),
         delivery: "native-dir".to_string(),
         managed: true,
@@ -2712,6 +2948,11 @@ pub async fn pack_install_skill(
     // is a public GitHub `owner/repo` slug; `scope` is "global"/"project".
     let source_ev = source.clone();
     let scope_ev = scope.clone();
+    // The REGISTRY id, which `skill` (the installed SKILL.md's frontmatter name)
+    // is not: the two can differ, so a per-skill install rollup keyed on `skill`
+    // could not be joined back to the registry row the Discover table renders.
+    // `(source, skill_id)` is that row's identity.
+    let skill_id_ev = skill_id.clone();
     let res = tokio::task::spawn_blocking(move || {
         let (owner, repo) = parse_owner_repo(&source)?;
         let (tmp, _commit) = fetch_repo_to_temp(&owner, &repo)?;
@@ -2722,10 +2963,16 @@ pub async fn pack_install_skill(
     .await
     .map_err(|e| e.to_string())?;
     if let Ok(meta) = &res {
-        app.state::<Arc<crate::telemetry::TelemetryClient>>().capture(
-            "skill_downloaded",
-            serde_json::json!({ "skill": meta.name, "source": source_ev, "scope": scope_ev }),
-        );
+        app.state::<Arc<crate::telemetry::TelemetryClient>>()
+            .capture(
+                "skill_downloaded",
+                serde_json::json!({
+                    "skill": meta.name,
+                    "skill_id": skill_id_ev,
+                    "source": source_ev,
+                    "scope": scope_ev,
+                }),
+            );
     }
     res
 }
@@ -3451,9 +3698,7 @@ fn pack_components(root: &Path) -> Vec<PackComponentMeta> {
             });
         }
     }
-    out.sort_by(|a, b| {
-        (a.kind.as_str(), &a.name).cmp(&(b.kind.as_str(), &b.name))
-    });
+    out.sort_by(|a, b| (a.kind.as_str(), &a.name).cmp(&(b.kind.as_str(), &b.name)));
     out
 }
 
@@ -3518,8 +3763,7 @@ pub async fn pack_uninstall(
         // 2. Delete the canonical store dir.
         let store = pack_store_dir(&root, &safe)?;
         if store.exists() {
-            fs::remove_dir_all(&store)
-                .map_err(|e| format!("remove {}: {e}", store.display()))?;
+            fs::remove_dir_all(&store).map_err(|e| format!("remove {}: {e}", store.display()))?;
         }
         // 3. Drop the lock entry.
         let mut lock = read_pack_lock(&root);
@@ -3564,20 +3808,27 @@ mod tests {
     use super::*;
 
     fn tmp_root() -> PathBuf {
+        // UUID rather than a nanosecond timestamp: two threads in the same
+        // `cargo test` run landed on the same directory often enough to be
+        // observed (see `tmp_root_isolated` below, which was added to dodge
+        // exactly this), and a collision means one test deletes another's
+        // fixture mid-assertion. Fixing the shared helper removes the flake
+        // for every test that uses it, not just the bundled-skill ones.
         let mut p = std::env::temp_dir();
-        let uniq = format!(
-            "atlas-skills-test-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        );
-        p.push(uniq);
+        p.push(format!("atlas-skills-test-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&p).unwrap();
         // Make both v1 tools "detected".
         fs::create_dir_all(p.join(".claude")).unwrap();
         fs::create_dir_all(p.join(".codex")).unwrap();
+        p
+    }
+
+    /// `tmp_root()` without the `.claude`/`.codex` detection dirs — the
+    /// bundled-skill tests below assert on the canonical store itself and
+    /// don't want either tool to register as detected.
+    fn tmp_root_isolated() -> PathBuf {
+        let p = std::env::temp_dir().join(format!("atlas-skills-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&p).unwrap();
         p
     }
 
@@ -3634,15 +3885,22 @@ mod tests {
         let s = &listed[0];
         assert_eq!(s.name, "pdf-extract");
         assert_eq!(s.description, "Pull text out of PDFs");
-        assert_eq!(s.enabled_agents, vec!["claude-code".to_string()]);
+        // codex is auto-included: its project-scope skills dir IS the canonical
+        // store post-convergence (ADR 0003), so any canonical skill is already
+        // there — no explicit projection needed.
+        assert_eq!(
+            s.enabled_agents,
+            vec!["claude-code".to_string(), "codex".to_string()]
+        );
 
-        // Canonical SKILL.md exists, symlink exists for claude-code only.
-        assert!(root.join(".atlas/skills/pdf-extract/SKILL.md").is_file());
-        assert!(root.join(".claude/skills/pdf-extract").symlink_metadata().is_ok());
+        // Canonical SKILL.md exists, symlink exists for claude-code.
+        assert!(root.join(".agents/skills/pdf-extract/SKILL.md").is_file());
         assert!(root
-            .join(".agents/skills/pdf-extract")
+            .join(".claude/skills/pdf-extract")
             .symlink_metadata()
-            .is_err());
+            .is_ok());
+        // `.agents/skills/pdf-extract` IS the canonical dir above, not a separate
+        // codex projection — same path, no symlink involved.
 
         // Round-trip the body via read_skill.
         let content = read_skill(&root, "pdf-extract").unwrap();
@@ -3655,11 +3913,19 @@ mod tests {
     #[test]
     fn symlink_target_resolves_to_canonical() {
         let root = tmp_root();
-        create_skill(&root, "project", "demo", "d", "body", &["claude-code".to_string()]).unwrap();
+        create_skill(
+            &root,
+            "project",
+            "demo",
+            "d",
+            "body",
+            &["claude-code".to_string()],
+        )
+        .unwrap();
         let link = root.join(".claude/skills/demo");
         // Following the link reaches the canonical SKILL.md.
         let resolved = fs::canonicalize(link.join("SKILL.md")).unwrap();
-        let expected = fs::canonicalize(root.join(".atlas/skills/demo/SKILL.md")).unwrap();
+        let expected = fs::canonicalize(root.join(".agents/skills/demo/SKILL.md")).unwrap();
         assert_eq!(resolved, expected);
         fs::remove_dir_all(&root).ok();
     }
@@ -3668,14 +3934,27 @@ mod tests {
     fn set_enabled_toggles_symlink() {
         let root = tmp_root();
         create_skill(&root, "project", "demo", "d", "b", &[]).unwrap();
-        let link = root.join(".agents/skills/demo");
-        assert!(link.symlink_metadata().is_err());
 
+        // claude-code has its own dir — a real toggleable symlink projection.
+        let claude_link = root.join(".claude/skills/demo");
+        assert!(claude_link.symlink_metadata().is_err());
+        set_enabled(&root, "project", "demo", "claude-code", true).unwrap();
+        assert!(claude_link.symlink_metadata().is_ok());
+        set_enabled(&root, "project", "demo", "claude-code", false).unwrap();
+        assert!(claude_link.symlink_metadata().is_err());
+
+        // codex's project-scope skills dir IS the canonical store post-
+        // convergence (ADR 0003): already "enabled" the moment the skill
+        // exists, enabling again is a no-op, and disabling is refused rather
+        // than deleting the canonical skill.
+        let codex_path = root.join(".agents/skills/demo");
+        assert!(codex_path.symlink_metadata().is_ok());
         set_enabled(&root, "project", "demo", "codex", true).unwrap();
-        assert!(link.symlink_metadata().is_ok());
-
-        set_enabled(&root, "project", "demo", "codex", false).unwrap();
-        assert!(link.symlink_metadata().is_err());
+        assert!(set_enabled(&root, "project", "demo", "codex", false).is_err());
+        assert!(
+            codex_path.join("SKILL.md").is_file(),
+            "disabling codex must not delete the canonical skill"
+        );
 
         // Toggling for an unknown agent errors.
         assert!(set_enabled(&root, "project", "demo", "nope", true).is_err());
@@ -3694,14 +3973,14 @@ mod tests {
             &["claude-code".to_string(), "codex".to_string()],
         )
         .unwrap();
-        assert!(root.join(".atlas/skills/demo").is_dir());
+        // `.agents/skills/demo` is both the canonical dir AND codex's project
+        // skills dir post-convergence (ADR 0003) — same path.
+        assert!(root.join(".agents/skills/demo").is_dir());
         assert!(root.join(".claude/skills/demo").symlink_metadata().is_ok());
-        assert!(root.join(".agents/skills/demo").symlink_metadata().is_ok());
 
         delete_skill(&root, "project", "demo").unwrap();
-        assert!(!root.join(".atlas/skills/demo").exists());
+        assert!(!root.join(".agents/skills/demo").exists());
         assert!(root.join(".claude/skills/demo").symlink_metadata().is_err());
-        assert!(root.join(".agents/skills/demo").symlink_metadata().is_err());
 
         // Listing is now empty.
         assert!(list_skills(&root, "project").unwrap().is_empty());
@@ -3734,7 +4013,7 @@ mod tests {
     fn hash_is_stable_and_detects_change() {
         let root = tmp_root();
         create_skill(&root, "project", "h", "d", "body one", &[]).unwrap();
-        let dir = root.join(".atlas/skills/h");
+        let dir = root.join(".agents/skills/h");
         let a = hash_skill_dir(&dir);
         assert_eq!(a, hash_skill_dir(&dir), "hash must be stable");
         create_skill(&root, "project", "h", "d", "body two", &[]).unwrap();
@@ -3751,7 +4030,10 @@ mod tests {
         project(&root, def, "project", "p", false).unwrap();
         let link = root.join(".claude/skills/p");
         assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
-        assert_eq!(read_ledger(&root).projections["p"]["claude-code"].mode, "symlink");
+        assert_eq!(
+            read_ledger(&root).projections["p"]["claude-code"].mode,
+            "symlink"
+        );
 
         unproject(&root, def, "project", "p").unwrap();
         assert!(link.symlink_metadata().is_err());
@@ -3762,11 +4044,24 @@ mod tests {
     #[test]
     fn reconcile_reports_synced_external_and_absent() {
         let root = tmp_root();
-        // Canonical skill projected into claude-code → synced; codex → absent.
+        // Canonical skill projected into claude-code → synced. codex's
+        // project-scope skills dir IS the canonical store post-convergence
+        // (ADR 0003), so it reads synced too without an explicit projection;
+        // atlas's dedicated dir is untouched → absent.
         create_skill(&root, "project", "owned", "d", "b", &[]).unwrap();
-        project(&root, tool_def("claude-code").unwrap(), "project", "owned", false).unwrap();
-        // A hand-authored skill living only in codex's project dir → external.
-        plant_external(&root, ".agents/skills", "wild", "External wild");
+        project(
+            &root,
+            tool_def("claude-code").unwrap(),
+            "project",
+            "owned",
+            false,
+        )
+        .unwrap();
+        // A hand-authored skill living only in claude-code's project dir →
+        // external. (Planting one in codex's project dir is no longer a
+        // distinct "external" case — that dir IS the canonical store now, so
+        // anything placed there is ordinary discovery, not reconciliation.)
+        plant_external(&root, ".claude/skills", "wild", "External wild");
 
         let view = reconcile(&root, "project", &root).unwrap();
         assert_eq!(view.tools.len(), 3); // claude-code, codex, atlas
@@ -3774,18 +4069,41 @@ mod tests {
         let owned = view.skills.iter().find(|s| s.name == "owned").unwrap();
         assert!(owned.managed);
         assert_eq!(
-            owned.cells.iter().find(|c| c.tool == "claude-code").unwrap().status,
+            owned
+                .cells
+                .iter()
+                .find(|c| c.tool == "claude-code")
+                .unwrap()
+                .status,
             "synced"
         );
         assert_eq!(
-            owned.cells.iter().find(|c| c.tool == "codex").unwrap().status,
+            owned
+                .cells
+                .iter()
+                .find(|c| c.tool == "codex")
+                .unwrap()
+                .status,
+            "synced"
+        );
+        assert_eq!(
+            owned
+                .cells
+                .iter()
+                .find(|c| c.tool == "atlas")
+                .unwrap()
+                .status,
             "absent"
         );
 
         let wild = view.skills.iter().find(|s| s.name == "wild").unwrap();
         assert!(!wild.managed);
         assert_eq!(
-            wild.cells.iter().find(|c| c.tool == "codex").unwrap().status,
+            wild.cells
+                .iter()
+                .find(|c| c.tool == "claude-code")
+                .unwrap()
+                .status,
             "external"
         );
         fs::remove_dir_all(&root).ok();
@@ -3795,14 +4113,27 @@ mod tests {
     fn freeze_converts_symlink_projection_to_real_copy() {
         let root = tmp_root();
         create_skill(&root, "project", "f", "d", "b", &[]).unwrap();
-        project(&root, tool_def("claude-code").unwrap(), "project", "f", false).unwrap();
+        project(
+            &root,
+            tool_def("claude-code").unwrap(),
+            "project",
+            "f",
+            false,
+        )
+        .unwrap();
         let link = root.join(".claude/skills/f");
         assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
 
         freeze(&root, "project").unwrap();
         let meta = link.symlink_metadata().unwrap();
-        assert!(!meta.file_type().is_symlink(), "freeze must replace the symlink");
-        assert!(link.join("SKILL.md").is_file(), "frozen copy keeps the skill file");
+        assert!(
+            !meta.file_type().is_symlink(),
+            "freeze must replace the symlink"
+        );
+        assert!(
+            link.join("SKILL.md").is_file(),
+            "frozen copy keeps the skill file"
+        );
         fs::remove_dir_all(&root).ok();
     }
 
@@ -3814,7 +4145,7 @@ mod tests {
 
         let meta = promote(&proj, &home, "pr").unwrap();
         assert_eq!(meta.name, "pr");
-        assert!(home.join(".atlas/skills/pr/SKILL.md").is_file());
+        assert!(home.join(".agents/skills/pr/SKILL.md").is_file());
         fs::remove_dir_all(&home).ok();
         fs::remove_dir_all(&proj).ok();
     }
@@ -3824,18 +4155,20 @@ mod tests {
         let root = tmp_root();
         assert!(skill_path(&root, "ghost").is_err());
         create_skill(&root, "project", "ghost", "d", "b", &[]).unwrap();
-        assert!(skill_path(&root, "ghost").unwrap().ends_with("ghost/SKILL.md"));
+        assert!(skill_path(&root, "ghost")
+            .unwrap()
+            .ends_with("ghost/SKILL.md"));
         fs::remove_dir_all(&root).ok();
     }
 
     #[test]
-    fn canonical_base_is_under_dot_atlas() {
+    fn canonical_base_is_under_dot_agents() {
         let root = tmp_root();
-        assert_eq!(skills_base(&root), root.join(".atlas/skills"));
+        assert_eq!(skills_base(&root), root.join(".agents/skills"));
         let meta = create_skill(&root, "project", "demo", "d", "b", &[]).unwrap();
-        assert!(meta.path.contains("/.atlas/skills/demo/"));
+        assert!(meta.path.contains("/.agents/skills/demo/"));
         assert!(meta.managed);
-        assert!(root.join(".atlas/skills/demo/SKILL.md").is_file());
+        assert!(root.join(".agents/skills/demo/SKILL.md").is_file());
         fs::remove_dir_all(&root).ok();
     }
 
@@ -3878,7 +4211,10 @@ mod tests {
         .unwrap();
 
         let listed = list_skills(&root, "global").unwrap();
-        assert!(listed.is_empty(), "container dir must not be listed: {listed:?}");
+        assert!(
+            listed.is_empty(),
+            "container dir must not be listed: {listed:?}"
+        );
         fs::remove_dir_all(&root).ok();
     }
 
@@ -3906,15 +4242,23 @@ mod tests {
         );
 
         // Canonical copy now exists.
-        assert!(root.join(".atlas/skills/foo/SKILL.md").is_file());
+        assert!(root.join(".agents/skills/foo/SKILL.md").is_file());
         // The original real dir was replaced by a symlink into canonical.
         let claude_link = root.join(".claude/skills/foo");
-        assert!(claude_link.symlink_metadata().unwrap().file_type().is_symlink());
+        assert!(claude_link
+            .symlink_metadata()
+            .unwrap()
+            .file_type()
+            .is_symlink());
         // And the other detected tool (codex, global dir) got a symlink too.
         let codex_link = root.join(".codex/skills/foo");
-        assert!(codex_link.symlink_metadata().unwrap().file_type().is_symlink());
+        assert!(codex_link
+            .symlink_metadata()
+            .unwrap()
+            .file_type()
+            .is_symlink());
         // Both resolve to the canonical SKILL.md.
-        let expected = fs::canonicalize(root.join(".atlas/skills/foo/SKILL.md")).unwrap();
+        let expected = fs::canonicalize(root.join(".agents/skills/foo/SKILL.md")).unwrap();
         assert_eq!(
             fs::canonicalize(claude_link.join("SKILL.md")).unwrap(),
             expected
@@ -3939,16 +4283,168 @@ mod tests {
         fs::remove_dir_all(&root).ok();
     }
 
+    // ── Store convergence (ADR 0003) ──────────────────────────────────────────
+
+    /// Plant a real skill dir at `real_rel`, then symlink it into an agent's
+    /// skills dir at `link_rel` — mirrors what a skills.sh/Zed projection into
+    /// `.claude/skills` looks like from Atlas's point of view.
+    fn plant_symlinked_external(root: &Path, real_rel: &str, link_rel: &str, name: &str) {
+        let real_dir = root.join(real_rel).join(name);
+        fs::create_dir_all(&real_dir).unwrap();
+        fs::write(
+            real_dir.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: symlinked\n---\n\nbody\n"),
+        )
+        .unwrap();
+        let link_parent = root.join(link_rel);
+        fs::create_dir_all(&link_parent).unwrap();
+        symlink(&real_dir, &link_parent.join(name)).unwrap();
+    }
+
+    #[test]
+    fn external_scan_follows_symlinked_skill_dirs() {
+        let root = tmp_root();
+        // A skill dir that lives outside both the canonical store and any
+        // registry tool dir, symlinked into claude-code's skills dir — e.g. a
+        // skills.sh/Zed-style projection Atlas didn't create itself.
+        plant_symlinked_external(&root, "elsewhere", ".claude/skills", "linked");
+
+        let listed = list_skills(&root, "global").unwrap();
+        let s = listed.iter().find(|s| s.name == "linked").expect(
+            "symlinked external skill dir must be discovered, not skipped as a managed marker",
+        );
+        assert!(!s.managed);
+        assert_eq!(s.enabled_agents, vec!["claude-code".to_string()]);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn migrate_legacy_skills_moves_pre_convergence_store_content() {
+        let root = tmp_root();
+        // Simulate a pre-convergence Atlas install: a skill sitting in the old
+        // `.atlas/skills` store, never touched by the new `.agents/skills` one.
+        let legacy_dir = legacy_skills_base(&root).join("legacy-demo");
+        fs::create_dir_all(&legacy_dir).unwrap();
+        fs::write(
+            legacy_dir.join("SKILL.md"),
+            "---\nname: legacy-demo\ndescription: from before convergence\n---\n\nbody\n",
+        )
+        .unwrap();
+
+        let listed = list_skills(&root, "global").unwrap();
+        let s = listed
+            .iter()
+            .find(|s| s.name == "legacy-demo")
+            .expect("legacy skill must be migrated and then discovered");
+        assert!(s.managed);
+        assert_eq!(s.description, "from before convergence");
+        assert!(root.join(".agents/skills/legacy-demo/SKILL.md").is_file());
+        assert!(
+            !legacy_dir.exists(),
+            "legacy copy should be moved, not left behind, when the rename succeeds"
+        );
+
+        // Idempotent: a second discovery pass is a no-op (nothing left to migrate).
+        let listed_again = list_skills(&root, "global").unwrap();
+        assert_eq!(listed_again.len(), 1);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn migrate_legacy_skills_does_not_clobber_existing_new_store_entry() {
+        let root = tmp_root();
+        // New store already has `demo`, with different content than the legacy
+        // copy — the legacy copy must be left alone, not overwrite it.
+        create_skill(&root, "global", "demo", "new content wins", "b", &[]).unwrap();
+        let legacy_dir = legacy_skills_base(&root).join("demo");
+        fs::create_dir_all(&legacy_dir).unwrap();
+        fs::write(
+            legacy_dir.join("SKILL.md"),
+            "---\nname: demo\ndescription: stale legacy content\n---\n\nbody\n",
+        )
+        .unwrap();
+
+        let listed = list_skills(&root, "global").unwrap();
+        let s = listed.iter().find(|s| s.name == "demo").unwrap();
+        assert_eq!(s.description, "new content wins");
+        assert!(
+            legacy_dir.exists(),
+            "legacy copy is left in place, not deleted"
+        );
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn codex_project_scope_is_native_location_not_a_projection() {
+        let root = tmp_root();
+        let def = tool_def("codex").unwrap();
+        create_skill(&root, "project", "native", "d", "b", &[]).unwrap();
+
+        // Projecting is a no-op success recorded as "native" in the ledger —
+        // there is nothing to symlink, the skill already lives where codex reads.
+        project(&root, def, "project", "native", false).unwrap();
+        assert_eq!(
+            read_ledger(&root).projections["native"]["codex"].mode,
+            "native"
+        );
+        assert!(
+            root.join(".agents/skills/native")
+                .symlink_metadata()
+                .unwrap()
+                .file_type()
+                .is_dir(),
+            "must stay a real dir, never become a self-referential symlink"
+        );
+
+        // Unprojecting must refuse rather than delete the canonical skill.
+        assert!(unproject(&root, def, "project", "native").is_err());
+        assert!(root.join(".agents/skills/native/SKILL.md").is_file());
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn install_skill_projects_to_detected_agents_immediately() {
+        let root = tmp_root(); // both .claude and .codex detected
+        let src = make_src_pack("v1");
+        let meta = install_skill_from_dir(&root, "project", &src, "foo").unwrap();
+        fs::remove_dir_all(&src).ok();
+
+        // Installed skill is immediately visible to every detected agent, not
+        // left with empty `enabled_agents` until a separate per-agent toggle.
+        assert!(meta.enabled_agents.contains(&"claude-code".to_string()));
+        assert!(meta.enabled_agents.contains(&"codex".to_string()));
+        assert!(root.join(".claude/skills/foo").symlink_metadata().is_ok());
+        fs::remove_dir_all(&root).ok();
+    }
+
     // ── Phase 0: pack model + tool homes ─────────────────────────────────────
 
     #[test]
     fn component_kind_maps_known_dir_names_and_rejects_others() {
-        assert_eq!(ComponentKind::from_dir_name("skills"), Some(ComponentKind::Skill));
-        assert_eq!(ComponentKind::from_dir_name("agents"), Some(ComponentKind::Agent));
-        assert_eq!(ComponentKind::from_dir_name("commands"), Some(ComponentKind::Command));
-        assert_eq!(ComponentKind::from_dir_name("hooks"), Some(ComponentKind::Hook));
-        assert_eq!(ComponentKind::from_dir_name("rules"), Some(ComponentKind::Rule));
-        assert_eq!(ComponentKind::from_dir_name("scripts"), Some(ComponentKind::Script));
+        assert_eq!(
+            ComponentKind::from_dir_name("skills"),
+            Some(ComponentKind::Skill)
+        );
+        assert_eq!(
+            ComponentKind::from_dir_name("agents"),
+            Some(ComponentKind::Agent)
+        );
+        assert_eq!(
+            ComponentKind::from_dir_name("commands"),
+            Some(ComponentKind::Command)
+        );
+        assert_eq!(
+            ComponentKind::from_dir_name("hooks"),
+            Some(ComponentKind::Hook)
+        );
+        assert_eq!(
+            ComponentKind::from_dir_name("rules"),
+            Some(ComponentKind::Rule)
+        );
+        assert_eq!(
+            ComponentKind::from_dir_name("scripts"),
+            Some(ComponentKind::Script)
+        );
         assert_eq!(ComponentKind::from_dir_name("docs"), None);
         assert_eq!(ComponentKind::from_dir_name(""), None);
     }
@@ -3968,8 +4464,14 @@ mod tests {
             let agent = tool_home(cc, ComponentKind::Agent, scope).unwrap();
             assert_eq!(agent.rel, ".claude/agents");
             assert_eq!(agent.style, HomeStyle::Dir);
-            assert_eq!(tool_home(cc, ComponentKind::Command, scope).unwrap().rel, ".claude/commands");
-            assert_eq!(tool_home(cc, ComponentKind::Rule, scope).unwrap().rel, ".claude/rules");
+            assert_eq!(
+                tool_home(cc, ComponentKind::Command, scope).unwrap().rel,
+                ".claude/commands"
+            );
+            assert_eq!(
+                tool_home(cc, ComponentKind::Rule, scope).unwrap().rel,
+                ".claude/rules"
+            );
             // Hooks merge into settings.json.
             let hook = tool_home(cc, ComponentKind::Hook, scope).unwrap();
             assert_eq!(hook.rel, ".claude/settings.json");
@@ -3984,7 +4486,9 @@ mod tests {
         let codex = tool_def("codex").unwrap();
         // Commands are global-only for Codex.
         assert_eq!(
-            tool_home(codex, ComponentKind::Command, "global").unwrap().rel,
+            tool_home(codex, ComponentKind::Command, "global")
+                .unwrap()
+                .rel,
             ".codex/prompts"
         );
         assert!(tool_home(codex, ComponentKind::Command, "project").is_none());
@@ -4007,7 +4511,10 @@ mod tests {
             component_kind: ComponentKind::Skill,
         };
         let json = serde_json::to_string(&entry).unwrap();
-        assert!(!json.contains("component_kind"), "skill entry must not write the kind: {json}");
+        assert!(
+            !json.contains("component_kind"),
+            "skill entry must not write the kind: {json}"
+        );
 
         // A non-skill entry writes the kind, and both directions round-trip.
         let agent_entry = LedgerEntry {
@@ -4016,28 +4523,36 @@ mod tests {
             component_kind: ComponentKind::Agent,
         };
         let agent_json = serde_json::to_string(&agent_entry).unwrap();
-        assert!(agent_json.contains("\"component_kind\":\"agent\""), "{agent_json}");
+        assert!(
+            agent_json.contains("\"component_kind\":\"agent\""),
+            "{agent_json}"
+        );
 
         // Legacy JSON with no kind key deserializes back to Skill.
-        let legacy: LedgerEntry =
-            serde_json::from_str(r#"{"mode":"symlink","hash":"x"}"#).unwrap();
+        let legacy: LedgerEntry = serde_json::from_str(r#"{"mode":"symlink","hash":"x"}"#).unwrap();
         assert_eq!(legacy.component_kind, ComponentKind::Skill);
     }
 
     // ── Phase 1: pack parse ──────────────────────────────────────────────────
 
     /// Build a fresh empty temp dir for a pack fixture.
+    ///
+    /// UUID, for the same reason `tmp_root()` above uses one. This helper was
+    /// added a day after `tmp_root()` was switched over (2026-06-25 vs 06-24)
+    /// and kept the discarded `pid` + `SystemTime` form — two months before the
+    /// comment explaining why that form is unsafe was written.
+    ///
+    /// `pid` is constant across every test in the binary, and `SystemTime::now()`
+    /// is not nanosecond-unique: on macOS it advances in 1 µs steps (measured —
+    /// 139,798 duplicate stamps per 160,000 across 8 threads). Two of the 16
+    /// call sites here can land on the SAME directory, and each ends in
+    /// `fs::remove_dir_all`, so the loser's fixture is deleted mid-test —
+    /// observed as `pack_project_claude_links_agent_and_skill_and_records_ledger`
+    /// failing on `skill_link.symlink_metadata().is_ok()` a beat after the agent
+    /// assertion above it passed, and passing on its own or on a re-run.
     fn tmp_pack_dir() -> PathBuf {
         let mut p = std::env::temp_dir();
-        let uniq = format!(
-            "atlas-pack-test-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        );
-        p.push(uniq);
+        p.push(format!("atlas-pack-test-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&p).unwrap();
         p
     }
@@ -4059,9 +4574,18 @@ mod tests {
     fn pack_parse_infers_all_kinds_from_layout() {
         let dir = tmp_pack_dir();
         // A full Claude Code plugin layout, no manifest.
-        write_file(&dir.join("skills/foo/SKILL.md"), "---\nname: foo\n---\nbody");
-        write_file(&dir.join("skills/bar/SKILL.md"), "---\nname: bar\n---\nbody");
-        write_file(&dir.join("skills/not-a-skill/README.md"), "no skill md here");
+        write_file(
+            &dir.join("skills/foo/SKILL.md"),
+            "---\nname: foo\n---\nbody",
+        );
+        write_file(
+            &dir.join("skills/bar/SKILL.md"),
+            "---\nname: bar\n---\nbody",
+        );
+        write_file(
+            &dir.join("skills/not-a-skill/README.md"),
+            "no skill md here",
+        );
         write_file(&dir.join("agents/review.md"), "agent");
         write_file(&dir.join("commands/ship.md"), "command");
         write_file(&dir.join("commands/ns/deep.md"), "nested command");
@@ -4073,7 +4597,10 @@ mod tests {
 
         let pack = pack_parse(&dir).unwrap();
         // No manifest → name from dir basename (sanitized).
-        assert_eq!(pack.name, sanitize_name(dir.file_name().unwrap().to_str().unwrap()).unwrap());
+        assert_eq!(
+            pack.name,
+            sanitize_name(dir.file_name().unwrap().to_str().unwrap()).unwrap()
+        );
         assert!(pack.manifest.is_none());
 
         // Skills: only dirs with SKILL.md; the README-only dir is excluded.
@@ -4082,8 +4609,14 @@ mod tests {
         assert_eq!(skills, vec!["bar".to_string(), "foo".to_string()]);
 
         // Agents / rules use the stem.
-        assert_eq!(comp_names(&pack, ComponentKind::Agent), vec!["review".to_string()]);
-        assert_eq!(comp_names(&pack, ComponentKind::Rule), vec!["style".to_string()]);
+        assert_eq!(
+            comp_names(&pack, ComponentKind::Agent),
+            vec!["review".to_string()]
+        );
+        assert_eq!(
+            comp_names(&pack, ComponentKind::Rule),
+            vec!["style".to_string()]
+        );
 
         // Commands recurse into namespaces (stem only).
         let mut cmds = comp_names(&pack, ComponentKind::Command);
@@ -4091,13 +4624,25 @@ mod tests {
         assert_eq!(cmds, vec!["deep".to_string(), "ship".to_string()]);
 
         // Hooks = JSON files (stem).
-        assert_eq!(comp_names(&pack, ComponentKind::Hook), vec!["hooks".to_string()]);
+        assert_eq!(
+            comp_names(&pack, ComponentKind::Hook),
+            vec!["hooks".to_string()]
+        );
 
         // Scripts keep their extension; dotfiles are skipped.
-        assert_eq!(comp_names(&pack, ComponentKind::Script), vec!["setup.js".to_string()]);
+        assert_eq!(
+            comp_names(&pack, ComponentKind::Script),
+            vec!["setup.js".to_string()]
+        );
 
         // `docs/` is not a recognized component dir → contributes nothing.
-        assert_eq!(pack.components.iter().filter(|c| c.rel_path.starts_with("docs/")).count(), 0);
+        assert_eq!(
+            pack.components
+                .iter()
+                .filter(|c| c.rel_path.starts_with("docs/"))
+                .count(),
+            0
+        );
 
         // Output is deterministically sorted by (kind, rel_path).
         let mut sorted = pack.components.clone();
@@ -4121,7 +4666,10 @@ mod tests {
         let m = pack.manifest.as_ref().expect("manifest parsed");
         assert_eq!(m.version.as_deref(), Some("1.2.0"));
         assert_eq!(m.description.as_deref(), Some("hi"));
-        assert_eq!(comp_names(&pack, ComponentKind::Agent), vec!["a".to_string()]);
+        assert_eq!(
+            comp_names(&pack, ComponentKind::Agent),
+            vec!["a".to_string()]
+        );
         fs::remove_dir_all(&dir).ok();
     }
 
@@ -4133,7 +4681,10 @@ mod tests {
         write_file(&dir.join("skills/x/SKILL.md"), "---\nname: x\n---\n");
         let pack = pack_parse(&dir).unwrap();
         assert!(pack.manifest.is_none());
-        assert_eq!(comp_names(&pack, ComponentKind::Skill), vec!["x".to_string()]);
+        assert_eq!(
+            comp_names(&pack, ComponentKind::Skill),
+            vec!["x".to_string()]
+        );
         fs::remove_dir_all(&dir).ok();
     }
 
@@ -4158,7 +4709,10 @@ mod tests {
 
     #[test]
     fn parse_owner_repo_accepts_shorthand_url_and_extra() {
-        assert_eq!(parse_owner_repo("openai/skills").unwrap(), ("openai".into(), "skills".into()));
+        assert_eq!(
+            parse_owner_repo("openai/skills").unwrap(),
+            ("openai".into(), "skills".into())
+        );
         // Extra path segments (the skillId) are ignored — we install the repo.
         assert_eq!(
             parse_owner_repo("openai/skills/pdf").unwrap(),
@@ -4227,7 +4781,10 @@ mod tests {
             &dir.join(".claude-plugin/plugin.json"),
             &format!(r#"{{"name":"demo-pack","description":"{name_marker}"}}"#),
         );
-        write_file(&dir.join("skills/foo/SKILL.md"), "---\nname: foo\n---\nbody");
+        write_file(
+            &dir.join("skills/foo/SKILL.md"),
+            "---\nname: foo\n---\nbody",
+        );
         write_file(&dir.join("agents/rev.md"), "agent");
         dir
     }
@@ -4253,11 +4810,22 @@ mod tests {
         assert_eq!(r2.state, PackInstallState::AlreadyInstalled);
 
         // Mutate the source → Updated, installed_at preserved, updated content lands.
-        write_file(&src.join("skills/foo/SKILL.md"), "---\nname: foo\n---\nCHANGED");
-        let before = read_pack_lock(&root).packs.get("demo-pack").unwrap().installed_at;
+        write_file(
+            &src.join("skills/foo/SKILL.md"),
+            "---\nname: foo\n---\nCHANGED",
+        );
+        let before = read_pack_lock(&root)
+            .packs
+            .get("demo-pack")
+            .unwrap()
+            .installed_at;
         let r3 = install_pack_from_dir(&root, &src, "o/r", "c2", false).unwrap();
         assert_eq!(r3.state, PackInstallState::Updated);
-        let entry = read_pack_lock(&root).packs.get("demo-pack").unwrap().clone();
+        let entry = read_pack_lock(&root)
+            .packs
+            .get("demo-pack")
+            .unwrap()
+            .clone();
         assert_eq!(entry.installed_at, before); // preserved
         assert_eq!(entry.commit, "c2");
         let stored = fs::read_to_string(store.join("skills/foo/SKILL.md")).unwrap();
@@ -4303,8 +4871,16 @@ mod tests {
         assert_eq!(listed[0].pack.name, "demo-pack");
         assert_eq!(listed[0].source, "owner/repo");
         // foo skill + rev agent both surface as components.
-        assert!(listed[0].pack.components.iter().any(|c| c.kind == ComponentKind::Skill));
-        assert!(listed[0].pack.components.iter().any(|c| c.kind == ComponentKind::Agent));
+        assert!(listed[0]
+            .pack
+            .components
+            .iter()
+            .any(|c| c.kind == ComponentKind::Skill));
+        assert!(listed[0]
+            .pack
+            .components
+            .iter()
+            .any(|c| c.kind == ComponentKind::Agent));
 
         fs::remove_dir_all(&root).ok();
         fs::remove_dir_all(&src).ok();
@@ -4315,8 +4891,14 @@ mod tests {
     /// A richer pack fixture: skill + agent + command + rule + hooks + script.
     fn make_full_src_pack() -> PathBuf {
         let dir = tmp_pack_dir();
-        write_file(&dir.join(".claude-plugin/plugin.json"), r#"{"name":"demo-pack"}"#);
-        write_file(&dir.join("skills/foo/SKILL.md"), "---\nname: foo\n---\nbody");
+        write_file(
+            &dir.join(".claude-plugin/plugin.json"),
+            r#"{"name":"demo-pack"}"#,
+        );
+        write_file(
+            &dir.join("skills/foo/SKILL.md"),
+            "---\nname: foo\n---\nbody",
+        );
         write_file(&dir.join("agents/rev.md"), "agent");
         write_file(&dir.join("commands/ship.md"), "command");
         write_file(&dir.join("rules/style.md"), "rule body");
@@ -4347,7 +4929,10 @@ mod tests {
             &dir.join(".claude-plugin/plugin.json"),
             r#"{"name":"mani","skills":"./.claude/skills","hooks":"./plugin/hooks/hooks.json"}"#,
         );
-        write_file(&dir.join(".claude/skills/foo/SKILL.md"), "---\nname: foo\n---\nbody");
+        write_file(
+            &dir.join(".claude/skills/foo/SKILL.md"),
+            "---\nname: foo\n---\nbody",
+        );
         write_file(&dir.join("plugin/hooks/hooks.json"), r#"{"hooks":{}}"#);
         write_file(&dir.join("scripts/build.js"), "console.log(1)"); // build tooling, not a component
 
@@ -4356,9 +4941,15 @@ mod tests {
             .components
             .iter()
             .any(|c| c.kind == ComponentKind::Skill && c.name == "foo"));
-        assert!(pack.components.iter().any(|c| c.kind == ComponentKind::Hook));
+        assert!(pack
+            .components
+            .iter()
+            .any(|c| c.kind == ComponentKind::Hook));
         assert!(
-            !pack.components.iter().any(|c| c.kind == ComponentKind::Script),
+            !pack
+                .components
+                .iter()
+                .any(|c| c.kind == ComponentKind::Script),
             "manifest-declared pack must not ingest top-level build scripts"
         );
 
@@ -4374,8 +4965,14 @@ mod tests {
         write_file(&dir.join("scripts/setup.js"), "x");
 
         let pack = pack_parse(&dir).unwrap();
-        assert!(pack.components.iter().any(|c| c.kind == ComponentKind::Agent));
-        assert!(pack.components.iter().any(|c| c.kind == ComponentKind::Script));
+        assert!(pack
+            .components
+            .iter()
+            .any(|c| c.kind == ComponentKind::Agent));
+        assert!(pack
+            .components
+            .iter()
+            .any(|c| c.kind == ComponentKind::Script));
 
         fs::remove_dir_all(&dir).ok();
     }
@@ -4385,18 +4982,29 @@ mod tests {
         let src = make_full_src_pack();
         let root = installed_root(&src);
 
-        let report = project_pack(&root, "global", "demo-pack", "claude-code", None, false).unwrap();
+        let report =
+            project_pack(&root, "global", "demo-pack", "claude-code", None, false).unwrap();
 
         // Agent file is a symlink in .claude/agents.
         let agent_link = root.join(".claude/agents/rev.md");
-        assert!(agent_link.symlink_metadata().unwrap().file_type().is_symlink());
+        assert!(agent_link
+            .symlink_metadata()
+            .unwrap()
+            .file_type()
+            .is_symlink());
         // Skill projected into .claude/skills/foo and resolves through the link.
         let skill_link = root.join(".claude/skills/foo");
         assert!(skill_link.symlink_metadata().is_ok());
         assert!(skill_link.join("SKILL.md").is_file());
         // Command + rule also landed (dir-style for claude).
-        assert!(root.join(".claude/commands/ship.md").symlink_metadata().is_ok());
-        assert!(root.join(".claude/rules/style.md").symlink_metadata().is_ok());
+        assert!(root
+            .join(".claude/commands/ship.md")
+            .symlink_metadata()
+            .is_ok());
+        assert!(root
+            .join(".claude/rules/style.md")
+            .symlink_metadata()
+            .is_ok());
         // Hook merged into settings.json.
         assert!(root.join(".claude/settings.json").is_file());
 
@@ -4410,7 +5018,12 @@ mod tests {
 
         // Ledger recorded the agent + skill entries.
         let proj = read_pack_proj(&root);
-        let entries = proj.projections.get("demo-pack").unwrap().get("claude-code").unwrap();
+        let entries = proj
+            .projections
+            .get("demo-pack")
+            .unwrap()
+            .get("claude-code")
+            .unwrap();
         assert!(entries
             .iter()
             .any(|e| e.kind == ComponentKind::Agent && e.target_rel == ".claude/agents/rev.md"));
@@ -4431,7 +5044,15 @@ mod tests {
         );
 
         let kinds = [ComponentKind::Hook];
-        project_pack(&root, "global", "demo-pack", "claude-code", Some(&kinds), false).unwrap();
+        project_pack(
+            &root,
+            "global",
+            "demo-pack",
+            "claude-code",
+            Some(&kinds),
+            false,
+        )
+        .unwrap();
 
         let read = |root: &Path| -> serde_json::Value {
             serde_json::from_str(&fs::read_to_string(root.join(".claude/settings.json")).unwrap())
@@ -4448,7 +5069,15 @@ mod tests {
         assert_eq!(tagged, 1);
 
         // Re-project → still exactly one tagged entry (no dupes), X still there.
-        project_pack(&root, "global", "demo-pack", "claude-code", Some(&kinds), false).unwrap();
+        project_pack(
+            &root,
+            "global",
+            "demo-pack",
+            "claude-code",
+            Some(&kinds),
+            false,
+        )
+        .unwrap();
         let v2 = read(&root);
         let arr2 = v2["hooks"]["PreToolUse"].as_array().unwrap();
         let tagged2 = arr2
@@ -4467,8 +5096,15 @@ mod tests {
         let src = make_full_src_pack();
         let root = installed_root(&src);
 
-        project_pack(&root, "global", "demo-pack", "claude-code", Some(&[ComponentKind::Hook]), false)
-            .unwrap();
+        project_pack(
+            &root,
+            "global",
+            "demo-pack",
+            "claude-code",
+            Some(&[ComponentKind::Hook]),
+            false,
+        )
+        .unwrap();
 
         let settings: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(root.join(".claude/settings.json")).unwrap())
@@ -4480,12 +5116,21 @@ mod tests {
         let store = root.join(".atlas/packs/demo-pack");
         let store_str = store.to_string_lossy().to_string();
         // The unresolved `${...}` placeholder is gone, replaced by the store dir.
-        assert!(!cmd.contains("${CLAUDE_PLUGIN_ROOT}"), "placeholder not rewritten: {cmd}");
-        assert!(cmd.contains(&store_str), "command should point at store dir: {cmd}");
+        assert!(
+            !cmd.contains("${CLAUDE_PLUGIN_ROOT}"),
+            "placeholder not rewritten: {cmd}"
+        );
+        assert!(
+            cmd.contains(&store_str),
+            "command should point at store dir: {cmd}"
+        );
         assert!(cmd.ends_with("/scripts/setup.js"));
         // …and the root is exported so runtime env lookups resolve too.
         assert!(
-            cmd.starts_with(&format!("CLAUDE_PLUGIN_ROOT={} ", sh_single_quote(&store_str))),
+            cmd.starts_with(&format!(
+                "CLAUDE_PLUGIN_ROOT={} ",
+                sh_single_quote(&store_str)
+            )),
             "command should export plugin root: {cmd}"
         );
 
@@ -4499,15 +5144,25 @@ mod tests {
         // (note the inner `process.env.CLAUDE_PLUGIN_ROOT=r` must NOT be mistaken
         // for a leading shell assignment).
         let src = tmp_pack_dir();
-        write_file(&src.join(".claude-plugin/plugin.json"), r#"{"name":"boot-pack"}"#);
+        write_file(
+            &src.join(".claude-plugin/plugin.json"),
+            r#"{"name":"boot-pack"}"#,
+        );
         write_file(
             &src.join("hooks/hooks.json"),
             r#"{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"node -e \"var r=process.env.CLAUDE_PLUGIN_ROOT;process.env.CLAUDE_PLUGIN_ROOT=r;require(r)\""}]}]}}"#,
         );
         let root = installed_root(&src);
 
-        project_pack(&root, "global", "boot-pack", "claude-code", Some(&[ComponentKind::Hook]), false)
-            .unwrap();
+        project_pack(
+            &root,
+            "global",
+            "boot-pack",
+            "claude-code",
+            Some(&[ComponentKind::Hook]),
+            false,
+        )
+        .unwrap();
 
         let settings: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(root.join(".claude/settings.json")).unwrap())
@@ -4515,9 +5170,15 @@ mod tests {
         let cmd = settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
             .as_str()
             .unwrap();
-        let store_str = root.join(".atlas/packs/boot-pack").to_string_lossy().to_string();
+        let store_str = root
+            .join(".atlas/packs/boot-pack")
+            .to_string_lossy()
+            .to_string();
         assert!(
-            cmd.starts_with(&format!("CLAUDE_PLUGIN_ROOT={} node -e", sh_single_quote(&store_str))),
+            cmd.starts_with(&format!(
+                "CLAUDE_PLUGIN_ROOT={} node -e",
+                sh_single_quote(&store_str)
+            )),
             "runtime-env hook should be prefixed with the root: {cmd}"
         );
 
@@ -4553,12 +5214,18 @@ mod tests {
         let root = installed_root(&src);
         project_pack(&root, "global", "demo-pack", "claude-code", None, false).unwrap();
         project_pack(&root, "global", "demo-pack", "codex", None, false).unwrap();
-        assert!(root.join(".claude/agents/rev.md").symlink_metadata().is_ok());
+        assert!(root
+            .join(".claude/agents/rev.md")
+            .symlink_metadata()
+            .is_ok());
         assert!(root.join("AGENTS.md").is_file());
 
         // Unproject claude-code: agent link gone, our hook entry stripped.
         unproject_pack(&root, "demo-pack", "claude-code").unwrap();
-        assert!(root.join(".claude/agents/rev.md").symlink_metadata().is_err());
+        assert!(root
+            .join(".claude/agents/rev.md")
+            .symlink_metadata()
+            .is_err());
         let v: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(root.join(".claude/settings.json")).unwrap())
                 .unwrap();
@@ -4590,11 +5257,18 @@ mod tests {
 
         project_pack(&root, "global", "demo-pack", "claude-code", None, false).unwrap();
         unproject_pack(&root, "demo-pack", "claude-code").unwrap();
-        assert!(root.join(".claude/agents/rev.md").symlink_metadata().is_err());
+        assert!(root
+            .join(".claude/agents/rev.md")
+            .symlink_metadata()
+            .is_err());
 
         // Re-project after unproject works again.
-        let report = project_pack(&root, "global", "demo-pack", "claude-code", None, false).unwrap();
-        assert!(root.join(".claude/agents/rev.md").symlink_metadata().is_ok());
+        let report =
+            project_pack(&root, "global", "demo-pack", "claude-code", None, false).unwrap();
+        assert!(root
+            .join(".claude/agents/rev.md")
+            .symlink_metadata()
+            .is_ok());
         assert!(report
             .iter()
             .any(|r| r.kind == ComponentKind::Agent && r.status == "projected"));
@@ -4611,16 +5285,39 @@ mod tests {
         write_file(&root.join(".claude/agents/rev.md"), "FOREIGN");
 
         let kinds = [ComponentKind::Agent];
-        let report =
-            project_pack(&root, "global", "demo-pack", "claude-code", Some(&kinds), false).unwrap();
+        let report = project_pack(
+            &root,
+            "global",
+            "demo-pack",
+            "claude-code",
+            Some(&kinds),
+            false,
+        )
+        .unwrap();
         assert!(report
             .iter()
             .any(|r| r.kind == ComponentKind::Agent && r.status == "conflict"));
-        assert_eq!(fs::read_to_string(root.join(".claude/agents/rev.md")).unwrap(), "FOREIGN");
+        assert_eq!(
+            fs::read_to_string(root.join(".claude/agents/rev.md")).unwrap(),
+            "FOREIGN"
+        );
 
         // Force overwrites with our symlink.
-        project_pack(&root, "global", "demo-pack", "claude-code", Some(&kinds), true).unwrap();
-        assert!(root.join(".claude/agents/rev.md").symlink_metadata().unwrap().file_type().is_symlink());
+        project_pack(
+            &root,
+            "global",
+            "demo-pack",
+            "claude-code",
+            Some(&kinds),
+            true,
+        )
+        .unwrap();
+        assert!(root
+            .join(".claude/agents/rev.md")
+            .symlink_metadata()
+            .unwrap()
+            .file_type()
+            .is_symlink());
 
         fs::remove_dir_all(&root).ok();
         fs::remove_dir_all(&src).ok();
@@ -4654,7 +5351,7 @@ mod tests {
     fn read_skill_resolves_pack_provided_skill() {
         let root = root_with_installed_pack();
         // `foo` lives only in the pack store, not the canonical store.
-        assert!(!root.join(".atlas/skills/foo").exists());
+        assert!(!root.join(".agents/skills/foo").exists());
         let content = read_skill(&root, "foo").unwrap();
         assert_eq!(content.body.trim(), "body");
         fs::remove_dir_all(&root).ok();
@@ -4735,6 +5432,133 @@ mod tests {
         assert!(ship.path.ends_with("commands/ship.md"));
         assert!(Path::new(&ship.path).is_file());
 
+        fs::remove_dir_all(&root).ok();
+    }
+
+    // ── ensure_bundled_skills_at (issue #64) ────────────────────────────
+
+    #[test]
+    fn bundled_skill_is_installed_fresh_into_the_canonical_store() {
+        let root = tmp_root_isolated();
+        ensure_bundled_skills_at(&root);
+
+        let dir = skills_base(&root).join(BUNDLED_SKILL_NAME);
+        let installed = fs::read_to_string(dir.join("SKILL.md")).unwrap();
+        assert_eq!(installed, ATLAS_SELF_CONFIGURE_SKILL_MD);
+        assert!(installed.contains("name: atlas-self-configure"));
+
+        let recorded_hash = fs::read_to_string(dir.join(BUNDLED_HASH_FILE)).unwrap();
+        assert_eq!(
+            recorded_hash.trim(),
+            sha256_hex(ATLAS_SELF_CONFIGURE_SKILL_MD)
+        );
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn bundled_skill_appears_as_a_managed_global_skill() {
+        let root = tmp_root_isolated();
+        ensure_bundled_skills_at(&root);
+
+        let skills = list_skills(&root, "global").expect("list_skills succeeds");
+        let entry = skills
+            .iter()
+            .find(|s| s.name == BUNDLED_SKILL_NAME)
+            .expect("bundled skill is discoverable");
+        assert!(entry.managed);
+        assert_eq!(entry.scope, "global");
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    /// Issue #64's acceptance criteria name the skill's *projection*, not just
+    /// its discoverability: "a managed global `self-configure` skill is
+    /// available for supported Atlas agents". Discoverability was covered;
+    /// actually landing it in a tool's skills dir was not.
+    #[test]
+    fn bundled_skill_projects_into_a_supported_tool() {
+        let root = tmp_root_isolated();
+        ensure_bundled_skills_at(&root);
+
+        for tool in ["claude-code", "codex"] {
+            let def = tool_def(tool).expect("tool is in the registry");
+            project(&root, def, "global", BUNDLED_SKILL_NAME, false)
+                .unwrap_or_else(|e| panic!("projecting into {tool} failed: {e}"));
+
+            let link = tool_link_path(&root, def, "global", BUNDLED_SKILL_NAME);
+            let projected = fs::read_to_string(link.join("SKILL.md"))
+                .unwrap_or_else(|e| panic!("{tool} projection has no readable SKILL.md: {e}"));
+            assert_eq!(projected, ATLAS_SELF_CONFIGURE_SKILL_MD);
+
+            // And the ledger knows about it, which is what `reconcile` reads to
+            // report the skill as projected rather than as external drift.
+            let ledger = read_ledger(&root);
+            assert!(
+                ledger
+                    .projections
+                    .get(BUNDLED_SKILL_NAME)
+                    .is_some_and(|per_tool| per_tool.contains_key(def.id)),
+                "{tool} projection was not recorded in the ledger"
+            );
+        }
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn reinstalling_is_idempotent_when_nothing_touched_it() {
+        let root = tmp_root_isolated();
+        ensure_bundled_skills_at(&root);
+        let dir = skills_base(&root).join(BUNDLED_SKILL_NAME);
+        let first_pass = fs::read_to_string(dir.join("SKILL.md")).unwrap();
+
+        // Simulates the next app launch on the same (unmodified) install.
+        ensure_bundled_skills_at(&root);
+        let second_pass = fs::read_to_string(dir.join("SKILL.md")).unwrap();
+
+        assert_eq!(first_pass, second_pass);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_user_edited_skill_is_never_silently_overwritten() {
+        let root = tmp_root_isolated();
+        ensure_bundled_skills_at(&root);
+        let dir = skills_base(&root).join(BUNDLED_SKILL_NAME);
+        let skill_md = dir.join("SKILL.md");
+
+        // The user (or an agent, via the ordinary skills-edit surface) hand-
+        // edits the canonical copy — its hash no longer matches the sidecar.
+        fs::write(&skill_md, "user-modified content").unwrap();
+
+        ensure_bundled_skills_at(&root);
+
+        assert_eq!(
+            fs::read_to_string(&skill_md).unwrap(),
+            "user-modified content"
+        );
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_skill_with_no_hash_sidecar_is_treated_as_user_owned() {
+        // Covers a pre-#64 install (or any external drop-in) that has a
+        // SKILL.md at this exact canonical path but no `.bundled-hash` —
+        // absence of the sidecar must fail closed (never overwrite), not
+        // open.
+        let root = tmp_root_isolated();
+        let dir = skills_base(&root).join(BUNDLED_SKILL_NAME);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("SKILL.md"), "hand-authored, no sidecar").unwrap();
+
+        ensure_bundled_skills_at(&root);
+
+        assert_eq!(
+            fs::read_to_string(dir.join("SKILL.md")).unwrap(),
+            "hand-authored, no sidecar"
+        );
+        assert!(!dir.join(BUNDLED_HASH_FILE).exists());
         fs::remove_dir_all(&root).ok();
     }
 }

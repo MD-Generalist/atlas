@@ -2,9 +2,10 @@ import { lazy, Suspense } from "react";
 import { cn } from "@/lib/utils";
 import { useLayoutStore } from "../stores/layout-store";
 import { PanelSkeleton } from "@/components/panel-skeleton";
-import { GitCommit, GitCompare, Github, CheckCheck } from "lucide-react";
+import { GitCommit, GitCompare } from "lucide-react";
+import { GithubIcon } from "@/components/github-icon";
 
-// All four right-panel sub-panels are lazy so they don't run their first
+// All three right-panel sub-panels are lazy so they don't run their first
 // invokes / vendor parses during the boot-cascade window. The user lands
 // on a project, sees the tab bar + skeleton instantly, and the data slides
 // in as each chunk + IPC resolves. `GitManagerPanel` in particular pulls in
@@ -14,48 +15,58 @@ import { GitCommit, GitCompare, Github, CheckCheck } from "lucide-react";
 const GitManagerPanel = lazy(() =>
   import("@/features/git/components/git-manager/git-manager-panel").then((m) => ({
     default: m.GitManagerPanel,
-  }))
+  })),
 );
 // xyflow + the layout pass are heavy; load only when the user opens the tab.
 const GitGraphPanel = lazy(() =>
   import("@/features/git/components/git-graph-panel").then((m) => ({
     default: m.GitGraphPanel,
-  }))
+  })),
 );
 const GithubPanel = lazy(() =>
   import("@/features/github/components/github-panel").then((m) => ({
     default: m.GithubPanel,
-  }))
+  })),
 );
-const ReviewAgentsPanel = lazy(() =>
-  import("@/features/review-agents/components/review-agents-panel").then((m) => ({
-    default: m.ReviewAgentsPanel,
-  }))
+// Team chat shares the right slot with source control — ⌘⇧C claims it, ⌘⇧B
+// claims it back. Lazy for the same reason as the panels above: it is never on
+// screen during the boot cascade unless the slot was left on chat.
+const CommsPanel = lazy(() =>
+  import("@/features/comms/components/comms-panel").then((m) => ({
+    default: m.CommsPanel,
+  })),
 );
-
 const sections = [
   { id: "changes" as const, label: "Source Control", icon: GitCompare },
-  { id: "review-agents" as const, label: "Review", icon: CheckCheck },
   { id: "git-graph" as const, label: "Commit", icon: GitCommit },
-  { id: "github" as const, label: "GitHub", icon: Github },
+  { id: "github" as const, label: "GitHub", icon: GithubIcon },
 ];
 
 export function RightPanel() {
-  const activeSection = useLayoutStore.use.rightPanel().activeSection;
+  const rightPanel = useLayoutStore.use.rightPanel();
+  const activeSection = rightPanel.activeSection;
   const { setRightSection } = useLayoutStore.use.actions();
 
+  if (rightPanel.mode === "chat") {
+    return (
+      <Suspense fallback={<PanelSkeleton label="Chat" />}>
+        <CommsPanel />
+      </Suspense>
+    );
+  }
+
   return (
-    <div className="atlas-vibrant-panel h-full flex flex-col bg-[var(--panel-bg-2)]">
-      <div className="flex items-center border-b border-border-default px-1 h-[29px] shrink-0 gap-0.5 overflow-x-auto hide-scrollbar">
+    <div className="atlas-vibrant-panel h-full flex flex-col bg-[var(--card)]">
+      <div className="flex items-center border-b border-border px-1 h-[29px] shrink-0 gap-0.5 overflow-x-auto hide-scrollbar">
         {sections.map((s) => (
           <button
             key={s.id}
             onClick={() => setRightSection(s.id)}
             className={cn(
-              "flex items-center gap-1.5 px-2 py-1 rounded text-[11px] font-medium transition-colors cursor-pointer shrink-0 whitespace-nowrap",
+              "flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium transition-colors cursor-pointer shrink-0 whitespace-nowrap",
               activeSection === s.id
-                ? "text-text-primary bg-bg-selected"
-                : "text-text-tertiary hover:text-text-secondary hover:bg-bg-hover"
+                ? "text-foreground bg-element-selected"
+                : "text-muted-foreground hover:text-secondary-foreground hover:bg-element-hover",
             )}
           >
             <s.icon size={12} />
@@ -73,12 +84,9 @@ export function RightPanel() {
       >
         <Suspense
           fallback={
-            <PanelSkeleton
-              label={activeSection === "changes" ? "Loading changes…" : "Loading…"}
-            />
+            <PanelSkeleton label={activeSection === "changes" ? "Loading changes…" : "Loading…"} />
           }
         >
-          {activeSection === "review-agents" && <ReviewAgentsPanel />}
           {activeSection === "changes" && <GitManagerPanel />}
           {activeSection === "git-graph" && <GitGraphPanel />}
           {activeSection === "github" && <GithubPanel />}

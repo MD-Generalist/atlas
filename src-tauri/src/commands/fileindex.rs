@@ -16,7 +16,7 @@ use nucleo_matcher::Matcher;
 use parking_lot::RwLock;
 use serde::Serialize;
 use std::collections::HashMap;
-use tauri::{AppHandle, Emitter, State, WebviewWindow};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 
 /// One indexed file. `path` is absolute; `rel` is relative to the project
 /// root so the UI can render `crates/foo/src/lib.rs` instead of the full
@@ -38,6 +38,13 @@ pub struct FileMatch {
 /// `_debouncer` handle; dropping `ProjectIndex` stops the watcher.
 struct ProjectIndex {
     root: PathBuf,
+    /// When the last full `walk_project` ran (initial build, watcher-forced
+    /// rewalk, or background refresh). Gates the stale-while-revalidate
+    /// rebuild in `fileindex_open_project` so rapid project toggles /
+    /// picker opens don't stack redundant walks.
+    last_walk: Arc<parking_lot::Mutex<std::time::Instant>>,
+    /// True while a background rebuild for this project is in flight.
+    refreshing: Arc<std::sync::atomic::AtomicBool>,
     files: Arc<RwLock<Vec<IndexedFile>>>,
     /// Derived unique-parent-directories list, cached. Lazily built
     /// on first folder query (or first `snapshot_folders` call) and
@@ -153,9 +160,9 @@ pub async fn fileindex_open_project(
     webview: WebviewWindow,
     state: State<'_, FileIndexState>,
 ) -> Result<usize, String> {
-    // The index is keyed by the caller's workspace id (multiple workspaces now
+    // The index is keyed by the caller's project id (multiple projects now
     // live in one window). Watcher events still go to the real window, tagged
-    // with this id so the frontend can route them to the right workspace.
+    // with this id so the frontend can route them to the right project.
     let key = workspace_id.unwrap_or_else(|| webview.label().to_string());
     let window_label = webview.label().to_string();
     let root = PathBuf::from(&path);
@@ -163,19 +170,120 @@ pub async fn fileindex_open_project(
         return Err(format!("not a directory: {path}"));
     }
 
-    // Idempotent: if this workspace already has a resident index (e.g. on a
-    // switch back), don't re-walk the tree or spawn a second watcher.
-    if let Some(existing) = state.per_window.read().get(&key) {
-        return Ok(existing.files.read().len());
+    // Resident index → return the current count instantly (project
+    // switches must stay cheap), but kick off a THROTTLED background
+    // rebuild: fresh walk AND fresh watch plan, swapped in atomically when
+    // done. The old unconditional early-return made every re-open a no-op,
+    // so a single missed watcher event (or a top-level directory created
+    // after the watch plan was made — those are never watched) meant the
+    // index was stale until the project was closed. Now Cmd+P "Reindex"
+    // and the picker's ensure path genuinely recover, stale-while-revalidate.
+    let resident = {
+        let guard = state.per_window.read();
+        guard.get(&key).map(|ex| {
+            let stale = ex.last_walk.lock().elapsed() >= REFRESH_MIN_INTERVAL;
+            // `swap` claims the refresh slot — only one rebuild in flight.
+            let claimed = stale
+                && !ex
+                    .refreshing
+                    .swap(true, std::sync::atomic::Ordering::SeqCst);
+            (ex.files.read().len(), claimed, ex.refreshing.clone())
+        })
+    };
+    if let Some((count, claimed, refreshing)) = resident {
+        if claimed {
+            let app_bg = app.clone();
+            let key_bg = key.clone();
+            let window_bg = window_label.clone();
+            let root_bg = root.clone();
+            tauri::async_runtime::spawn(async move {
+                match build_project_index(
+                    root_bg,
+                    app_bg.clone(),
+                    key_bg.clone(),
+                    window_bg.clone(),
+                )
+                .await
+                {
+                    Ok(index) => {
+                        let fresh_count = index.files.read().len();
+                        let st = app_bg.state::<FileIndexState>();
+                        // Swap in the fresh index (dropping the old watcher) —
+                        // but ONLY if the project still holds an index for
+                        // this same root. If it was closed (or repointed at a
+                        // different project) mid-rebuild, inserting would
+                        // resurrect a torn-down watcher.
+                        let swapped = {
+                            let mut guard = st.per_window.write();
+                            match guard.get(&key_bg) {
+                                Some(existing) if existing.root == index.root => {
+                                    guard.insert(key_bg.clone(), index);
+                                    true
+                                }
+                                _ => false,
+                            }
+                        };
+                        if swapped {
+                            let _ = app_bg.emit_to(
+                                window_bg.as_str(),
+                                "atlas:fileindex:updated",
+                                serde_json::json!({ "workspaceId": key_bg, "count": fresh_count }),
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            target: "atlas::fileindex",
+                            "background reindex failed: {e}"
+                        );
+                        // Release the slot so a later open can retry.
+                        refreshing.store(false, std::sync::atomic::Ordering::SeqCst);
+                    }
+                }
+            });
+        }
+        return Ok(count);
     }
 
+    let index = build_project_index(root, app.clone(), key.clone(), window_label.clone()).await?;
+    let count = index.files.read().len();
+    state.per_window.write().insert(key.clone(), index);
+
+    // Tell the window the index is now searchable. Mirrors the event the
+    // watcher fires on file-set changes — palette + mention picker both listen
+    // for it, so a re-query lands the user's first results the instant the walk
+    // finishes (no manual reopen needed). Tagged with the project id so the
+    // frontend ignores it unless it belongs to the active project.
+    let _ = app.emit_to(
+        window_label.as_str(),
+        "atlas:fileindex:updated",
+        serde_json::json!({ "workspaceId": key, "count": count }),
+    );
+
+    Ok(count)
+}
+
+/// Minimum age before a re-open triggers a background rebuild. Guards rapid
+/// project toggles and per-keystroke ensure calls from stacking walks.
+const REFRESH_MIN_INTERVAL: Duration = Duration::from_secs(10);
+
+/// Build a complete `ProjectIndex` for `root`: full ignore-respecting walk,
+/// fresh watcher plan, debounced watcher wired to emit against
+/// (`key` = project id, `window_label` = emit target). Shared by the
+/// first open and the background refresh path.
+async fn build_project_index(
+    root: PathBuf,
+    app: AppHandle,
+    key: String,
+    window_label: String,
+) -> Result<ProjectIndex, String> {
     // Off the main thread: walk the tree AND build the watcher. Watcher
     // creation isn't free on macOS — FSEvents does an initial scan of the
     // path tree before returning a stream handle.
     let root_for_task = root.clone();
     let app_for_task = app.clone();
-    // Capture both: the workspace id (payload tag) and the window label (emit
-    // target) — they differ now that one window hosts many workspaces.
+    // Capture both: the project id (payload tag) and the window label (emit
+    // target) — they differ now that one window hosts many projects.
     let key_for_task = key.clone();
     let window_for_task = window_label.clone();
     let (files, folders, debouncer): (
@@ -288,32 +396,17 @@ pub async fn fileindex_open_project(
     .await
     .map_err(|e| e.to_string())??;
 
-    let count = files.read().len();
-    state.per_window.write().insert(
-        key.clone(),
-        ProjectIndex {
-            root,
-            files,
-            folders,
-            _debouncer: debouncer,
-        },
-    );
-
-    // Tell the window the index is now searchable. Mirrors the event the
-    // watcher fires on file-set changes — palette + mention picker both listen
-    // for it, so a re-query lands the user's first results the instant the walk
-    // finishes (no manual reopen needed). Tagged with the workspace id so the
-    // frontend ignores it unless it belongs to the active workspace.
-    let _ = app.emit_to(
-        window_label.as_str(),
-        "atlas:fileindex:updated",
-        serde_json::json!({ "workspaceId": key, "count": count }),
-    );
-
-    Ok(count)
+    Ok(ProjectIndex {
+        root,
+        last_walk: Arc::new(parking_lot::Mutex::new(std::time::Instant::now())),
+        refreshing: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        files,
+        folders,
+        _debouncer: debouncer,
+    })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn fileindex_close_project(
     workspace_id: Option<String>,
     webview: WebviewWindow,
@@ -362,7 +455,7 @@ pub struct FolderMatch {
 /// derivation is O(files), which is fine for the few-thousand-file
 /// projects Atlas targets; if it ever becomes a hot path, cache the
 /// derived set inside `ProjectIndex`.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn fileindex_search_dirs(
     query: String,
     limit: usize,
@@ -371,36 +464,14 @@ pub fn fileindex_search_dirs(
     state: State<'_, FileIndexState>,
 ) -> Vec<FolderMatch> {
     let key = workspace_id.unwrap_or_else(|| webview.label().to_string());
-    // Clone the Arc (pointer copy) + root, not the whole file Vec, then hold the
-    // inner read lock across the folder derivation (avoids a multi-MB per-call
-    // clone on large repos — same fix as fileindex_search).
-    let (files_arc, root) = {
-        let guard = state.per_window.read();
-        match guard.get(&key) {
-            Some(p) => (p.files.clone(), p.root.clone()),
-            None => return Vec::new(),
-        }
+    // The cached derivation `snapshot_folders` maintains (built once, dropped
+    // by the watcher on file-set changes). This command predated the cache
+    // and kept re-deriving inline — O(files × depth) String allocations per
+    // call, which on a large repo was hundreds of thousands of allocations
+    // per @-mention keystroke.
+    let Some(folders) = state.snapshot_folders(&key) else {
+        return Vec::new();
     };
-    let files = files_arc.read();
-
-    // Collect unique parent directories, in first-seen order. We walk each
-    // file's `rel` up to (but not including) the project root.
-    let mut seen = std::collections::HashSet::<String>::new();
-    let mut folders: Vec<(String, PathBuf)> = Vec::new();
-    for f in files.iter() {
-        let mut cur = Path::new(&f.rel).parent();
-        while let Some(p) = cur {
-            let rel = p.to_string_lossy();
-            if rel.is_empty() {
-                break;
-            }
-            let rel = rel.into_owned();
-            if seen.insert(rel.clone()) {
-                folders.push((rel, root.join(p)));
-            }
-            cur = p.parent();
-        }
-    }
 
     let trimmed = query.trim();
     if trimmed.is_empty() {
@@ -420,11 +491,14 @@ pub fn fileindex_search_dirs(
         .into_iter()
         .filter_map(|(rel, abs)| {
             pattern
-                .score(nucleo_matcher::Utf32Str::Ascii(rel.as_bytes()), &mut matcher)
+                .score(
+                    nucleo_matcher::Utf32Str::Ascii(rel.as_bytes()),
+                    &mut matcher,
+                )
                 .map(|score| (score, (rel, abs)))
         })
         .collect();
-    scored.sort_by(|a, b| b.0.cmp(&a.0));
+    scored.sort_by_key(|entry| std::cmp::Reverse(entry.0));
     scored
         .into_iter()
         .take(limit.max(1))
@@ -437,7 +511,7 @@ pub fn fileindex_search_dirs(
 
 /// Fuzzy-search the index. Empty query returns the first `limit` entries —
 /// useful for the palette's empty state ("recent files" effect).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn fileindex_search(
     query: String,
     limit: usize,
@@ -480,12 +554,15 @@ pub fn fileindex_search(
         .iter()
         .filter_map(|f| {
             pattern
-                .score(nucleo_matcher::Utf32Str::Ascii(f.rel.as_bytes()), &mut matcher)
+                .score(
+                    nucleo_matcher::Utf32Str::Ascii(f.rel.as_bytes()),
+                    &mut matcher,
+                )
                 .map(|score| (score, f))
         })
         .collect();
     // Highest score first; stable order on ties (insertion = file walk order).
-    scored.sort_by(|a, b| b.0.cmp(&a.0));
+    scored.sort_by_key(|entry| std::cmp::Reverse(entry.0));
     scored
         .into_iter()
         .take(limit.max(1))
@@ -706,11 +783,7 @@ fn summarise_events(events: &[DebouncedEvent]) -> (std::collections::HashSet<Pat
     (dirs, full_refresh)
 }
 
-fn apply_events(
-    root: &Path,
-    files: &Arc<RwLock<Vec<IndexedFile>>>,
-    events: Vec<DebouncedEvent>,
-) {
+fn apply_events(root: &Path, files: &Arc<RwLock<Vec<IndexedFile>>>, events: Vec<DebouncedEvent>) {
     // Strategy: collect adds/removes/renames separately, then mutate the
     // vec once under a single write lock. For complex events (e.g. branch
     // switch), `notify` may not surface kind-level info, in which case we
@@ -891,7 +964,10 @@ mod tests {
             root,
             Path::new("/p/packages/web/node_modules/react/index.js")
         ));
-        assert!(is_ignored_event_path(root, Path::new("/p/a/target/debug/x")));
+        assert!(is_ignored_event_path(
+            root,
+            Path::new("/p/a/target/debug/x")
+        ));
         assert!(is_ignored_event_path(root, Path::new("/p/.git/index")));
 
         assert!(!is_ignored_event_path(root, Path::new("/p/src/main.rs")));
@@ -911,7 +987,11 @@ mod tests {
         let before = files.read().len();
 
         let ev = |kind: EventKind, p: PathBuf| DebouncedEvent {
-            event: notify::Event { kind, paths: vec![p], attrs: Default::default() },
+            event: notify::Event {
+                kind,
+                paths: vec![p],
+                attrs: Default::default(),
+            },
             time: std::time::Instant::now(),
         };
 
@@ -920,7 +1000,10 @@ mod tests {
             t.path().join("a.rs"),
         );
         let (dirs, full_refresh) = summarise_events(std::slice::from_ref(&data));
-        assert!(!full_refresh, "a content edit must not force a full refresh");
+        assert!(
+            !full_refresh,
+            "a content edit must not force a full refresh"
+        );
         assert!(dirs.is_empty());
 
         apply_events(t.path(), &files, vec![data]);

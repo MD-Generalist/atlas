@@ -155,7 +155,9 @@ fn walk(dir: &Path, root: &Path, out: &mut Vec<(String, String, String)>) {
         if path.extension().and_then(|e| e.to_str()) != Some("md") {
             continue;
         }
-        let Ok(body) = fs::read_to_string(&path) else { continue };
+        let Ok(body) = fs::read_to_string(&path) else {
+            continue;
+        };
         let rel = path.strip_prefix(root).unwrap_or(&path);
         let id = rel.with_extension("").to_string_lossy().to_string();
         let filename = path
@@ -209,7 +211,7 @@ fn find_refs(body: &str) -> Vec<RefHit> {
 
     // @kind:id mentions (only the kinds we treat as knowledge refs).
     for kind in &["knowledge", "note", "page"] {
-        let needle = format!("@{}:", kind);
+        let needle = format!("@{kind}:");
         let mut search_from = 0;
         while let Some(pos_in_slice) = body[search_from..].find(&needle) {
             let pos = search_from + pos_in_slice;
@@ -218,7 +220,8 @@ fn find_refs(body: &str) -> Vec<RefHit> {
             // accept anything that isn't whitespace or a few break chars.
             let mut id_end = id_start;
             for c in body[id_start..].chars() {
-                if c.is_whitespace() || matches!(c, ',' | ';' | ')' | ']' | '}' | '"' | '\'' | '`') {
+                if c.is_whitespace() || matches!(c, ',' | ';' | ')' | ']' | '}' | '"' | '\'' | '`')
+                {
                     break;
                 }
                 id_end += c.len_utf8();
@@ -226,7 +229,11 @@ fn find_refs(body: &str) -> Vec<RefHit> {
             if id_end > id_start {
                 let target = body[id_start..id_end].to_string();
                 if !target.is_empty() {
-                    out.push(RefHit { target, start: pos, end: id_end });
+                    out.push(RefHit {
+                        target,
+                        start: pos,
+                        end: id_end,
+                    });
                 }
             }
             search_from = id_end.max(pos + 1);
@@ -244,7 +251,10 @@ fn find_refs(body: &str) -> Vec<RefHit> {
         let pos = span_search + pos_in_slice;
         let kind_value = match read_quoted_attr(&body[pos..], "data-mention-kind=") {
             Some(v) => v,
-            None => { span_search = pos + 1; continue; }
+            None => {
+                span_search = pos + 1;
+                continue;
+            }
         };
         let only_knowledge = matches!(kind_value.as_str(), "knowledge" | "note" | "page");
         // The id is typically on the same span; scan a small window.
@@ -254,7 +264,11 @@ fn find_refs(body: &str) -> Vec<RefHit> {
         if only_knowledge {
             if let Some(target) = id_value {
                 if !target.is_empty() {
-                    out.push(RefHit { target, start: pos, end: pos + 1 });
+                    out.push(RefHit {
+                        target,
+                        start: pos,
+                        end: pos + 1,
+                    });
                 }
             }
         }
@@ -271,9 +285,13 @@ fn read_quoted_attr(src: &str, name: &str) -> Option<String> {
     let head = src.find(name)?;
     let after = head + name.len();
     let bytes = src.as_bytes();
-    if after >= bytes.len() { return None; }
+    if after >= bytes.len() {
+        return None;
+    }
     let quote = bytes[after];
-    if quote != b'"' && quote != b'\'' { return None; }
+    if quote != b'"' && quote != b'\'' {
+        return None;
+    }
     let value_start = after + 1;
     let rest = &src[value_start..];
     let end = rest.find(quote as char)?;
@@ -287,14 +305,12 @@ fn extract_snippet(body: &str, start: usize, end: usize) -> String {
     let lo = body
         .char_indices()
         .map(|(i, _)| i)
-        .filter(|i| *i + SNIPPET_RADIUS >= start)
-        .next()
+        .find(|i| *i + SNIPPET_RADIUS >= start)
         .unwrap_or(start.saturating_sub(SNIPPET_RADIUS));
     let hi = body
         .char_indices()
         .map(|(i, c)| i + c.len_utf8())
-        .filter(|i| *i >= end + SNIPPET_RADIUS)
-        .next()
+        .find(|i| *i >= end + SNIPPET_RADIUS)
         .unwrap_or((end + SNIPPET_RADIUS).min(body.len()));
 
     let lo = clamp_to_char_boundary(body, lo);
@@ -359,26 +375,6 @@ pub async fn knowledge_backlinks(
 }
 
 #[tauri::command]
-pub async fn knowledge_forwardlinks(
-    project_path: String,
-    entry_id: String,
-    state: State<'_, Arc<KnowledgeLinksState>>,
-) -> Result<Vec<String>, String> {
-    let state = Arc::clone(state.inner());
-    tokio::task::spawn_blocking(move || {
-        ensure_graph(&state, &project_path);
-        let by_proj = state.by_project.read();
-        let graph = match by_proj.get(&project_path) {
-            Some(Some(g)) => g,
-            _ => return Ok(Vec::new()),
-        };
-        Ok(graph.forwardlinks.get(&entry_id).cloned().unwrap_or_default())
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-#[tauri::command]
 pub async fn knowledge_link_counts(
     project_path: String,
     entry_id: String,
@@ -393,8 +389,16 @@ pub async fn knowledge_link_counts(
             _ => return Ok(LinkCounts::default()),
         };
         Ok(LinkCounts {
-            backlinks: graph.backlinks.get(&entry_id).map(|v| v.len()).unwrap_or(0),
-            forwardlinks: graph.forwardlinks.get(&entry_id).map(|v| v.len()).unwrap_or(0),
+            backlinks: graph
+                .backlinks
+                .get(&entry_id)
+                .map(std::vec::Vec::len)
+                .unwrap_or(0),
+            forwardlinks: graph
+                .forwardlinks
+                .get(&entry_id)
+                .map(std::vec::Vec::len)
+                .unwrap_or(0),
         })
     })
     .await
@@ -417,16 +421,6 @@ pub async fn knowledge_links_invalidate(
         "atlas:knowledge:links-changed",
         serde_json::json!({ "projectPath": project_path }),
     );
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn knowledge_links_drop_project(
-    project_path: String,
-    state: State<'_, Arc<KnowledgeLinksState>>,
-) -> Result<(), String> {
-    let mut by_proj = state.by_project.write();
-    by_proj.remove(&project_path);
     Ok(())
 }
 
@@ -468,10 +462,19 @@ pub async fn knowledge_links_graph(
         let mut seen_pairs: std::collections::HashSet<(String, String)> = Default::default();
         for (from, targets) in &graph.forwardlinks {
             for to in targets {
-                if from == to { continue; }
-                let key = if from < to { (from.clone(), to.clone()) } else { (to.clone(), from.clone()) };
+                if from == to {
+                    continue;
+                }
+                let key = if from < to {
+                    (from.clone(), to.clone())
+                } else {
+                    (to.clone(), from.clone())
+                };
                 if seen_pairs.insert(key) {
-                    edges.push(GraphEdge { from: from.clone(), to: to.clone() });
+                    edges.push(GraphEdge {
+                        from: from.clone(),
+                        to: to.clone(),
+                    });
                 }
             }
         }
@@ -492,7 +495,12 @@ pub async fn knowledge_links_graph(
                     .get(&id)
                     .map(|v| v.len() as u32)
                     .unwrap_or(0);
-                GraphNode { id, title, in_degree, out_degree }
+                GraphNode {
+                    id,
+                    title,
+                    in_degree,
+                    out_degree,
+                }
             })
             .collect();
         nodes.sort_by(|a, b| a.id.cmp(&b.id));

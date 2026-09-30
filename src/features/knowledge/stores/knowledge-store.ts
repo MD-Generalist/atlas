@@ -3,7 +3,7 @@ import { createSelectors } from "@/lib/create-selectors";
 import { invoke } from "@tauri-apps/api/core";
 import { logEvent } from "@/features/log/lib/log";
 
-interface KnowledgeEntry {
+export interface KnowledgeEntry {
   id: string;
   title: string;
   content: string;
@@ -30,9 +30,9 @@ interface KnowledgeState {
     /** Panel clears the pending request after handling it. */
     consumePendingOpen: () => void;
     setEditContent: (content: string) => void;
-    /** Save an explicit (workspace path, note id, content) triple. The caller
-     *  captures all three atomically so a workspace switch can never cross the
-     *  content of one workspace into another's file. */
+    /** Save an explicit (project path, note id, content) triple. The caller
+     *  captures all three atomically so a project switch can never cross the
+     *  content of one project into another's file. */
     saveEntry: (projectPath: string, id: string, content: string) => Promise<void>;
     createEntry: (projectPath: string) => Promise<void>;
     deleteEntry: (projectPath: string, id: string) => Promise<void>;
@@ -56,19 +56,19 @@ export const useKnowledgeStore = createSelectors(
           const current = get();
 
           // Skip update if entries haven't changed (prevent unnecessary re-renders)
-          const unchanged = current.entries.length === newEntries.length &&
-            current.entries.every((e, i) => e.id === newEntries[i]?.id && e.updated_at === newEntries[i]?.updated_at);
+          const unchanged =
+            current.entries.length === newEntries.length &&
+            current.entries.every(
+              (e, i) => e.id === newEntries[i]?.id && e.updated_at === newEntries[i]?.updated_at,
+            );
           if (unchanged && !current.loading) return;
 
           const activeStillExists = newEntries.find((e) => e.id === current.activeEntryId);
           set({
             entries: newEntries,
             loading: false,
-            activeEntryId: activeStillExists
-              ? current.activeEntryId
-              : newEntries[0]?.id ?? null,
-            editContent: activeStillExists?.content
-              ?? newEntries[0]?.content ?? "",
+            activeEntryId: activeStillExists ? current.activeEntryId : (newEntries[0]?.id ?? null),
+            editContent: activeStillExists?.content ?? newEntries[0]?.content ?? "",
           });
           // Mirror the new entry set into the Rust mention cache so
           // the @-picker doesn't have to ship the full knowledge
@@ -101,12 +101,16 @@ export const useKnowledgeStore = createSelectors(
           });
           // Update the entry's content in-place without a full reload. Match on
           // the saved `id` only — if the store has since been swapped to another
-          // workspace (different `entries`), this is a harmless no-op rather
-          // than a cross-workspace mutation.
-          const title = content.split("\n")[0]?.replace(/^#+\s*/, "").slice(0, 60) || "note";
+          // project (different `entries`), this is a harmless no-op rather
+          // than a cross-project mutation.
+          const title =
+            content
+              .split("\n")[0]
+              ?.replace(/^#+\s*/, "")
+              .slice(0, 60) || "note";
           set({
             entries: get().entries.map((e) =>
-              e.id === id ? { ...e, content, title, updated_at: new Date().toISOString() } : e
+              e.id === id ? { ...e, content, title, updated_at: new Date().toISOString() } : e,
             ),
           });
           invoke("log_interaction", {
@@ -178,5 +182,5 @@ export const useKnowledgeStore = createSelectors(
         }
       },
     },
-  }))
+  })),
 );

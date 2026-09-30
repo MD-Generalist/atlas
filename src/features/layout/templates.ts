@@ -1,16 +1,16 @@
 import type { TabType } from "@/lib/constants";
 
 type LeftSection = "files" | "knowledge";
-type RightSection = "review-agents" | "changes" | "github" | "git-graph";
+type RightSection = "changes" | "github" | "git-graph";
 
 /** A predefined panel/split/tab arrangement applied via the layout switcher
- *  (⌘⌥L) or Settings → Layouts. Applied to the ACTIVE workspace. */
+ *  (⌘⌥L) or Settings → Layouts. Applied to the ACTIVE project. */
 export interface LayoutTemplate {
   id: string;
   name: string;
   description: string;
-  /** Side/bottom panel visibility (omitted = hidden). */
-  panels: { left?: boolean; right?: boolean; bottom?: boolean };
+  /** Side panel visibility (omitted = hidden). */
+  panels: { left?: boolean; right?: boolean };
   leftSection?: LeftSection;
   rightSection?: RightSection;
   /** Split columns, left→right (1–3). Each cell is the tab type that fills it. */
@@ -68,14 +68,14 @@ export const LAYOUT_TEMPLATES: LayoutTemplate[] = [
     name: "Review",
     description: "Agent with the code-review panel open.",
     panels: { right: true },
-    rightSection: "review-agents",
+    rightSection: "changes",
     columns: [{ type: "chat", title: "Agents" }],
   },
   {
-    id: "console",
-    name: "Console",
-    description: "The cross-project analytics dashboard.",
+    id: "usage",
+    name: "Usage",
+    description: "Organisation token usage and cost.",
     panels: {},
-    columns: [{ type: "mission-control", title: "Console" }],
+    columns: [{ type: "usage", title: "Usage" }],
   },
 ];

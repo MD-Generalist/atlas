@@ -20,7 +20,7 @@ use std::hash::{Hash, Hasher};
 use serde_json::Value;
 
 /// The canonical ACP tool kinds (`src/types/acp.ts`). A superset of what the
-/// native classifier emits (`atlas_cersei::tool_kind` → read/edit/execute/
+/// native classifier emits (the native `tool_kind` classifier → read/edit/execute/
 /// fetch/other), so ACP agents that use the full set are reported faithfully.
 const KINDS: [&str; 10] = [
     "read",
@@ -127,10 +127,7 @@ pub fn edit_parts(tool_name: &str, args: &Value) -> Vec<(String, String)> {
     let old = first_str(args, &OLD);
     let neu = first_str(args, &NEW);
     if old.is_some() || neu.is_some() {
-        return vec![(
-            old.unwrap_or("").to_string(),
-            neu.unwrap_or("").to_string(),
-        )];
+        return vec![(old.unwrap_or("").to_string(), neu.unwrap_or("").to_string())];
     }
 
     // Whole-file write/create — only when the tool really is an editor, so a
@@ -258,7 +255,10 @@ mod tests {
     #[test]
     fn kind_prefers_the_agent_advertised_value() {
         assert_eq!(classify_kind(Some("execute"), "Bash"), "execute");
-        assert_eq!(classify_kind(Some("switch_mode"), "whatever"), "switch_mode");
+        assert_eq!(
+            classify_kind(Some("switch_mode"), "whatever"),
+            "switch_mode"
+        );
         // Unknown kind → fall back to the name.
         assert_eq!(classify_kind(Some("bogus"), "Write"), "edit");
         assert_eq!(classify_kind(None, "Grep"), "search");

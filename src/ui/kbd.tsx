@@ -1,19 +1,41 @@
 import * as React from "react";
+import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
+import { splitGlyphCombo } from "@/features/keybindings/lib/combo";
 
-function Kbd({ className, ...props }: React.ComponentProps<"kbd">) {
-  return (
-    <kbd
-      data-slot="kbd"
-      className={cn(
-        "pointer-events-none inline-flex h-[18px] w-fit min-w-[18px] items-center justify-center gap-1 rounded-[4px]",
-        "bg-bg-elevated border border-border-default px-1.5 font-sans text-[10px] leading-none font-medium text-text-tertiary select-none",
-        "[&_svg:not([class*='size-'])]:size-3",
-        className
-      )}
-      {...props}
-    />
-  );
+/**
+ * A keycap (decision 32).
+ *
+ * shadcn's base-style `Kbd` in shape, moved onto the Foundations scales: the
+ * cap is `--control-xs` tall rather than a hand-written 18px, its corner is
+ * `rounded` (the control radius) rather than a literal 4px, and its text is
+ * `text-2xs`.
+ *
+ * `KbdKeys` and `KbdCombo` are the two ways the app actually uses it — from a
+ * `displayKeys` array, or from a glyph string like "⌘⇧F".
+ */
+const kbdVariants = cva(
+  [
+    "pointer-events-none inline-flex w-fit items-center justify-center gap-1 select-none",
+    "rounded border border-border bg-card text-muted-foreground",
+    "px-1.5 font-sans leading-none",
+    "[&_svg:not([class*='size-'])]:size-3",
+  ],
+  {
+    variants: {
+      size: {
+        xs: "h-control-xs min-w-(--control-xs) text-2xs",
+        sm: "h-control-sm min-w-(--control-sm) text-xs",
+      },
+    },
+    defaultVariants: { size: "xs" },
+  },
+);
+
+export interface KbdProps extends React.ComponentProps<"kbd">, VariantProps<typeof kbdVariants> {}
+
+function Kbd({ className, size, ...props }: KbdProps) {
+  return <kbd data-slot="kbd" className={cn(kbdVariants({ size }), className)} {...props} />;
 }
 
 function KbdGroup({ className, ...props }: React.ComponentProps<"div">) {
@@ -26,22 +48,21 @@ function KbdGroup({ className, ...props }: React.ComponentProps<"div">) {
   );
 }
 
-/** Split a string like "⌘⇧F" or "⌘," into individual key glyphs. */
-export function splitKeys(combo: string): string[] {
-  // Modifier glyphs are single chars; non-modifier "keys" may be multi-char names like "Enter".
-  // We just split codepoints — works because all our combos are single-char per slot.
-  return Array.from(combo);
-}
-
-/** Convenience: render a combo string ("⌘⇧F") as a KbdGroup of individual Kbds. */
-function KbdCombo({ combo, className }: { combo: string; className?: string }) {
+/** Render a list of keycaps (["⌘", "⇧", "B"]) — the form `displayKeys` produces. */
+function KbdKeys({ keys, className }: { keys: readonly string[]; className?: string }) {
   return (
     <KbdGroup className={className}>
-      {splitKeys(combo).map((k, i) => (
+      {keys.map((k, i) => (
         <Kbd key={`${k}-${i}`}>{k}</Kbd>
       ))}
     </KbdGroup>
   );
 }
 
-export { Kbd, KbdGroup, KbdCombo };
+/** Convenience: render a glyph string ("⌘⇧F", "⌥Space") as a KbdGroup. Every
+ *  modifier glyph is its own cap; the remainder ("F", "Space") is one cap. */
+function KbdCombo({ combo, className }: { combo: string; className?: string }) {
+  return <KbdKeys keys={splitGlyphCombo(combo)} className={className} />;
+}
+
+export { Kbd, KbdGroup, KbdKeys, KbdCombo, kbdVariants };

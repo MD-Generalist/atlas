@@ -8,6 +8,13 @@ edition = "2021"
 # Apple-Silicon GPU. Off by default (keeps non-macOS / CI builds buildable);
 # `src-tauri` turns it on for the macOS target.
 metal = ["candle-core/metal", "candle-nn/metal", "candle-transformers/metal"]
+# NVIDIA GPU slot in the `gpu_device()` chain (macOS: Metal→CPU; elsewhere:
+# CUDA→CPU). Declared but NOT wired to candle's cuda features: candle 0.11's
+# `cudarc ^0.19.8` doesn't resolve in this tree, and Atlas ships macOS-only
+# today. Enabling it as-is makes `Device::new_cuda` return a clean Err → the
+# chain falls to CPU. When a CUDA target becomes real, add: candle-core/cuda,
+# candle-nn/cuda, candle-transformers/cuda.
+cuda = []
 
 [dependencies]
 anyhow = "1.0.102"
@@ -15,4 +22,20 @@ candle-core = "0.11.0"
 candle-nn = "0.11.0"
 candle-transformers = "0.11.0"
 serde_json = "1.0.150"
-tokenizers = "0.23.1"
+# `esaxx_fast` (on by default) pulls in `esaxx-rs`'s C++ suffix-array backend,
+# whose build.rs hardcodes a static CRT (`.static_crt(true)`) on every
+# platform. That conflicts with the rest of the binary's dynamic CRT (notably
+# `cxx`, pulled in via `usearch`) and fails MSVC linking with LNK2038 on
+# Windows. It only speeds up *training* a Unigram tokenizer (esaxx-rs still
+# has a pure-Rust fallback); loading/running pretrained tokenizers is
+# unaffected, so it's safe to drop.
+# `0.22`, not the newest: candle-core pins `tokenizers = "0.22"` and the two
+# minors do not unify, so `0.23` compiled the crate (and its onig C build)
+# twice. `progressbar` is off — it only reports training progress, and this
+# crate only loads pretrained tokenizers.
+tokenizers = { version = "0.22", default-features = false, features = ["onig"] }
+
+# The workspace lint table is only real for members that opt in —
+# without this stanza it is dead configuration (#60).
+[lints]
+workspace = true

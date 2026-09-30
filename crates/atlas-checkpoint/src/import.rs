@@ -25,7 +25,7 @@
 //! honestly support that. Do not "fix" this later by copying Entire.
 //!
 //! **Cross-source dedupe is explicit work here, not a schema guarantee.** The
-//! UNIQUE constraint covers `(workspace, source, native_id)` and therefore
+//! UNIQUE constraint covers `(project, source, native_id)` and therefore
 //! dedupes *re-imports*. It does **not** dedupe across sources — Atlas's
 //! ACP-hosted Claude Code writes JSONL to the very same directory, so
 //! `('acp', id)` and `('external_jsonl', id)` are both permitted rows. Skipping
@@ -54,7 +54,7 @@ use serde::{Deserialize, Serialize};
 use crate::blobs;
 use crate::capture::{Capture, SessionKey, ToolCallContent, TurnContent};
 use crate::error::{Error, Result};
-use crate::model::{Mode, Role, Source, ToolStatus, WorkspaceMode};
+use crate::model::{Mode, ProjectMode, Role, Source, TokenTotals, ToolStatus};
 use crate::store::Store;
 use crate::tools::{canonical_name, ToolName};
 
@@ -86,9 +86,9 @@ pub struct ImportOutcome {
 
 /// What a bulk import is about to disclose.
 ///
-/// Importing into a **Cloud** Workspace makes months of terminal conversations
+/// Importing into a **Cloud** Project makes months of terminal conversations
 /// org-visible in one action, which is a bulk disclosure and gets the same
-/// real-numbers confirmation as Local→Cloud promotion. A Local Workspace needs
+/// real-numbers confirmation as Local→Cloud promotion. A Local Project needs
 /// no ceremony, because nothing leaves the machine.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -120,7 +120,9 @@ pub struct TranscriptSource {
 
 impl TranscriptSource {
     pub fn new(directory: impl Into<PathBuf>) -> Self {
-        Self { directory: directory.into() }
+        Self {
+            directory: directory.into(),
+        }
     }
 
     /// Every transcript file, oldest first, so an interrupted import resumes in
@@ -130,7 +132,7 @@ impl TranscriptSource {
             return Vec::new();
         };
         let mut files: Vec<PathBuf> = entries
-            .filter_map(|entry| entry.ok())
+            .filter_map(std::result::Result::ok)
             .map(|entry| entry.path())
             .filter(|path| path.extension().is_some_and(|ext| ext == "jsonl"))
             .collect();
@@ -144,7 +146,7 @@ impl TranscriptSource {
 /// Prefer [`preview_with_store`] when a store is at hand — it also reports how
 /// many of the files a real import would take, which is what the disclosure
 /// dialog should headline. Without a store every file counts as new.
-pub fn preview(source: &TranscriptSource, mode: WorkspaceMode) -> ImportPreview {
+pub fn preview(source: &TranscriptSource, mode: ProjectMode) -> ImportPreview {
     preview_inner(source, mode, None)
 }
 
@@ -154,14 +156,14 @@ pub fn preview_with_store(
     store: &Store,
     workspace_id: &str,
     source: &TranscriptSource,
-    mode: WorkspaceMode,
+    mode: ProjectMode,
 ) -> ImportPreview {
     preview_inner(source, mode, Some((store, workspace_id)))
 }
 
 fn preview_inner(
     source: &TranscriptSource,
-    mode: WorkspaceMode,
+    mode: ProjectMode,
     store: Option<(&Store, &str)>,
 ) -> ImportPreview {
     let files = source.files();
@@ -191,7 +193,7 @@ fn preview_inner(
         earliest: timestamps.first().cloned(),
         latest: timestamps.last().cloned(),
         total_bytes,
-        is_bulk_disclosure: mode == WorkspaceMode::Cloud,
+        is_bulk_disclosure: mode == ProjectMode::Cloud,
     }
 }
 
@@ -250,7 +252,7 @@ pub fn import_all(
     store: &mut Store,
     workspace_id: &str,
     source: &TranscriptSource,
-    mode: WorkspaceMode,
+    mode: ProjectMode,
 ) -> Result<ImportOutcome> {
     let mut outcome = ImportOutcome::default();
     for path in source.files() {
@@ -264,12 +266,79 @@ pub fn import_all(
     Ok(outcome)
 }
 
+/// The importer's per-file accumulator, persisted after every clean pass so
+/// the 30-second watch tick can resume an actively-growing transcript from
+/// where it left off instead of re-parsing a multi-MB JSONL from byte 0.
+///
+/// Everything a mid-file resume needs to produce byte-identical results to a
+/// full re-parse rides along: `line_count` keeps `synthetic_line_id` stable,
+/// `turn_seq` keeps ordering monotonic, `usage_by_request` keeps the
+/// whole-file usage replace a *whole-file* total, `call_meta` keeps a tail
+/// `tool_result` matched to a prefix `tool_use`'s name, and
+/// `earliest`/`model_seen` keep backdating/model stamping correct. The offset
+/// only ever commits past newline-terminated lines, so a half-appended tail
+/// line is re-read (all accumulator updates are idempotent under re-read).
+/// Transcripts are append-only; a file that shrank invalidates the state and
+/// forces a full pass. Missing/corrupt state degrades to the old full
+/// re-parse, never to an error.
+#[derive(Default, Serialize, Deserialize)]
+struct ResumeState {
+    offset: u64,
+    line_count: usize,
+    turn_seq: i64,
+    earliest: Option<DateTime<Utc>>,
+    model_seen: Option<String>,
+    usage_by_request: HashMap<String, TokenTotals>,
+    call_meta: HashMap<String, (ToolName, i64)>,
+}
+
+/// A pathological transcript (tens of thousands of tool calls) could grow the
+/// serialized state without bound — past this, store no state and let the next
+/// changed pass re-parse from the top.
+const MAX_RESUME_STATE_BYTES: usize = 1_000_000;
+
+/// Resume state lives in a SIDECAR file (`.atlas/import-resume.json`, a map of
+/// transcript path → [`ResumeState`]), deliberately NOT in `sessions.db`: it
+/// is a pure cache (loss = one slower full re-parse), and the first attempt —
+/// a schema-9 column — locked every older Atlas build out of the whole store
+/// via the too-new gate, which read as total capture data loss. Cache files
+/// must never raise the schema floor.
+fn resume_sidecar_path(store: &Store) -> PathBuf {
+    store.atlas_root().join("import-resume.json")
+}
+
+fn load_resume_state(store: &Store, key: &str) -> Option<ResumeState> {
+    let raw = std::fs::read_to_string(resume_sidecar_path(store)).ok()?;
+    let mut map: HashMap<String, serde_json::Value> = serde_json::from_str(&raw).ok()?;
+    serde_json::from_value(map.remove(key)?).ok()
+}
+
+/// Best-effort write; a failed save just means the next pass re-parses.
+fn save_resume_state(store: &Store, key: &str, state: Option<&ResumeState>) {
+    let path = resume_sidecar_path(store);
+    let mut map: HashMap<String, serde_json::Value> = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default();
+    match state.and_then(|s| serde_json::to_value(s).ok()) {
+        Some(v) => {
+            map.insert(key.to_string(), v);
+        }
+        None => {
+            map.remove(key);
+        }
+    }
+    if let Ok(json) = serde_json::to_string(&map) {
+        let _ = std::fs::write(&path, json);
+    }
+}
+
 /// Import one transcript file.
 fn import_file(
     store: &mut Store,
     workspace_id: &str,
     path: &Path,
-    mode: WorkspaceMode,
+    mode: ProjectMode,
     outcome: &mut ImportOutcome,
 ) -> Result<()> {
     let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
@@ -307,35 +376,90 @@ fn import_file(
     let session_key = SessionKey {
         workspace_id: workspace_id.to_string(),
         source: Source::ExternalJsonl,
-        native_session_id: native_session_id.clone(),
+        native_session_id,
     };
 
+    // Resume from the last clean pass when the state is present, parses, and
+    // the file has not shrunk under it (see `ResumeState`). Anything else is a
+    // full re-parse — correct either way, resume is purely a cost saving.
+    let resume = load_resume_state(store, &key)
+        .filter(|st| st.offset > 0 && st.offset <= size)
+        .unwrap_or_default();
+
     let mut session_id: Option<String> = None;
-    let mut turn_seq = 0i64;
+    let mut turn_seq = resume.turn_seq;
     let mut imported_here = 0usize;
-    let mut earliest: Option<DateTime<Utc>> = None;
+    let mut earliest: Option<DateTime<Utc>> = resume.earliest;
     let mut clean_read = true;
     // The transcript names a call's tool only on its `tool_use` block; the
-    // matching `tool_result` carries just the id. Remembered per file so the
-    // result's upsert does not downgrade the stored name to `Other`.
-    let mut call_meta: HashMap<String, (ToolName, i64)> = HashMap::new();
+    // matching `tool_result` carries just the id. Remembered per file (and
+    // across resumed passes) so the result's upsert does not downgrade the
+    // stored name to `Other`.
+    let mut call_meta: HashMap<String, (ToolName, i64)> = resume.call_meta;
+    // Usage, deduplicated by request — see `read_usage`. Accumulated for the
+    // whole file (resume state carries the prefix's share) and written once at
+    // the end, because the total is only true once the file has been read.
+    let mut usage_by_request: HashMap<String, TokenTotals> = resume.usage_by_request;
+    // `read_turn` only sees `message.model` on lines that carry text, so a
+    // transcript whose assistant lines are all tool calls would never name its
+    // model. Taken from any line that has one.
+    let mut model_seen: Option<String> = resume.model_seen;
     let no_locations = serde_json::json!([]);
+
+    // Byte-accurate read loop (replacing `lines()`), because the resume offset
+    // must only ever commit past newline-terminated lines: a half-appended
+    // tail line is re-read next pass (every accumulator update is idempotent
+    // under re-read). Only the FINAL line can be unterminated, so it suffices
+    // to snapshot the counters before it and pick at the end.
+    use std::io::Seek;
+    let mut reader = BufReader::new(file);
+    let mut offset = resume.offset;
+    let mut line_count = resume.line_count;
+    if offset > 0 && reader.seek(std::io::SeekFrom::Start(offset)).is_err() {
+        // Unseekable → degrade to a full pass.
+        offset = 0;
+        line_count = 0;
+        turn_seq = 0;
+        earliest = None;
+        call_meta = HashMap::new();
+        usage_by_request = HashMap::new();
+        model_seen = None;
+        let _ = reader.rewind();
+    }
+    // Counters as of the start of the last (possibly unterminated) line.
+    let mut tail_start = (offset, line_count, turn_seq);
+    let mut tail_terminated = true;
 
     {
         let mut capture = Capture::new(store, mode);
 
-        for (line_index, line) in BufReader::new(file).lines().enumerate() {
-            let Ok(line) = line else {
+        let mut buf = String::new();
+        loop {
+            buf.clear();
+            let n = match reader.read_line(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => n,
                 // An I/O error mid-file ends this pass. `clean_read` keeps the
                 // progress marker honest below — recording the full file size
                 // here would permanently skip the unread tail.
-                clean_read = false;
-                break;
+                Err(_) => {
+                    clean_read = false;
+                    break;
+                }
             };
+            tail_start = (offset, line_count, turn_seq);
+            tail_terminated = buf.ends_with('\n');
+            let line_index = line_count;
+            line_count += 1;
+            offset += n as u64;
+            // Same trimming `lines()` did, so `synthetic_line_id` stays
+            // byte-identical to ids minted by earlier builds.
+            let line = buf.strip_suffix('\n').unwrap_or(buf.as_str());
+            let line = line.strip_suffix('\r').unwrap_or(line);
             if line.trim().is_empty() {
                 continue;
             }
-            let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
                 // A transcript being appended to while it is read ends mid-object.
                 outcome.malformed_lines += 1;
                 continue;
@@ -344,7 +468,11 @@ fn import_file(
             // Sidechain lines are a subagent's own conversation, not this Session's,
             // and including them would double-count work under the wrong Session —
             // consistent with the existing replay behaviour.
-            if value.get("isSidechain").and_then(serde_json::Value::as_bool) == Some(true) {
+            if value
+                .get("isSidechain")
+                .and_then(serde_json::Value::as_bool)
+                == Some(true)
+            {
                 continue;
             }
             // Meta lines are the harness talking to itself — injected context,
@@ -353,6 +481,36 @@ fn import_file(
             // command caveat become a Session's title.
             if value.get("isMeta").and_then(serde_json::Value::as_bool) == Some(true) {
                 continue;
+            }
+
+            // Read before the "nothing usable here" filter below: a tool-only
+            // assistant line produces no turn and no tool_result, and dropping
+            // it would silently lose the usage of every tool-calling request.
+            if let Some(line_usage) = read_usage(&value) {
+                let slot = usage_by_request.entry(line_usage.key).or_default();
+                // Per-field max rather than overwrite: two copies of one
+                // request disagree when the first was written mid-stream, and
+                // the finished one is the larger.
+                slot.input_tokens = slot.input_tokens.max(line_usage.totals.input_tokens);
+                slot.output_tokens = slot.output_tokens.max(line_usage.totals.output_tokens);
+                slot.cache_creation_tokens = slot
+                    .cache_creation_tokens
+                    .max(line_usage.totals.cache_creation_tokens);
+                slot.cache_read_tokens = slot
+                    .cache_read_tokens
+                    .max(line_usage.totals.cache_read_tokens);
+            }
+            // Assistant lines only: the model is a property of what answered,
+            // and a user line that happens to carry one is echoing the client's
+            // request rather than reporting what ran.
+            if model_seen.is_none()
+                && value.get("type").and_then(serde_json::Value::as_str) == Some("assistant")
+            {
+                model_seen = value
+                    .get("message")
+                    .and_then(|m| m.get("model"))
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string);
             }
 
             let created_at = line_timestamp(&value);
@@ -380,10 +538,16 @@ fn import_file(
                         .as_ref()
                         .map(|t| (t.agent.as_deref(), t.model.as_deref()))
                         .unwrap_or((None, None));
+                    // No branch: an imported transcript is read long after the
+                    // fact, and today's HEAD says nothing about where the work
+                    // was done. Guessing it would be worse than leaving it
+                    // empty — the same reason imported Sessions get no
+                    // Checkpoints.
                     let id = capture.ensure_session(
                         &session_key,
                         agent.or(Some("claude-code")),
                         model,
+                        None,
                         None,
                     )?;
                     session_id = Some(id.clone());
@@ -408,7 +572,7 @@ fn import_file(
                 let native_id = turn
                     .native_id
                     .clone()
-                    .unwrap_or_else(|| synthetic_line_id(line_index, &line));
+                    .unwrap_or_else(|| synthetic_line_id(line_index, line));
 
                 match capture.record_turn(
                     &id,
@@ -437,8 +601,12 @@ fn import_file(
             // block id is the idempotency key, so re-reads are free.
             let call_turn = turn_seq.max(1);
             for tool_use in &tool_uses {
-                let name =
-                    canonical_name(Some(&tool_use.name), Some(&tool_use.name), None, &tool_use.input);
+                let name = canonical_name(
+                    Some(&tool_use.name),
+                    Some(&tool_use.name),
+                    None,
+                    &tool_use.input,
+                );
                 call_meta.insert(tool_use.id.clone(), (name, call_turn));
                 let arguments = tool_use.input.to_string();
                 match capture.record_tool_call(
@@ -498,6 +666,32 @@ fn import_file(
 
     if let Some(id) = &session_id {
         outcome.sessions_imported += imported_here;
+
+        // The whole-file total, deduplicated by request and written as a
+        // replace. After an I/O error this covers only the prefix that was
+        // read, which is correct: the progress marker below is not advanced, so
+        // the next pass recomputes the file from the top.
+        let mut usage = TokenTotals::default();
+        for request in usage_by_request.values() {
+            usage.input_tokens = usage.input_tokens.saturating_add(request.input_tokens);
+            usage.output_tokens = usage.output_tokens.saturating_add(request.output_tokens);
+            usage.cache_creation_tokens = usage
+                .cache_creation_tokens
+                .saturating_add(request.cache_creation_tokens);
+            usage.cache_read_tokens = usage
+                .cache_read_tokens
+                .saturating_add(request.cache_read_tokens);
+        }
+        if usage != TokenTotals::default() {
+            store.replace_usage_totals(id, &usage)?;
+        }
+        // The model, when the Session did not already have one — `COALESCE` in
+        // the upsert takes the new value and leaves an existing one alone.
+        if let Some(model) = &model_seen {
+            let mut capture = Capture::new(store, mode);
+            capture.ensure_session(&session_key, None, Some(model.as_str()), None, None)?;
+        }
+
         // Live capture stamped "now" at first sighting; the transcript knows
         // when the conversation really began. Without this, a year of imported
         // history all dates from the day the import ran.
@@ -511,9 +705,77 @@ fn import_file(
     // so the next pass resumes rather than skipping it; the per-line ids make
     // the re-read a no-op for everything already taken.
     if clean_read {
+        // Persist the accumulator so the next pass over a grown file resumes
+        // mid-file. Committed counters exclude an unterminated tail line (it
+        // will be re-read); the maps keep the tail line's contributions, which
+        // is safe — every map update is max/insert-idempotent under re-read.
+        let (c_offset, c_line_count, c_turn_seq) = if tail_terminated {
+            (offset, line_count, turn_seq)
+        } else {
+            tail_start
+        };
+        let state = ResumeState {
+            offset: c_offset,
+            line_count: c_line_count,
+            turn_seq: c_turn_seq,
+            earliest,
+            model_seen,
+            usage_by_request,
+            call_meta,
+        };
+        let small_enough = serde_json::to_string(&state)
+            .map(|s| s.len() <= MAX_RESUME_STATE_BYTES)
+            .unwrap_or(false);
         store.set_import_progress(&key, size)?;
+        save_resume_state(store, &key, small_enough.then_some(&state));
     }
     Ok(())
+}
+
+/// The usage one assistant line reports, with the request it belongs to.
+struct UsageLine {
+    key: String,
+    totals: TokenTotals,
+}
+
+/// Read `message.usage` off an assistant line.
+///
+/// The transcript writes the same logical assistant message more than once — a
+/// streaming record, then its rewrite — and every copy repeats the same usage
+/// block. On a real transcript here, 18 usage lines collapsed to 8 requests:
+/// summing lines instead of requests over-counts by 2.2x. `requestId` is the
+/// key that collapses them, falling back to the message id and then the line's
+/// own uuid so a line without one is at least counted once rather than merged
+/// into a neighbour.
+fn read_usage(value: &serde_json::Value) -> Option<UsageLine> {
+    let message = value.get("message")?;
+    let usage = message.get("usage")?;
+    let key = value
+        .get("requestId")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| message.get("id").and_then(serde_json::Value::as_str))
+        .or_else(|| value.get("uuid").and_then(serde_json::Value::as_str))?
+        .to_string();
+
+    let field = |name: &str| {
+        usage
+            .get(name)
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0)
+    };
+    let totals = TokenTotals {
+        input_tokens: field("input_tokens"),
+        output_tokens: field("output_tokens"),
+        cache_creation_tokens: field("cache_creation_input_tokens"),
+        cache_read_tokens: field("cache_read_input_tokens"),
+        ..Default::default()
+    };
+    // A usage block of all zeros carries no information and would otherwise
+    // occupy a request slot, so an empty total stays empty.
+    if totals == TokenTotals::default() {
+        return None;
+    }
+    Some(UsageLine { key, totals })
 }
 
 /// One usable line of a transcript.
@@ -565,7 +827,9 @@ fn is_envelope(turn: &ImportedTurn) -> bool {
         "<task-notification>",
         "[Request interrupted",
     ];
-    ENVELOPE_PREFIXES.iter().any(|prefix| body.starts_with(prefix))
+    ENVELOPE_PREFIXES
+        .iter()
+        .any(|prefix| body.starts_with(prefix))
 }
 
 fn read_turn(value: &serde_json::Value) -> Option<ImportedTurn> {
@@ -619,7 +883,10 @@ fn read_tool_uses(value: &serde_json::Value) -> Vec<ToolUse> {
                 return None;
             }
             Some(ToolUse {
-                id: block.get("id").and_then(serde_json::Value::as_str)?.to_string(),
+                id: block
+                    .get("id")
+                    .and_then(serde_json::Value::as_str)?
+                    .to_string(),
                 name: block
                     .get("name")
                     .and_then(serde_json::Value::as_str)
@@ -776,7 +1043,9 @@ mod tests {
     fn a_thinking_only_message_is_recognised_as_thinking() {
         let content = serde_json::json!([{ "type": "thinking", "thinking": "hmm" }]);
         assert!(is_thinking(Some(&content)));
-        assert!(!is_thinking(Some(&serde_json::json!([{ "type": "text", "text": "hi" }]))));
+        assert!(!is_thinking(Some(
+            &serde_json::json!([{ "type": "text", "text": "hi" }])
+        )));
     }
 
     #[test]
@@ -805,7 +1074,10 @@ mod tests {
                   "is_error": true },
             ] },
         });
-        assert!(read_turn(&line).is_none(), "a result is not a conversation turn");
+        assert!(
+            read_turn(&line).is_none(),
+            "a result is not a conversation turn"
+        );
         let results = read_tool_results(&line);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].tool_use_id, "toolu_01");
@@ -844,7 +1116,10 @@ mod tests {
         // two identical lines distinct.
         assert_eq!(synthetic_line_id(3, "same"), synthetic_line_id(3, "same"));
         assert_ne!(synthetic_line_id(3, "same"), synthetic_line_id(4, "same"));
-        assert_ne!(synthetic_line_id(3, "same"), synthetic_line_id(3, "different"));
+        assert_ne!(
+            synthetic_line_id(3, "same"),
+            synthetic_line_id(3, "different")
+        );
     }
 
     #[test]
@@ -854,7 +1129,10 @@ mod tests {
         // re-aborts on every tick.
         assert!(is_fatal(&Error::AlreadyLocked));
         assert!(is_fatal(&Error::Storage("disk full".into())));
-        assert!(is_fatal(&Error::SchemaTooNew { found: 9, supported: 1 }));
+        assert!(is_fatal(&Error::SchemaTooNew {
+            found: 9,
+            supported: 1
+        }));
         assert!(!is_fatal(&Error::RedactionFailed("panicked".into())));
         assert!(!is_fatal(&Error::Blob("unwritable".into())));
     }

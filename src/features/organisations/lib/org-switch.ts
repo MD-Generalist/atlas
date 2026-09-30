@@ -1,15 +1,29 @@
 import { logEvent } from "@/features/log/lib/log";
-import { flushAll } from "@/features/workspaces/lib/flush-registry";
-import { useWorkspaceStore } from "@/features/workspaces/stores/workspace-store";
+import { useLogStore } from "@/features/log/stores/log-store";
+import { flushAll } from "@/features/projects/lib/flush-registry";
+import { useProjectStore } from "@/features/projects/stores/project-store";
+import { resetGitSummariesForOrgSwitch } from "@/features/projects/stores/project-git-store";
+import { commsActions } from "@/features/comms/stores/comms-store";
+import { comms } from "@/features/comms/lib/comms-api";
+import { markOrgReconciled } from "./org-reconciliation";
+import { useLayoutStore } from "@/features/layout/stores/layout-store";
+import { useSpacesStore } from "@/features/spaces/stores/spaces-store";
+import { ORG_SCOPED_TYPES } from "@/lib/constants";
 import {
-  useProjectStore,
+  useAppStore,
   flushAppStateSave,
   scheduleAppStateSave,
-} from "@/features/project/stores/project-store";
+} from "@/features/app/stores/app-store";
 import { toast } from "sonner";
+import { invoke } from "@tauri-apps/api/core";
 import { auth } from "@/features/auth/lib/auth-api";
 import { useAuthStore } from "@/features/auth/stores/auth-store";
 import { useOrgStore } from "../stores/org-store";
+import {
+  busySessions,
+  cancelBusySessions,
+  useStopAgentsConfirmStore,
+} from "@/features/projects/lib/stop-agents-confirm";
 
 /** Minimum time the "Loading Organisation…" overlay stays up, so a fast switch
  *  doesn't flash it. */
@@ -20,11 +34,11 @@ let switchingOrg = false;
 
 /**
  * Switch the active Organisation. Tears down the OUTGOING org's entire mounted
- * workspace set (RAM freed, Rust watchers stopped), then brings the INCOMING
- * org's last-active (or most-recent) workspace online — the same cold-load path
+ * project set (RAM freed, Rust watchers stopped), then brings the INCOMING
+ * org's last-active (or most-recent) project online — the same cold-load path
  * as boot hydration — behind a full-app "Loading Organisation…" overlay.
  *
- * Mirrors the workspace `switchTo` contract: the active workspace is flushed
+ * Mirrors the project `switchTo` contract: the active project is flushed
  * (awaited) before teardown so no unsaved KB/editor state is stranded.
  */
 export async function switchOrg(id: string): Promise<void> {
@@ -37,45 +51,138 @@ export async function switchOrg(id: string): Promise<void> {
   if (!target) return;
 
   switchingOrg = true;
+  // From here on the desktop's choice is pushed by THIS path; the boot
+  // reconciliation must not fire a competing, unordered push after it.
+  markOrgReconciled();
+
+  // Running agents die with the outgoing org's teardown — never silently.
+  // Warn first (before the overlay, so the dialog is readable); "Go back"
+  // aborts the switch entirely. Only the mounted (= outgoing) org's sessions
+  // can be busy, so an unscoped count is the outgoing org's count.
+  const busy = busySessions().length;
+  if (busy > 0) {
+    const ok = await useStopAgentsConfirmStore.getState().actions.ask({
+      count: busy,
+      actionLabel: "Switching organisations",
+      confirmLabel: "Stop agents & switch",
+    });
+    if (!ok) {
+      switchingOrg = false;
+      return;
+    }
+  }
+
   orgActions.setSwitching(true);
   const startedAt = Date.now();
 
   try {
-    const wsActions = useWorkspaceStore.getState().actions;
-    const projectActions = useProjectStore.getState().actions;
-    const outgoingActiveWs =
-      useWorkspaceStore.getState().activeWorkspaceId;
-    const outgoingPath =
-      useProjectStore.getState().currentProject?.path ?? null;
-
-    // 1) Remember the outgoing org's active workspace so switching back
-    //    restores the user where they left off.
-    if (activeOrganisationId) {
-      orgActions.setActiveWorkspaceForOrg(activeOrganisationId, outgoingActiveWs);
+    // 0) Close the outgoing org's org-scoped centre tabs FIRST — before the
+    //    flush below, so they are not captured into the outgoing project's
+    //    editor state on the way out. Their ids embed this org's
+    //    conversation/draft ids and mean nothing in the incoming one.
+    //    (The Spaces sockets die with the Rust retarget's `disconnect_all`;
+    //    unmounting the tab closes each canvas's socket first anyway.)
+    {
+      const layout = useLayoutStore.getState();
+      for (const tab of layout.tabs) {
+        if (ORG_SCOPED_TYPES.has(tab.type)) layout.actions.closeTab(tab.id);
+      }
+      useSpacesStore.getState().actions.clearAll();
     }
 
-    // 2) Flush the active workspace's unsaved state (KB buffer, editor tabs)
+    const wsActions = useProjectStore.getState().actions;
+    const projectActions = useAppStore.getState().actions;
+    const outgoingActiveWs = useProjectStore.getState().activeProjectId;
+    const outgoingPath = useAppStore.getState().currentProject?.path ?? null;
+
+    // 1) Remember the outgoing org's active project so switching back
+    //    restores the user where they left off.
+    if (activeOrganisationId) {
+      orgActions.setActiveProjectForOrg(activeOrganisationId, outgoingActiveWs);
+    }
+
+    // 2) Flush the active project's unsaved state (KB buffer, editor tabs)
     //    BEFORE teardown — awaited, exactly like `switchTo`. Then persist the
-    //    workspace list + org active-ws pointers to disk.
+    //    project list + org active-ws pointers to disk.
     if (outgoingActiveWs) {
-      await flushAll({ workspaceId: outgoingActiveWs, path: outgoingPath });
+      await flushAll({ projectId: outgoingActiveWs, path: outgoingPath });
     }
     await flushAppStateSave();
 
-    // 3) Tear down the whole outgoing hot set + clear the active workspace.
+    // 3) Cancel any still-running turns BEFORE dropping their sessions —
+    //    `drop_session` alone never tells the adapter subprocess, which would
+    //    keep editing files headless after the teardown.
+    await cancelBusySessions();
+
+    //    Tear down the whole outgoing hot set + clear the active project.
     //    Setting the project to null fires the App-level Rust lifecycle
     //    effects' null-branch (file index / git watch / recent files / mention
     //    cache all close), stopping the old org's watchers.
     wsActions.teardownForOrgSwitch();
     projectActions.setActiveProject(null);
 
-    // 4) Make the org swap authoritative.
+    //    Drop the git-summary "already fetched" flags so the incoming org's
+    //    sidebar rows re-validate instead of rendering cached-forever data.
+    resetGitSummariesForOrgSwitch();
+
+    //    Tell the comms store which org is coming BEFORE the socket goes
+    //    down: from this point it drops stragglers from the outgoing org and
+    //    ignores any snapshot that is not the incoming org's. Then close the
+    //    team-chat socket (Rust forgets the target, so the reopen below is
+    //    always a change). There is no matching "open" here: step 4's awaited
+    //    `auth_set_active_org` triggers the auth broadcast, and Rust re-points
+    //    the socket from there — so every other path that changes the active
+    //    org is correct for free.
+    const incomingRemoteId = target.remoteId ?? null;
+    commsActions().beginSwitch(incomingRemoteId);
+    await invoke("comms_disconnect").catch(() => {});
+
+    // 4) Make the org swap authoritative. `setActiveOrganisation` also
+    //    re-points analytics attribution (see `syncOrgTelemetry`), so events
+    //    from here on are filed under the incoming org.
     orgActions.setActiveOrganisation(id);
 
-    // 5) Resolve the incoming org's target workspace and bring it online via
+    //    The switch must reach the BACKEND too (#73): every gateway request
+    //    reads the active org from the Rust auth snapshot, so a frontend-only
+    //    switch keeps billing — and entitlement-checking — the previous org,
+    //    which is how an unentitled org appeared to work. Awaited, so the
+    //    first message sent in the new org cannot race the write. A
+    //    local-only org (no remoteId) pins "none": billing falls back the way
+    //    the auth store documents, and the chat socket stays closed.
+    //
+    //    Retried once, and loud on failure: with the renderer already on the
+    //    new org and Rust still on the old one, every chat envelope would be
+    //    a straggler and the panel would sit empty with no explanation.
+    let pushed = false;
+    for (let attempt = 0; attempt < 2 && !pushed; attempt += 1) {
+      try {
+        await invoke("auth_set_active_org", { orgId: incomingRemoteId });
+        pushed = true;
+      } catch (err) {
+        console.warn("auth_set_active_org failed:", err);
+      }
+    }
+    if (!pushed) {
+      toast.error("Couldn't switch team chat to this organisation. Switch away and back to retry.");
+    }
+    //    Rust has (re)targeted synchronously inside that command: pull the
+    //    incoming org's disk-painted snapshot now, and ask Rust to re-announce
+    //    so the connection state lands even if the socket opened before the
+    //    listener drained.
+    commsActions().endSwitch();
+    void comms.ready().catch(() => {});
+
+    //    Re-scope the activity console the same way: drop the outgoing org's
+    //    buffered entries and load the incoming org's pins. Without this the
+    //    console keeps showing work from projects the teardown above just
+    //    unmounted, which is the one surface in the app that would still be
+    //    global after an org switch.
+    void useLogStore.getState().actions.setOrg(id);
+
+    // 5) Resolve the incoming org's target project and bring it online via
     //    the normal cold-load path. `switchTo` runs `loadProjectStores` + the
-    //    App Rust-lifecycle effects for the new active workspace.
-    const targetWsId = resolveTargetWorkspace(id, target.activeWorkspaceId);
+    //    App Rust-lifecycle effects for the new active project.
+    const targetWsId = resolveTargetProject(id, target.activeProjectId);
     if (targetWsId) {
       await wsActions.switchTo(targetWsId);
     } else {
@@ -88,7 +195,10 @@ export async function switchOrg(id: string): Promise<void> {
       source: "project",
       kind: "org-switch",
       summary: target.name,
-      payload: { orgId: id, workspaceId: targetWsId ?? null },
+      // `projectId`, not `workspaceId` — see the note on the same key in
+      // `project-store.ts`'s `switchTo`. Nothing reads the activity log's
+      // payload, so there is nothing to keep the old spelling for.
+      payload: { orgId: id, projectId: targetWsId ?? null },
     });
   } finally {
     // Keep the overlay up for a minimum time so it never flashes.
@@ -103,9 +213,9 @@ export async function switchOrg(id: string): Promise<void> {
 
 /**
  * Delete an organisation and every piece of app-state scoped to it (its
- * workspace/group references + recent chats for those projects). Refuses to
+ * project/group references + recent chats for those projects). Refuses to
  * delete the only remaining org. If the target is the active org, switches to
- * another org FIRST (tearing down its workspace set behind the loading overlay)
+ * another org FIRST (tearing down its project set behind the loading overlay)
  * so nothing dangles, then purges. Returns whether it deleted.
  *
  * Note: the user's actual project files + on-disk `.atlas/` data are NOT
@@ -138,7 +248,7 @@ export async function deleteOrgAndData(id: string): Promise<boolean> {
     }
   }
 
-  // `id` is now guaranteed inactive (its workspaces are cold) → pure purge.
+  // `id` is now guaranteed inactive (its projects are cold) → pure purge.
   const ok = useOrgStore.getState().actions.deleteOrg(id);
   if (ok) {
     logEvent({ source: "project", kind: "org-delete", summary: id });
@@ -147,16 +257,13 @@ export async function deleteOrgAndData(id: string): Promise<boolean> {
 }
 
 /**
- * Pick the workspace to open when entering an org: its remembered
- * `activeWorkspaceId` if it still exists, else the most-recently-active
- * workspace in that org, else none (empty org).
+ * Pick the project to open when entering an org: its remembered
+ * `activeProjectId` if it still exists, else the most-recently-active
+ * project in that org, else none (empty org).
  */
-function resolveTargetWorkspace(
-  orgId: string,
-  savedActiveWs: string | undefined,
-): string | null {
-  const { workspaces } = useWorkspaceStore.getState();
-  const inOrg = workspaces.filter((w) => w.orgId === orgId);
+function resolveTargetProject(orgId: string, savedActiveWs: string | undefined): string | null {
+  const { projects } = useProjectStore.getState();
+  const inOrg = projects.filter((w) => w.orgId === orgId);
   if (savedActiveWs && inOrg.some((w) => w.id === savedActiveWs)) {
     return savedActiveWs;
   }

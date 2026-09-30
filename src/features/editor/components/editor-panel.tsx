@@ -1,13 +1,18 @@
-import { useEffect, useRef, useCallback } from "react";
-import { EditorView, keymap, lineNumbers, highlightActiveLine, drawSelection } from "@codemirror/view";
-import { EditorState, Compartment, Transaction, type Extension } from "@codemirror/state";
+import { useState, useEffect, useRef, useCallback } from "react";
+import {
+  EditorView,
+  keymap,
+  lineNumbers,
+  highlightActiveLine,
+  drawSelection,
+} from "@codemirror/view";
+import { EditorState, Compartment, Transaction } from "@codemirror/state";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
-import { bracketMatching, foldGutter, indentOnInput, syntaxHighlighting } from "@codemirror/language";
+import { bracketMatching, foldGutter, indentOnInput } from "@codemirror/language";
 import { searchKeymap, highlightSelectionMatches } from "@codemirror/search";
-import { getEditorTheme } from "../themes/themes";
-import { buildEditorChromeTheme, buildHighlightStyle } from "../themes/build-cm-theme";
+import { editorThemeExtensions } from "../themes/build-cm-theme";
 import { useEditorStore } from "../stores/editor-store";
-import { useProjectStore } from "@/features/project/stores/project-store";
+import { useAppStore } from "@/features/app/stores/app-store";
 import { useLayoutStore } from "@/features/layout/stores/layout-store";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -16,88 +21,25 @@ import { logEvent } from "@/features/log/lib/log";
 import { diffGutter, applyDiffStatus } from "../lib/diff-gutter";
 import { gitDiffLineStatus } from "@/features/git/lib/git-diff-api";
 import { blameInline, applyBlame } from "../lib/blame-inline";
+import { loadLanguageExtension } from "../lib/languages";
+import { applyReveal } from "../lib/reveal";
+import { registerEditorView } from "../lib/editor-views";
 import { gitBlameFile } from "@/features/git/lib/git-blame-api";
+import { MarkdownFile } from "@/lib/markdown-fileviewer";
+import { openFileAs } from "@/lib/open-file";
+import { cn } from "@/lib/utils";
+import { useSettingsStore } from "@/features/settings/stores/settings-store";
 
 const TOOLBAR_HEIGHT = 32;
 const DIRTY_CHECK_DEBOUNCE = 300; // ms — only check dirty state, not sync content
 
-// Editor theme — live-swappable via a Compartment. The concrete colors come
-// from the theme registry (src/features/editor/themes), keyed by the persisted
-// `settings.codeEditorTheme`.
+// Theme colours are live-swappable through a compartment; the resolved theme
+// is shared with the rest of Atlas rather than selected independently.
 const themeCompartment = new Compartment();
 
 // Inline git blame — live-toggleable via a Compartment so flipping the
 // `gitBlameInline` setting doesn't rebuild the view (buffer/undo survive).
 const blameCompartment = new Compartment();
-
-function themeExtensions(themeId: string | undefined | null): Extension {
-  const theme = getEditorTheme(themeId);
-  return [buildEditorChromeTheme(theme), syntaxHighlighting(buildHighlightStyle(theme))];
-}
-
-// Language extension loader — lazy imports for tree-shaking
-async function getLanguageExtension(lang: string): Promise<Extension> {
-  switch (lang) {
-    case "typescript":
-    case "javascript": {
-      const { javascript } = await import("@codemirror/lang-javascript");
-      return javascript({ typescript: lang === "typescript", jsx: true });
-    }
-    case "rust": {
-      const { rust } = await import("@codemirror/lang-rust");
-      return rust();
-    }
-    case "python": {
-      const { python } = await import("@codemirror/lang-python");
-      return python();
-    }
-    case "go": {
-      const { go } = await import("@codemirror/lang-go");
-      return go();
-    }
-    case "json": {
-      const { json } = await import("@codemirror/lang-json");
-      return json();
-    }
-    case "markdown": {
-      const { markdown } = await import("@codemirror/lang-markdown");
-      return markdown();
-    }
-    case "html": {
-      const { html } = await import("@codemirror/lang-html");
-      return html();
-    }
-    case "css":
-    case "scss": {
-      const { css } = await import("@codemirror/lang-css");
-      return css();
-    }
-    case "java": {
-      const { java } = await import("@codemirror/lang-java");
-      return java();
-    }
-    case "c":
-    case "cpp": {
-      const { cpp } = await import("@codemirror/lang-cpp");
-      return cpp();
-    }
-    case "xml": {
-      const { xml } = await import("@codemirror/lang-xml");
-      return xml();
-    }
-    case "sql": {
-      const { sql } = await import("@codemirror/lang-sql");
-      return sql();
-    }
-    case "yaml":
-    case "toml": {
-      const { yaml } = await import("@codemirror/lang-yaml");
-      return yaml();
-    }
-    default:
-      return [];
-  }
-}
 
 interface EditorPanelProps {
   tabId: string;
@@ -111,7 +53,7 @@ export function EditorPanel({ tabId, filePath, containerHeight }: EditorPanelPro
   const buffer = useEditorStore((s) => s.buffers[path]);
   const { openBuffer, setDirty, markSaved, reloadBuffer, markExternallyChanged } =
     useEditorStore.use.actions();
-  const projectPath = useProjectStore.use.currentProject()?.path ?? "";
+  const projectPath = useAppStore.use.currentProject()?.path ?? "";
   const layoutActions = useLayoutStore.use.actions();
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -119,6 +61,32 @@ export function EditorPanel({ tabId, filePath, containerHeight }: EditorPanelPro
   const refreshGutterRef = useRef<() => void>(() => {});
   const refreshBlameRef = useRef<() => void>(() => {});
   const dirtyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const [renderMode, setRenderMode] = useState<"editor" | "preview">("editor");
+  // Bumped when a view is built, so a reveal that arrived before the view
+  // existed (a file opened at a line) is applied the moment it does.
+  const [viewGen, setViewGen] = useState(0);
+  const unregisterViewRef = useRef<(() => void) | null>(null);
+  const pendingReveal = useEditorStore((s) => s.pendingReveals[path]);
+  const consumeReveal = useEditorStore.use.actions().consumeReveal;
+  const resolvedFileType = (
+    buffer?.language ??
+    path.split(".").pop()?.toLowerCase() ??
+    ""
+  ).toLowerCase();
+  const isMarkdownFile = resolvedFileType === "markdown";
+  // Preview is a markdown-only concept. Deriving (not just gating the toggle)
+  // matters twice over: a stale "preview" renderMode from a previous markdown
+  // file must not blank the editor for the next file, and the preview pane
+  // must never MOUNT for other file types — react-markdown with rehypeRaw
+  // parses arbitrary source text as HTML, and any literal `<input ref={…}>`
+  // in a .tsx file is a fatal React error (string refs), which is exactly how
+  // opening files used to crash the app.
+  const effectiveMode = isMarkdownFile ? renderMode : "editor";
+  // A tab can be reused for another file; each file starts in the editor.
+  useEffect(() => {
+    setRenderMode("editor");
+  }, [path]);
 
   // Load file content from disk — unless this is an untitled scratch
   // buffer (Cmd+N), in which case we seed an empty buffer in-memory
@@ -167,14 +135,7 @@ export function EditorPanel({ tabId, filePath, containerHeight }: EditorPanelPro
         // Swap the tab in place: close untitled, open real-path tab
         // with the same activation behavior addTab gives.
         layoutActions.closeTab(tabId);
-        layoutActions.addTab({
-          id: `editor-${newPath}`,
-          type: "editor",
-          title: newPath.split("/").pop() ?? newPath,
-          closable: true,
-          dirty: false,
-          data: { filePath: newPath },
-        });
+        openFileAs(newPath, "text");
         logEvent({
           source: "editor",
           kind: "save",
@@ -197,7 +158,7 @@ export function EditorPanel({ tabId, filePath, containerHeight }: EditorPanelPro
         payload: { path, bytes: content.length },
       });
       // A save mutates the working tree — refresh git status/dots + diff
-      // right now instead of waiting for the workspace fs watcher (FSEvents
+      // right now instead of waiting for the project fs watcher (FSEvents
       // latency + fileindex 150 ms + git-store debounce). Lazy-imported to
       // keep the editor decoupled from the git store.
       void import("@/features/git/stores/git-store").then(({ useGitStore }) => {
@@ -242,7 +203,7 @@ export function EditorPanel({ tabId, filePath, containerHeight }: EditorPanelPro
   const refreshBlame = useCallback(() => {
     const view = viewRef.current;
     if (!view || isUntitled || !projectPath) return;
-    if (!useProjectStore.getState().settings.gitBlameInline) return;
+    if (!useSettingsStore.getState().settings.gitBlameInline) return;
     if (!path.startsWith(projectPath + "/")) return;
     if (useEditorStore.getState().buffers[path]?.dirty) return;
     const rel = path.slice(projectPath.length + 1);
@@ -370,18 +331,18 @@ export function EditorPanel({ tabId, filePath, containerHeight }: EditorPanelPro
     let cancelled = false;
 
     (async () => {
-      const langExt = await getLanguageExtension(buffer.language);
+      const langExt = await loadLanguageExtension(buffer.language);
       if (cancelled) return;
 
       const view = new EditorView({
         doc: originalContent,
         extensions: [
-          themeCompartment.of(themeExtensions(useProjectStore.getState().settings.codeEditorTheme)),
+          themeCompartment.of(editorThemeExtensions()),
           langExt,
           lineNumbers(),
           diffGutter(),
           blameCompartment.of(
-            useProjectStore.getState().settings.gitBlameInline ? blameInline() : [],
+            useSettingsStore.getState().settings.gitBlameInline ? blameInline() : [],
           ),
           highlightActiveLine(),
           drawSelection(),
@@ -391,7 +352,13 @@ export function EditorPanel({ tabId, filePath, containerHeight }: EditorPanelPro
           history(),
           highlightSelectionMatches(),
           keymap.of([
-            { key: "Mod-s", run: () => { onSaveRef.current(); return true; } },
+            {
+              key: "Mod-s",
+              run: () => {
+                onSaveRef.current();
+                return true;
+              },
+            },
             indentWithTab,
             ...defaultKeymap,
             ...historyKeymap,
@@ -425,11 +392,15 @@ export function EditorPanel({ tabId, filePath, containerHeight }: EditorPanelPro
       if (latest !== undefined) replaceViewDoc(latest);
       refreshDiffGutter();
       refreshBlameRef.current();
+      unregisterViewRef.current = registerEditorView(tabId, view);
+      setViewGen((g) => g + 1);
     })();
 
     return () => {
       cancelled = true;
       if (dirtyTimerRef.current) clearTimeout(dirtyTimerRef.current);
+      unregisterViewRef.current?.();
+      unregisterViewRef.current = null;
       if (viewRef.current) {
         viewRef.current.destroy();
         viewRef.current = null;
@@ -437,18 +408,38 @@ export function EditorPanel({ tabId, filePath, containerHeight }: EditorPanelPro
     };
   }, [path, !!buffer]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Live-reskin the editor when the persisted theme changes — reconfigure the
-  // theme compartment in place so the buffer/undo history survive.
-  const codeEditorTheme = useProjectStore.use.settings().codeEditorTheme;
+  // Apply a pending reveal ("open at line") once the view exists. Editor tabs
+  // stay mounted while hidden, so a reveal on an open tab lands at once; one
+  // for a file still loading waits for `viewGen`. Markdown preview hides the
+  // view, so it switches to the editor first and applies on the next render.
   useEffect(() => {
     const view = viewRef.current;
-    if (!view) return;
-    view.dispatch({ effects: themeCompartment.reconfigure(themeExtensions(codeEditorTheme)) });
-  }, [codeEditorTheme]);
+    if (!pendingReveal || !view) return;
+    if (effectiveMode !== "editor") {
+      setRenderMode("editor");
+      return;
+    }
+    applyReveal(view, pendingReveal);
+    consumeReveal(path, pendingReveal.nonce);
+  }, [pendingReveal, viewGen, effectiveMode, path, consumeReveal]);
+
+  // Live-reskin the editor when the persisted theme changes — reconfigure the
+  // theme compartment in place so the buffer/undo history survive.
+  const theme = useSettingsStore.use.settings().theme;
+  useEffect(() => {
+    const refreshTheme = () => {
+      const view = viewRef.current;
+      if (!view) return;
+      view.dispatch({ effects: themeCompartment.reconfigure(editorThemeExtensions()) });
+    };
+    refreshTheme();
+    window.addEventListener("atlas:theme-applied", refreshTheme);
+    return () => window.removeEventListener("atlas:theme-applied", refreshTheme);
+  }, [theme]);
 
   // Live-toggle inline blame: reconfigure the compartment in place; turning it
   // on also fetches a fresh snapshot (the extension starts empty).
-  const gitBlameInline = useProjectStore.use.settings().gitBlameInline;
+  const gitBlameInline = useSettingsStore.use.settings().gitBlameInline;
   useEffect(() => {
     const view = viewRef.current;
     if (!view) return;
@@ -460,52 +451,105 @@ export function EditorPanel({ tabId, filePath, containerHeight }: EditorPanelPro
 
   if (!buffer) {
     return (
-      <div className="h-full flex items-center justify-center text-text-tertiary text-sm">
+      <div className="h-full flex items-center justify-center text-muted-foreground text-sm">
         Loading...
       </div>
     );
   }
 
-  const editorHeight = containerHeight > TOOLBAR_HEIGHT
-    ? containerHeight - TOOLBAR_HEIGHT
-    : window.innerHeight - 140;
+  const editorHeight =
+    containerHeight > TOOLBAR_HEIGHT ? containerHeight - TOOLBAR_HEIGHT : window.innerHeight - 140;
 
   return (
-    <div style={{ background: "#000000", height: containerHeight || "100%", overflow: "hidden" }}>
+    <div
+      className="bg-background"
+      style={{ height: containerHeight || "100%", overflow: "hidden" }}
+    >
       {/* Breadcrumb toolbar */}
       <div
-        className="flex items-center px-3 border-b border-border-default bg-bg-primary overflow-hidden"
+        className="flex items-center px-3 border-b border-border bg-background overflow-hidden"
         style={{ height: TOOLBAR_HEIGHT }}
       >
         <Breadcrumbs filePath={path} projectPath={projectPath} />
-        {buffer.dirty && (
-          <span className="w-1.5 h-1.5 rounded-full bg-accent shrink-0 ml-2" />
-        )}
-        {buffer.externallyChanged && (
-          <button
-            type="button"
-            onClick={() => void forceReload()}
-            title="This file changed on disk. Reload discards your unsaved edits."
-            className="ml-auto inline-flex items-center gap-1 h-[20px] px-2 rounded-full border border-border-default bg-bg-elevated text-[10px] font-medium text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors shrink-0"
-          >
-            <RefreshCw size={10} /> Disk changed · Reload
-          </button>
-        )}
+        {buffer.dirty && <span className="w-1.5 h-1.5 rounded-full bg-primary shrink-0 ml-2" />}
+        {/* Right-hand controls. `ml-auto` on the group (rather than on whichever
+            child happens to be present) keeps them pinned right no matter which
+            of them render — the reload pill is conditional, and hanging the
+            margin off it meant the layout changed shape when a file went stale
+            on disk. */}
+        <div className="ml-auto flex items-center gap-2 pl-2">
+          {buffer.externallyChanged && (
+            <button
+              type="button"
+              onClick={() => void forceReload()}
+              title="This file changed on disk. Reload discards your unsaved edits."
+              className="inline-flex items-center gap-1 h-control-xs px-2 rounded-full border border-border bg-card text-2xs font-medium text-secondary-foreground hover:text-foreground hover:bg-element-hover transition-colors shrink-0"
+            >
+              <RefreshCw size={10} /> Disk changed · Reload
+            </button>
+          )}
+          {isMarkdownFile && (
+            <div className="inline-flex items-center h-control-xs rounded-full border border-border bg-card p-[2px] text-2xs font-medium shrink-0">
+              <button
+                type="button"
+                onClick={() => setRenderMode("editor")}
+                className={cn(
+                  "px-2 h-full rounded-full transition-colors",
+                  renderMode === "editor"
+                    ? "bg-element-hover text-foreground"
+                    : "text-secondary-foreground hover:text-foreground",
+                )}
+              >
+                Edit
+              </button>
+              <button
+                type="button"
+                onClick={() => setRenderMode("preview")}
+                className={cn(
+                  "px-2 h-full rounded-full transition-colors",
+                  renderMode === "preview"
+                    ? "bg-element-hover text-foreground"
+                    : "text-secondary-foreground hover:text-foreground",
+                )}
+              >
+                Preview
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* CodeMirror container */}
-      <div
-        ref={containerRef}
-        style={{ height: editorHeight, overflow: "hidden" }}
-      />
+      <div style={{ height: editorHeight, overflow: "hidden" }}>
+        <div
+          ref={containerRef}
+          style={{
+            display: effectiveMode === "editor" ? "block" : "none",
+            height: editorHeight,
+            overflow: "hidden",
+          }}
+        />
+        {/* Mounted on demand, not display:none — a hidden mount would still
+            markdown-parse every non-markdown buffer on open (see above). */}
+        {effectiveMode === "preview" && (
+          <div style={{ height: editorHeight }} className="overflow-auto bg-background px-4 py-3">
+            {buffer && (
+              <MarkdownFile trusted={true} className="max-w-none">
+                {buffer.originalContent}
+              </MarkdownFile>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
 
 function Breadcrumbs({ filePath, projectPath }: { filePath: string; projectPath: string }) {
-  const relative = projectPath && filePath.startsWith(projectPath)
-    ? filePath.slice(projectPath.length + 1)
-    : filePath;
+  const relative =
+    projectPath && filePath.startsWith(projectPath)
+      ? filePath.slice(projectPath.length + 1)
+      : filePath;
   const segments = relative.split("/").filter(Boolean);
 
   return (
@@ -514,8 +558,10 @@ function Breadcrumbs({ filePath, projectPath }: { filePath: string; projectPath:
         const isLast = i === segments.length - 1;
         return (
           <span key={i} className="flex items-center shrink-0">
-            {i > 0 && <ChevronRight size={10} className="text-text-tertiary mx-0.5 shrink-0" />}
-            <span className={`text-[11px] font-mono ${isLast ? "text-text-primary" : "text-text-tertiary"}`}>
+            {i > 0 && <ChevronRight size={10} className="text-muted-foreground mx-0.5 shrink-0" />}
+            <span
+              className={`text-xs font-mono ${isLast ? "text-foreground" : "text-muted-foreground"}`}
+            >
               {segment}
             </span>
           </span>

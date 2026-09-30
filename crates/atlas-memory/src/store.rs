@@ -1,6 +1,6 @@
 //! `HnswStore` — a thin owner of a persistent [`usearch::Index`] (HNSW).
 //!
-//! Cersei's `EmbeddingStore`/`VectorIndex` are in-memory only (no save/load/remove —
+//! the old SDK's `EmbeddingStore`/`VectorIndex` are in-memory only (no save/load/remove —
 //! verified in Step 0), so persistence is built directly on `usearch 2.25.3`:
 //! `Index::save` / `Index::load` / `Index::remove` (hard deletes). Keys are `u64`;
 //! the id↔key bijection lives in [`crate::manifest::Manifest`].
@@ -102,6 +102,18 @@ impl HnswStore {
             .map_err(|e| anyhow!("usearch remove: {e}"))
     }
 
+    /// The vector stored under `key`, if any.
+    pub fn get(&self, key: u64) -> Option<Vec<f32>> {
+        let mut out: Vec<f32> = Vec::new();
+        match self.index.export(key, &mut out) {
+            Ok(n) if n > 0 => {
+                out.truncate(self.dim);
+                Some(out)
+            }
+            _ => None,
+        }
+    }
+
     /// Top-`k` `(key, similarity)` pairs, best first. usearch returns cosine
     /// **distance** (`1 - cos`); we convert to similarity (`1 - distance`).
     pub fn search(&self, query: &[f32], k: usize) -> Result<Vec<(u64, f32)>> {
@@ -144,15 +156,12 @@ mod tests {
 
     const DIM_TEST: usize = 384;
 
-    fn tmp_path(name: &str) -> std::path::PathBuf {
-        let mut p = std::env::temp_dir();
-        p.push(format!(
-            "atlas-memory-store-{}-{}.usearch",
-            std::process::id(),
-            name
-        ));
-        let _ = std::fs::remove_file(&p);
-        p
+    /// A `.usearch` path inside a fresh temp dir. Keep the `TempDir` alive for
+    /// the test: dropping it deletes the directory.
+    fn tmp_path(name: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(format!("{name}.usearch"));
+        (dir, path)
     }
 
     #[test]
@@ -163,7 +172,7 @@ mod tests {
         }
         assert_eq!(store.len(), 10);
 
-        let path = tmp_path("roundtrip");
+        let (_tmp, path) = tmp_path("roundtrip");
         store.save(&path).unwrap();
 
         let reloaded = HnswStore::load(&path, DIM_TEST).unwrap();
@@ -173,11 +182,9 @@ mod tests {
         let q = unit_vec(5);
         let hits = reloaded.search(&q, 3).unwrap();
         assert!(!hits.is_empty());
-        assert_eq!(hits[0].0, 5, "nearest key should be 5, got {:?}", hits);
+        assert_eq!(hits[0].0, 5, "nearest key should be 5, got {hits:?}");
         // Cosine similarity of the (near-)identical vector should be ~1.
         assert!(hits[0].1 > 0.9, "similarity too low: {}", hits[0].1);
-
-        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

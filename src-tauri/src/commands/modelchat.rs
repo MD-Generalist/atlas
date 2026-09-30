@@ -31,7 +31,7 @@ use super::byok;
 
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ApiKind {
     OpenAi,
     Anthropic,
@@ -57,6 +57,8 @@ pub(super) fn provider_endpoint(provider: &str) -> Option<(ApiKind, &'static str
         "cerebras" => (ApiKind::OpenAi, "https://api.cerebras.ai/v1"),
         "perplexity" => (ApiKind::OpenAi, "https://api.perplexity.ai"),
         "openrouter" => (ApiKind::OpenAi, "https://openrouter.ai/api/v1"),
+        "empero" => (ApiKind::OpenAi, "https://free.empero.org/v1"),
+        "orcarouter" => (ApiKind::OpenAi, "https://api.orcarouter.ai/v1"),
         _ => return None,
     })
 }
@@ -79,10 +81,17 @@ impl ModelChatState {
 #[derive(Serialize, Clone)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum ModelChatEvent {
-    TextDelta { delta: String },
-    Usage { input_tokens: u64, output_tokens: u64 },
+    TextDelta {
+        delta: String,
+    },
+    Usage {
+        input_tokens: u64,
+        output_tokens: u64,
+    },
     Done,
-    Error { message: String },
+    Error {
+        message: String,
+    },
 }
 
 #[derive(Serialize, Clone)]
@@ -92,40 +101,29 @@ struct ModelChatEnvelope {
     event: ModelChatEvent,
 }
 
-/// Best-effort per-1M ($input, $output) for a BYOK model. None when unknown —
-/// the dashboard then shows tokens but omits cost for that turn.
-fn byok_pricing(provider: &str, model: &str) -> Option<(f64, f64)> {
-    let m = model.to_lowercase();
-    if provider == "anthropic" || m.contains("claude") {
-        let (p_in, p_out, _, _) = super::claude::pricing_for(&m);
-        return Some((p_in, p_out));
-    }
-    if m.contains("gpt-4o-mini") || m.contains("4o-mini") {
-        Some((0.15, 0.60))
-    } else if m.contains("gpt-4o") || m.contains("4o") {
-        Some((2.50, 10.0))
-    } else if m.contains("o1") || m.contains("o3") {
-        Some((15.0, 60.0))
-    } else if m.contains("gpt-4") {
-        Some((30.0, 60.0))
-    } else if m.contains("gpt-3.5") {
-        Some((0.50, 1.50))
-    } else if m.contains("gemini") && m.contains("flash") {
-        Some((0.075, 0.30))
-    } else if m.contains("gemini") {
-        Some((1.25, 5.0))
-    } else {
-        None
-    }
+/// Per-1M ($input, $output) for a BYOK model, from the models.dev catalogue
+/// Atlas caches. `None` when the catalogue does not know the model — the
+/// dashboard then shows tokens with no cost for that turn, which is the honest
+/// answer.
+///
+/// One pricing source. This used to fall through to a hardcoded ladder of
+/// `model.contains("gpt-4o")`-style guesses, and for Anthropic models to a
+/// second hardcoded table that lived in the deleted Claude scrape module. Both
+/// went stale silently: a wrong price is worse than no price, because nothing
+/// about it looks wrong.
+fn byok_pricing(app: &AppHandle, model: &str) -> Option<(f64, f64)> {
+    let prices = super::usage::read_prices(app);
+    let price = super::usage::price_for(Some(model), &prices)?;
+    Some((price.input, price.output))
 }
 
 /// Append one usage line to `<app_config_dir>/byok-usage.jsonl` (read back by
-/// `mission_control_usage`). Fire-and-forget; failures are swallowed.
+/// `usage_dashboard`). Fire-and-forget; failures are swallowed.
 fn persist_byok_usage(app: &AppHandle, provider: &str, model: &str, input: u64, output: u64) {
-    let Some(path) = super::mission_control::byok_usage_path(app) else {
+    let Some(path) = super::usage_dashboard::byok_usage_path(app) else {
         return;
     };
-    let cost = byok_pricing(provider, model).map(|(p_in, p_out)| {
+    let cost = byok_pricing(app, model).map(|(p_in, p_out)| {
         (input as f64 / 1_000_000.0) * p_in + (output as f64 / 1_000_000.0) * p_out
     });
     let entry = serde_json::json!({
@@ -136,12 +134,16 @@ fn persist_byok_usage(app: &AppHandle, provider: &str, model: &str, input: u64, 
         "outputTokens": output,
         "costUsd": cost,
     });
-    let line = format!("{}\n", entry);
+    let line = format!("{entry}\n");
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
     use std::io::Write;
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
         let _ = f.write_all(line.as_bytes());
     }
 }
@@ -263,7 +265,10 @@ pub async fn modelchat_stream(
     messages: Vec<ChatMsg>,
 ) -> Result<(), String> {
     let cancel = Arc::new(AtomicBool::new(false));
-    state.cancels.lock().insert(stream_id.clone(), cancel.clone());
+    state
+        .cancels
+        .lock()
+        .insert(stream_id.clone(), cancel.clone());
 
     let result = run_stream(&app, &stream_id, &provider, &model, messages, &cancel).await;
 
@@ -275,9 +280,12 @@ pub async fn modelchat_stream(
                 emit(
                     &app,
                     &stream_id,
-                    ModelChatEvent::Usage { input_tokens, output_tokens },
+                    ModelChatEvent::Usage {
+                        input_tokens,
+                        output_tokens,
+                    },
                 );
-                // Persist for the Mission Control BYOK usage history (accrues
+                // Persist for the Usage tab's BYOK usage history (accrues
                 // going forward; old sessions have no token data).
                 persist_byok_usage(&app, &provider, &model, input_tokens, output_tokens);
             }
@@ -300,7 +308,11 @@ pub async fn modelchat_stream(
                 emit(&app, &stream_id, ModelChatEvent::Done);
                 Ok(())
             } else {
-                emit(&app, &stream_id, ModelChatEvent::Error { message: e.clone() });
+                emit(
+                    &app,
+                    &stream_id,
+                    ModelChatEvent::Error { message: e.clone() },
+                );
                 Err(e)
             }
         }
@@ -366,26 +378,45 @@ pub struct ModelInfo {
 
 fn fallback_models(provider: &str) -> Vec<&'static str> {
     match provider {
-        "perplexity" => vec!["sonar", "sonar-pro", "sonar-reasoning", "sonar-reasoning-pro"],
-        "anthropic" => vec!["claude-opus-4-1", "claude-sonnet-4-5", "claude-3-5-haiku-latest"],
+        "perplexity" => vec![
+            "sonar",
+            "sonar-pro",
+            "sonar-reasoning",
+            "sonar-reasoning-pro",
+        ],
+        "anthropic" => vec![
+            "claude-opus-4-1",
+            "claude-sonnet-4-5",
+            "claude-3-5-haiku-latest",
+        ],
         "openai" => vec!["gpt-4o", "gpt-4o-mini", "o3", "o4-mini"],
-        "google" => vec!["gemini-3.1-pro-preview", "gemini-2.5-pro", "gemini-2.5-flash"],
+        "google" => vec![
+            "gemini-3.1-pro-preview",
+            "gemini-2.5-pro",
+            "gemini-2.5-flash",
+        ],
         "cohere" => vec!["command-a-03-2025", "command-r-plus", "command-r"],
+        "empero" => vec!["glm-5.3-flash"],
+        "orcarouter" => vec!["orcarouter/auto"],
         _ => vec![],
     }
 }
 
 fn http() -> reqwest::Client {
     reqwest::Client::builder()
-        .user_agent(concat!("Atlas/", env!("CARGO_PKG_VERSION"), " (model-chat)"))
+        .user_agent(concat!(
+            "Atlas/",
+            env!("CARGO_PKG_VERSION"),
+            " (model-chat)"
+        ))
         .build()
         .unwrap_or_default()
 }
 
 #[tauri::command]
 pub async fn modelchat_models(app: AppHandle, provider: String) -> Result<Vec<ModelInfo>, String> {
-    let (api, base) = provider_endpoint(&provider)
-        .ok_or_else(|| format!("{provider} does not support chat"))?;
+    let (api, base) =
+        provider_endpoint(&provider).ok_or_else(|| format!("{provider} does not support chat"))?;
     let key = byok::byok_get(app, provider.clone())?
         .ok_or_else(|| format!("No API key configured for {provider}"))?;
 
@@ -402,7 +433,10 @@ pub async fn modelchat_models(app: AppHandle, provider: String) -> Result<Vec<Mo
 
     let mut ids: Vec<String> = match fetched {
         Ok(v) if !v.is_empty() => v,
-        _ => fallback_models(&provider).into_iter().map(String::from).collect(),
+        _ => fallback_models(&provider)
+            .into_iter()
+            .map(String::from)
+            .collect(),
     };
     for id in ids.iter_mut() {
         if let Some(stripped) = id.strip_prefix("models/") {
@@ -428,7 +462,11 @@ async fn fetch_openai_models(base: &str, key: &str) -> Result<Vec<String>, Strin
     let body: Value = resp.json().await.map_err(|e| e.to_string())?;
     Ok(body["data"]
         .as_array()
-        .map(|arr| arr.iter().filter_map(|m| m["id"].as_str().map(String::from)).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|m| m["id"].as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default())
 }
 
@@ -447,6 +485,28 @@ async fn fetch_anthropic_models(base: &str, key: &str) -> Result<Vec<String>, St
     let body: Value = resp.json().await.map_err(|e| e.to_string())?;
     Ok(body["data"]
         .as_array()
-        .map(|arr| arr.iter().filter_map(|m| m["id"].as_str().map(String::from)).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|m| m["id"].as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_orcarouter_endpoint() {
+        let (kind, url) = provider_endpoint("orcarouter").expect("orcarouter endpoint must exist");
+        assert_eq!(kind, ApiKind::OpenAi);
+        assert_eq!(url, "https://api.orcarouter.ai/v1");
+    }
+
+    #[test]
+    fn test_orcarouter_fallback_models() {
+        let models = fallback_models("orcarouter");
+        assert_eq!(models, vec!["orcarouter/auto"]);
+    }
 }

@@ -1,12 +1,17 @@
 import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
 import { createSelectors } from "@/lib/create-selectors";
+import { detectLanguage, type EditorLanguage } from "../lib/languages";
+import type { RevealTarget } from "../lib/reveal";
 
 interface Buffer {
   path: string;
   originalContent: string;
   dirty: boolean;
-  language: string;
+  /** The grammar this buffer is parsed with, or `"plaintext"` when there is
+   *  none. Resolved through the language registry, which guarantees a
+   *  non-plaintext value has a loader behind it (see lib/languages.ts). */
+  language: EditorLanguage;
   /** Disk mtime (unix ms) at the last read/save — the freshness gate for
    *  external-change revalidation. 0 until first known. */
   diskMtimeMs: number;
@@ -15,9 +20,19 @@ interface Buffer {
   externallyChanged: boolean;
 }
 
+/** A reveal waiting for its path's editor view. The nonce makes a repeated
+ *  reveal of the same line a new value, so the panel applies it again. */
+export interface PendingReveal extends RevealTarget {
+  nonce: number;
+}
+
 interface EditorState {
   buffers: Record<string, Buffer>;
   activeBufferPath: string | null;
+  /** Reveals asked for by path, applied by that path's editor panel once its
+   *  view exists — a new tab, a hidden one and a visible one alike. The
+   *  knowledge store's `pendingOpenId` is the same pattern. */
+  pendingReveals: Record<string, PendingReveal>;
 }
 
 interface EditorActions {
@@ -31,29 +46,21 @@ interface EditorActions {
     markExternallyChanged: (path: string, mtimeMs: number) => void;
     closeBuffer: (path: string) => void;
     setActive: (path: string) => void;
+    /** Ask `path`'s editor to move to `target`. */
+    requestReveal: (path: string, target: RevealTarget) => void;
+    /** The panel applied the reveal carrying `nonce`; a newer one is kept. */
+    consumeReveal: (path: string, nonce: number) => void;
   };
 }
 
-function detectLanguage(path: string): string {
-  const ext = path.split(".").pop()?.toLowerCase() ?? "";
-  const map: Record<string, string> = {
-    ts: "typescript", tsx: "typescript", js: "javascript", jsx: "javascript",
-    rs: "rust", py: "python", go: "go", rb: "ruby", java: "java",
-    json: "json", toml: "toml", yaml: "yaml", yml: "yaml",
-    md: "markdown", html: "html", css: "css", scss: "scss",
-    sh: "shell", zsh: "shell", bash: "shell",
-    sql: "sql", xml: "xml", svg: "xml",
-    c: "c", cpp: "cpp", h: "c", hpp: "cpp",
-    swift: "swift", kt: "kotlin",
-  };
-  return map[ext] ?? "plaintext";
-}
+let revealNonce = 0;
 
 export const useEditorStore = createSelectors(
   create<EditorState & EditorActions>()(
     immer((set) => ({
       buffers: {},
       activeBufferPath: null,
+      pendingReveals: {},
       actions: {
         openBuffer: (path, content, mtimeMs = 0) =>
           set((s) => {
@@ -107,6 +114,7 @@ export const useEditorStore = createSelectors(
         closeBuffer: (path) =>
           set((s) => {
             delete s.buffers[path];
+            delete s.pendingReveals[path];
             if (s.activeBufferPath === path) {
               const keys = Object.keys(s.buffers);
               s.activeBufferPath = keys.length > 0 ? keys[keys.length - 1] : null;
@@ -116,7 +124,15 @@ export const useEditorStore = createSelectors(
           set((s) => {
             s.activeBufferPath = path;
           }),
+        requestReveal: (path, target) =>
+          set((s) => {
+            s.pendingReveals[path] = { ...target, nonce: ++revealNonce };
+          }),
+        consumeReveal: (path, nonce) =>
+          set((s) => {
+            if (s.pendingReveals[path]?.nonce === nonce) delete s.pendingReveals[path];
+          }),
       },
-    }))
-  )
+    })),
+  ),
 );

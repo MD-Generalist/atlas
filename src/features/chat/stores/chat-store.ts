@@ -10,24 +10,34 @@ import type {
   ClaudePermissionMode,
   SwitchableAgent,
   AgentType,
+  PendingSend,
 } from "@/types/agent";
-import { CLAUDE_PERMISSION_MODES } from "@/types/agent";
+import { CLAUDE_PERMISSION_MODES, pluginIdForAgent } from "@/types/agent";
 import type { PendingPermission } from "@/types/acp";
 import type {
   AgentDelta,
   ToolCall as AgentToolCall,
+  ToolCallStatus,
   ImageAttachment,
   SessionModeInfo,
 } from "@/types/agents";
 import { splitAtlasContext } from "../lib/atlas-context";
 import { loadCachedAcpModes, saveCachedAcpModes } from "../lib/acp-modes-cache";
-import { loadCachedAcpModels, saveCachedAcpModels } from "../lib/acp-models-cache";
+import { loadLastModePref, saveLastModePref } from "../lib/last-mode-pref";
+import { modeSelectOf, modelSelectOf } from "../lib/acp-config-options";
+import { exitPlanModeForOption, exitPlanOptionRestartsSession } from "../lib/exit-plan-modes";
+import { saveConfigOptionPref } from "../lib/config-option-prefs";
 import {
-  loadCachedContextUsage,
-  saveCachedContextUsage,
-} from "../lib/context-usage-cache";
-import { saveCerseiModelPref, saveCerseiEffort, saveCerseiCompress } from "../lib/cersei-model-pref";
+  loadCachedAcpConfigOptions,
+  saveCachedAcpConfigOptions,
+} from "../lib/acp-config-options-cache";
+import { loadCachedAcpModels, saveCachedAcpModels } from "../lib/acp-models-cache";
+import { resolveModelLabel } from "../lib/model-label";
+import { defaultAgentForNewSession } from "../lib/default-agent";
+import { loadCachedContextUsage, saveCachedContextUsage } from "../lib/context-usage-cache";
+import { saveNativeModelPref, saveNativeEffort } from "../lib/native-model-pref";
 import { invoke } from "@tauri-apps/api/core";
+import { toast } from "sonner";
 import { extractPlanMarkdown, type PlanRecord } from "../lib/plans";
 import { extractNextSteps } from "../lib/next-steps";
 import {
@@ -37,6 +47,12 @@ import {
   isFileCreated,
 } from "../lib/tool-files";
 import type { TurnFile } from "@/types/agent";
+
+/** `firstUserContent` is a preview field, never the full text — see the note
+ *  at its appendMessage write. 200 chars covers every consumer (they slice to
+ *  ≤80) with headroom. */
+const FIRST_USER_PREVIEW_CHARS = 200;
+const firstUserPreview = (prose: string): string => prose.slice(0, FIRST_USER_PREVIEW_CHARS);
 
 /** Rebuild the adaptive per-turn `turnSummary` (files read/modified) from a
  *  loaded transcript's tool calls. `turnSummary` is computed live at
@@ -59,11 +75,8 @@ function reconstructTurnSummaries(messages: ChatMessage[]): void {
         const kind = classifyToolFileKind(tc.kind, tc.toolName);
         if (!path || !kind) continue;
         const counts =
-          kind === "edit"
-            ? countEditLines(tc.toolName, args)
-            : { added: 0, removed: 0 };
-        const created =
-          kind === "edit" ? isFileCreated(tc.toolName, args) : undefined;
+          kind === "edit" ? countEditLines(tc.toolName, args) : { added: 0, removed: 0 };
+        const created = kind === "edit" ? isFileCreated(tc.toolName, args) : undefined;
         const ex = byPath.get(path);
         if (!ex) byPath.set(path, { path, kind, ...counts, created });
         else {
@@ -125,36 +138,115 @@ function aggregateTurnFiles(tools: Record<string, TurnFile>): TurnFile[] {
  * No-op until the session is bound (the create-time setMode in chat-panel
  * covers the not-yet-bound case).
  */
-function pushPermissionModeToAgent(state: ChatState, sessionId: string): void {
+function pushPermissionModeToAgent(
+  state: ChatState,
+  sessionId: string,
+  previousMode?: ClaudePermissionMode,
+): void {
   const session = state.sessions[sessionId];
   if (!session?.acpAgentId || !session.acpSessionId) return;
   if (session.agentType !== "claude-code") return;
+  const pushed = session.claudePermissionMode ?? "default";
   void invoke("agents_set_mode", {
     key: { agent_id: session.acpAgentId, session_id: session.acpSessionId },
-    modeId: session.claudePermissionMode ?? "default",
-  }).catch((err) => console.warn("agents_set_mode failed:", err));
+    modeId: pushed,
+  }).catch((err) => {
+    console.warn("agents_set_mode failed:", err);
+    revertRefusedMode(sessionId, err, (sess) => {
+      if (sess.claudePermissionMode === pushed && previousMode !== undefined) {
+        sess.claudePermissionMode = previousMode;
+      }
+    });
+  });
 }
 
 /** Push a generic ACP session mode (Codex's read-only / auto / full-access)
  *  to its bound agent. Agent-agnostic sibling of `pushPermissionModeToAgent`.
  *  No-op until the session is bound. */
-function pushAcpModeToAgent(state: ChatState, sessionId: string): void {
+function pushAcpModeToAgent(state: ChatState, sessionId: string, previousMode?: string): void {
   const session = state.sessions[sessionId];
   if (!session?.acpAgentId || !session.acpSessionId || !session.acpCurrentMode) return;
   // Only push ids this session's agent actually advertised. A mode carried over
-  // from another agent is rejected (`invalidParams`), and the actor rolls its
-  // optimistic flip back — which reads as a picker that silently does nothing.
+  // from another agent is rejected (`invalidParams`) before it is ever pushed.
   const modes = session.acpAvailableModes ?? [];
   if (modes.length > 0 && !modes.some((m) => m.id === session.acpCurrentMode)) return;
+  const pushed = session.acpCurrentMode;
   void invoke("agents_set_mode", {
     key: { agent_id: session.acpAgentId, session_id: session.acpSessionId },
-    modeId: session.acpCurrentMode,
-  }).catch((err) => console.warn("agents_set_mode failed:", err));
+    modeId: pushed,
+  }).catch((err) => {
+    console.warn("agents_set_mode failed:", err);
+    revertRefusedMode(sessionId, err, (sess) => {
+      if (sess.acpCurrentMode === pushed && previousMode !== undefined) {
+        sess.acpCurrentMode = previousMode;
+      }
+    });
+  });
+}
+
+/** The agent refused a mode change the picker already shows (the flip is
+ *  optimistic). Leaving the label on the refused mode is the picker lying —
+ *  the native agent refuses mid-turn switches precisely because the running
+ *  turn keeps the permissions it started with (#61) — so roll the label back
+ *  (unless the user has since picked something else) and say why. */
+function revertRefusedMode(
+  sessionId: string,
+  err: unknown,
+  revert: (sess: ChatSession) => void,
+): void {
+  useChatStore.setState((s) => {
+    const sess = s.sessions[sessionId];
+    if (sess) revert(sess);
+  });
+  toast.error(typeof err === "string" ? err : String(err));
+}
+
+/** Hydrate the per-agent persisted mode preference (last explicit pick) into
+ *  a freshly-created / freshly-switched tab. A restored pick is marked
+ *  explicit so the chat panel pushes it to the agent at session create (after
+ *  revalidating against the advertised modes); no pick means "defer to the
+ *  agent's own configured default" — never an Atlas-side override. */
+/**
+ * Drop everything the Usage pill reads. Usage belongs to ONE backend session:
+ * the moment a tab stops pointing at that session — a "New Chat" reset in
+ * place, an agent switch, a rebind to a different session — the numbers must
+ * go with it, or the next session wears the previous one's context gauge,
+ * token split and cost until its own first turn overwrites them.
+ */
+function forgetSessionUsage(sess: ChatSession): void {
+  sess.usage = undefined;
+  sess.contextUsage = undefined;
+  sess.lastUsageSnapshot = undefined;
+  sess.pendingSavedTokens = undefined;
+  sess.compacting = undefined;
+  sess.rateLimits = undefined;
+}
+
+function applyPersistedModePref(sess: ChatSession, agentType: AgentType): void {
+  const pref = loadLastModePref(agentType);
+  if (agentType === "claude-code") {
+    const valid = !!pref && (CLAUDE_PERMISSION_MODES as readonly string[]).includes(pref);
+    sess.claudePermissionMode = valid ? (pref as ClaudePermissionMode) : "default";
+    sess.claudePermissionModeExplicit = valid;
+    return;
+  }
+  // Generic ACP agents: only trust the pick against the optimistic cached
+  // mode list (or when nothing is cached yet) — an id the live agent turns
+  // out not to advertise would stick the picker on its "Mode" fallback.
+  // Session-create revalidates against the real advertised list either way.
+  const cached = loadCachedAcpModes(agentType);
+  const valid =
+    !!pref &&
+    (!cached ||
+      cached.availableModes.length === 0 ||
+      cached.availableModes.some((m) => m.id === pref));
+  sess.acpModeExplicit = valid;
+  if (valid && pref) sess.acpCurrentMode = pref;
 }
 
 /** Push an ACP agent's model selection (Claude Code / Codex) to its bound
  *  agent via `agents_set_model` (ACP `session/set_model`). Plain model id (no
- *  `provider/` prefix — that's the native Cersei form). No-op until bound. */
+ *  `provider/` prefix — that's the native form). No-op until bound. */
 function pushAcpModelToAgent(state: ChatState, sessionId: string): void {
   const session = state.sessions[sessionId];
   if (!session?.acpAgentId || !session.acpSessionId || !session.acpCurrentModel) return;
@@ -164,15 +256,17 @@ function pushAcpModelToAgent(state: ChatState, sessionId: string): void {
   }).catch((err) => console.warn("agents_set_model failed:", err));
 }
 
-/** Push the native Cersei agent's `provider/model` selection to its bound
- *  agent via `agents_set_model`. The backend's `set_model` parses the
- *  `provider/model` form (see `atlas_cersei::CerseiRuntime::set_model`).
+/** Push the native agent's `provider/model` selection to its bound agent via
+ *  `agents_set_model`. The id is forwarded verbatim: `AgentHost::set_model`
+ *  (`src-tauri/src/commands/agent_host.rs`) hands it to the connection's model
+ *  selector, and the native agent validates it against its catalogue
+ *  (`crates/atlas-native-agent/src/engine/connection.rs`, `select_model`).
  *  No-op until the session is bound and both provider + model are chosen. */
-function pushCerseiModelToAgent(state: ChatState, sessionId: string): void {
+function pushNativeModelToAgent(state: ChatState, sessionId: string): void {
   const session = state.sessions[sessionId];
   if (!session?.acpAgentId || !session.acpSessionId) return;
-  if (session.agentType !== "cersei") return;
-  const provider = session.cerseiProvider;
+  if (session.agentType !== "atlas-agent") return;
+  const provider = session.nativeProvider;
   const model = session.acpCurrentModel;
   if (!provider || !model) return;
   void invoke("agents_set_model", {
@@ -182,27 +276,20 @@ function pushCerseiModelToAgent(state: ChatState, sessionId: string): void {
 }
 
 /** Push the native agent's reasoning-effort level to its bound agent via
- *  `agents_set_effort`. No-op until bound / for non-cersei sessions. */
-function pushCerseiEffortToAgent(state: ChatState, sessionId: string): void {
+ *  `agents_set_effort`. No-op until bound / for non-native sessions. */
+function pushNativeEffortToAgent(state: ChatState, sessionId: string): void {
   const session = state.sessions[sessionId];
   if (!session?.acpAgentId || !session.acpSessionId) return;
-  if (session.agentType !== "cersei") return;
+  if (session.agentType !== "atlas-agent") return;
   void invoke("agents_set_effort", {
     key: { agent_id: session.acpAgentId, session_id: session.acpSessionId },
-    effort: session.cerseiEffort ?? "",
+    effort: session.nativeEffort ?? "",
   }).catch((err) => console.warn("agents_set_effort failed:", err));
 }
 
-/** Push the native agent's RTK compression toggle via `agents_set_compress`. */
-function pushCerseiCompressToAgent(state: ChatState, sessionId: string): void {
-  const session = state.sessions[sessionId];
-  if (!session?.acpAgentId || !session.acpSessionId) return;
-  if (session.agentType !== "cersei") return;
-  void invoke("agents_set_compress", {
-    key: { agent_id: session.acpAgentId, session_id: session.acpSessionId },
-    on: session.cerseiCompress ?? true,
-  }).catch((err) => console.warn("agents_set_compress failed:", err));
-}
+// `pushNativeCompressToAgent` stood here, pushing the RTK compression toggle
+// through `agents_set_compress`. Both are gone (#54): the ported engine has no
+// tool-output compressor, so there was nothing on the other end of the command.
 
 /** Convert an atlas-agents wire ToolCall into the in-store ChatMessage shape. */
 function toChatToolCall(tc: AgentToolCall): ChatMessage["toolCalls"][number] {
@@ -214,6 +301,9 @@ function toChatToolCall(tc: AgentToolCall): ChatMessage["toolCalls"][number] {
     kind: tc.kind ?? null,
     arguments: (tc.arguments ?? {}) as Record<string, unknown>,
     result: tc.result,
+    // Only present when the agent reported a diff/terminal block; the Rust
+    // side omits the field entirely when empty.
+    contentBlocks: tc.content_blocks,
     status:
       tc.status === "pending"
         ? "pending"
@@ -247,6 +337,16 @@ interface ChatState {
    */
   drafts: Record<string, string>;
   activeSessionId: string | null;
+  /**
+   * The manager's live loading status per PLUGIN id ("Downloading Node.js…",
+   * "Installing @agentclientprotocol/codex-acp 1.11.0…") while that plugin's
+   * connect is in flight. Keyed by plugin, not tab: the status belongs to the
+   * one connection every tab on that agent is waiting for, and there is no
+   * session to key it by until the connect finishes. Rendered in place of the
+   * generic "Starting {agent}" label; an entry is removed when the manager
+   * sends `null`.
+   */
+  agentStartingStatus: Record<string, string>;
 }
 
 interface ChatActions {
@@ -266,19 +366,19 @@ interface ChatActions {
       sessionId: string,
       role: MessageRole,
       content: string,
-      attachments?: ImageAttachment[]
+      attachments?: ImageAttachment[],
     ) => void;
-    appendToolCall: (
-      sessionId: string,
-      toolName: string,
-      input: Record<string, unknown>
-    ) => void;
+    appendToolCall: (sessionId: string, toolName: string, input: Record<string, unknown>) => void;
     updateLastAssistantMessage: (sessionId: string, content: string) => void;
     updateSessionStatus: (sessionId: string, status: AgentStatus) => void;
     /** Mark a session as stop-requested (Stop clicked, terminal not yet in). */
     setStopping: (sessionId: string, on: boolean) => void;
+    /** See `ChatSession.pendingSend`. `undefined` clears it. */
+    setPendingSend: (sessionId: string, pending: PendingSend | undefined) => void;
     /** Flag/clear "the backing agent process died" (drives Restart + rebind). */
     setDisconnected: (sessionId: string, on: boolean) => void;
+    /** The user force-killed the agent from the composer. */
+    noteAgentKilled: (sessionId: string) => void;
     setSessionTitle: (sessionId: string, title: string) => void;
     setTranscriptLoading: (sessionId: string, loading: boolean) => void;
     /** Mark a resumed session as bound-but-not-yet-loaded. See
@@ -286,7 +386,7 @@ interface ChatActions {
     setResumePending: (sessionId: string, pending: boolean) => void;
     clearSession: (sessionId: string) => void;
     removeSession: (sessionId: string) => void;
-    /** Drop several sessions at once (used when a workspace is DISCARDED from
+    /** Drop several sessions at once (used when a project is DISCARDED from
      *  the hot set — frees its chat history from RAM; reloaded cold on revisit). */
     removeSessions: (sessionIds: string[]) => void;
     /** Drop all chat sessions, queues, and pending permissions. Used when
@@ -294,9 +394,18 @@ interface ChatActions {
      *  project's `.atlas/` don't linger and cause ghost-bound tabs. */
     resetSessions: () => void;
     cycleClaudePermissionMode: (sessionId: string) => void;
-    setClaudePermissionMode: (
+    /** Reflect the mode the agent chose during session creation without
+     *  treating it as an Atlas user override or sending a second RPC. */
+    hydrateClaudePermissionMode: (sessionId: string, mode: ClaudePermissionMode) => void;
+    setClaudePermissionMode: (sessionId: string, mode: ClaudePermissionMode) => void;
+    /** A plan-approval option was answered: adopt the mode it selects (or
+     *  `override`, for Atlas's own "approve and bypass") and push it to the
+     *  agent, since the Claude adapter applies it silently. Not persisted as
+     *  the user's preference — it is a per-session decision. */
+    applyExitPlanSelection: (
       sessionId: string,
-      mode: ClaudePermissionMode
+      optionId: string,
+      override?: ClaudePermissionMode,
     ) => void;
     /** Seed the generic ACP mode state (current + available list) from a
      *  session snapshot. Used for non-Claude agents (e.g. Codex). */
@@ -307,11 +416,20 @@ interface ChatActions {
       /** Agent the snapshot came from (`agentTypeFromPluginId(snap.plugin_id)`).
        *  When it disagrees with the tab's current agent the seed is stale and is
        *  dropped — see the action for the cross-agent bug that motivated it. */
-      sourceAgentType?: AgentType
+      sourceAgentType?: AgentType,
     ) => void;
     /** Pick a generic ACP session mode and push it to the bound agent.
      *  The Codex equivalent of `setClaudePermissionMode`. */
     setAcpMode: (sessionId: string, modeId: string) => void;
+    /** Set an agent-advertised config option (P2.2). Optimistic locally; the
+     *  agent's own `config_option_update` is the authority and overwrites it. */
+    /** Clear the answered/dismissed elicitation (P3.3). */
+    clearElicitation: (sessionId: string) => void;
+    setAcpConfigOption: (
+      sessionId: string,
+      configId: string,
+      value: boolean | string,
+    ) => Promise<void>;
     /** Toggle the non-Claude mode-picker loading state. Set false once the
      *  session boot resolves (modes confirmed, or bind failed) so the composer's
      *  picker never hangs on its loading spinner. */
@@ -321,20 +439,38 @@ interface ChatActions {
     setAcpModels: (
       sessionId: string,
       currentModel: string | null,
-      availableModels: SessionModeInfo[]
+      availableModels: SessionModeInfo[],
     ) => void;
+    /** Replace the model list on EVERY session of an agent type at once — the
+     *  native agent's picker Refresh (ADR-0007), whose list belongs to the
+     *  agent rather than to one session. Never touches a session's current
+     *  model. Caches per agentType like `setAcpModels`. */
+    setAcpModelsForAgent: (agentType: string, availableModels: SessionModeInfo[]) => void;
     /** Pick an ACP model and push it to the bound agent (`session/set_model`). */
     setAcpModel: (sessionId: string, modelId: string) => void;
-    /** Native Cersei agent: pick the BYOK provider. Clears the model so the
+    /** Seed the ACP slash-command list from a session snapshot's
+     *  `available_commands` — the recovery path for `available_commands_update`
+     *  deltas that raced ahead of the binding (or a resume) and were dropped
+     *  by the session router. Never clobbers a non-empty live list with an
+     *  empty snapshot. */
+    setAcpAvailableCommands: (
+      sessionId: string,
+      commands: unknown[],
+      sourceAgentType?: AgentType,
+    ) => void;
+    /** Apply a snapshot's config options — the ONLY way an agent's initial
+     *  knobs reach the frontend, since `session/new`'s advertisement lives in
+     *  the backend cell and a follow-up notification is optional (#32). */
+    setAcpConfigOptions: (tabId: string, options: unknown[], sourceAgentType?: string) => void;
+    /** Native agent: pick the BYOK provider. Clears the model so the
      *  composer re-selects a default for the new provider before pushing. */
-    setCerseiProvider: (sessionId: string, provider: string) => void;
-    /** Native Cersei agent: pick the model and push `provider/model` to the
+    setNativeProvider: (sessionId: string, provider: string) => void;
+    /** Native agent: pick the model and push `provider/model` to the
      *  bound agent via `agents_set_model`. No-op until the session is bound. */
-    setCerseiModel: (sessionId: string, model: string) => void;
-    /** Native Cersei agent: set the reasoning-effort level and push it. */
-    setCerseiEffort: (sessionId: string, effort: string) => void;
-    /** Native Cersei agent: toggle RTK tool-output compression and push it. */
-    setCerseiCompress: (sessionId: string, on: boolean) => void;
+    setNativeModel: (sessionId: string, model: string) => void;
+    /** Native agent: set the reasoning-effort level and push it. */
+    setNativeEffort: (sessionId: string, effort: string) => void;
+    /** Native agent: toggle RTK tool-output compression and push it. */
     replaceMessages: (
       sessionId: string,
       messages: Array<{
@@ -344,13 +480,22 @@ interface ChatActions {
         /** Producing model recovered from the snapshot/transcript, so the
          *  per-message badge survives session reloads. */
         model?: string | null;
+        /** Images a user message carried, restored from the snapshot. */
+        attachments?: ImageAttachment[];
         toolCalls?: Array<{
+          /** The agent's own tool call id, when the caller has it. Optional
+           *  only because not every paint path carries one; a caller that has
+           *  it MUST pass it — it is the key later deltas are matched on. */
+          id?: string;
           toolName: string;
           kind?: string | null;
           arguments: Record<string, unknown>;
           result?: string | null;
+          /** How the tool call actually ended. Absent means unknown, which is
+           *  the only case that may be assumed completed. */
+          status?: ToolCallStatus;
         }>;
-      }>
+      }>,
     ) => void;
     /** Restore live (non-transcript) session state from a `session/load`
      *  snapshot: the backend's current status and the current turn's live plan.
@@ -389,7 +534,7 @@ interface ChatActions {
       agentId: string,
       acpSessionId: string,
       /** Project root the session was created with — stamps `workingDirectory`. */
-      cwd?: string
+      cwd?: string,
     ) => void;
     /**
      * Apply one `atlas:acp` event to whichever chat tab owns its acpSessionId.
@@ -441,12 +586,45 @@ interface ChatActions {
      *  doesn't linger and trick the user into clicking Allow on a
      *  request the agent already abandoned. */
     clearPermissionsForSession: (acpSessionId: string) => void;
+    /** Record (or, with `null`, clear) the manager's loading status for a
+     *  plugin — see `ChatState.agentStartingStatus`. */
+    setAgentStartingStatus: (pluginId: string, status: string | null) => void;
+    /**
+     * The connection for `pluginId` is gone (its child died, or its connect
+     * failed) while tabs on that agent were still waiting to be bound. Deltas
+     * route by `session_id`, and an unbound tab has none, so without this a
+     * tab sitting on "Starting {agent}" never learned the process it was
+     * waiting for had already exited. For every tab on that plugin that has no
+     * `acpSessionId` and is holding a first message or starting: the held
+     * message goes back to the queue chip, the status drops to idle, and the
+     * tab is flagged `disconnected` so the Restart banner (and the next send's
+     * rebind) take over. Returns nothing; safe to call for a plugin no tab is on.
+     */
+    failPendingBinds: (pluginId: string, reason?: string) => void;
+    /**
+     * The agent behind `pluginId` was uninstalled, bound tabs included. The
+     * backend dropped its connection without a delta (there is no session to
+     * route one by), so this records what one would have: every tab on that
+     * plugin drops to idle, a held first message goes back to the queue, and
+     * the tab is flagged disconnected with `reason` so the banner can offer a
+     * switch instead of a restart that cannot succeed. Untouched tabs are the
+     * caller's to re-point (`removed-agents.ts`).
+     */
+    noteAgentRemoved: (pluginId: string, reason: string) => void;
+    /**
+     * `pluginId` was restarted onto `version`. Rust already sent each bound
+     * tab `agent_disconnected`; this records why, so the banner says the
+     * agent was updated instead of that it exited. Tabs not yet bound need
+     * nothing — their bind starts the new version.
+     */
+    noteAgentUpdated: (pluginId: string, version: string) => void;
   };
 }
 
-function findTabByAcpSession(
+/** The chat tab running `acpSessionId`, or null. */
+export function findTabByAcpSession(
   sessions: Record<string, ChatSession>,
-  acpSessionId: string
+  acpSessionId: string,
 ): string | null {
   for (const [tid, s] of Object.entries(sessions)) {
     if (s.acpSessionId === acpSessionId) return tid;
@@ -462,7 +640,7 @@ function findTabByAcpSession(
  */
 async function capturePlanIfPresent(
   req: PendingPermission,
-  sessions: Record<string, ChatSession>
+  sessions: Record<string, ChatSession>,
 ): Promise<void> {
   const plan = extractPlanMarkdown(req.toolCall);
   if (!plan) return;
@@ -483,10 +661,8 @@ async function capturePlanIfPresent(
     }
   }
 
-  const { useProjectStore } = await import(
-    "@/features/project/stores/project-store"
-  );
-  const projectPath = useProjectStore.getState().currentProject?.path;
+  const { useAppStore } = await import("@/features/app/stores/app-store");
+  const projectPath = useAppStore.getState().currentProject?.path;
   if (!projectPath) return;
 
   const record: PlanRecord = {
@@ -556,7 +732,7 @@ function makeAssistantToolMessage(toolCall: ChatMessage["toolCalls"][number]): C
 /** Find the message + tool call entry across all messages by toolCallId. */
 function findToolCall(
   session: ChatSession,
-  toolCallId: string
+  toolCallId: string,
 ): { msg: ChatMessage; tc: ChatMessage["toolCalls"][number] } | null {
   for (let i = session.messages.length - 1; i >= 0; i--) {
     const m = session.messages[i];
@@ -564,6 +740,28 @@ function findToolCall(
     if (tc) return { msg: m, tc };
   }
   return null;
+}
+
+/** Human-readable end-of-turn notice for a stop reason, or null when the
+ *  outcome speaks for itself (P2.4).
+ *
+ *  Exported for tests. The strings say what HAPPENED and what to do, because
+ *  the raw ACP token (`max_turn_requests`) means nothing to a user. */
+export function stopReasonNotice(stopReason: string): string | null {
+  switch (stopReason) {
+    case "max_tokens":
+      return "(the reply was cut off — the model hit its output token limit)";
+    case "max_turn_requests":
+      return "(the agent stopped — it hit the maximum number of model requests for one turn)";
+    case "refusal":
+      return "(the agent declined to continue this request)";
+    // `end_turn` is a normal finish; `cancelled` already renders its own UI.
+    // Anything unknown is left alone rather than guessed at — inventing a
+    // description for a stop reason a future adapter added would be worse than
+    // saying nothing.
+    default:
+      return null;
+  }
 }
 
 export const useChatStore = createSelectors(
@@ -574,8 +772,13 @@ export const useChatStore = createSelectors(
       queues: {},
       drafts: {},
       activeSessionId: null,
+      agentStartingStatus: {},
       actions: {
-        createSession: (tabId, agentType = "claude-code") =>
+        // No explicit agent → resolve the priority default (Claude Code when
+        // it's installed + authed, otherwise the native Atlas agent). Never
+        // hard-code "claude-code" here: on a fresh install that produces a
+        // permanently disabled composer with no way to reach another agent.
+        createSession: (tabId, agentType = defaultAgentForNewSession()) =>
           set((s) => {
             if (s.sessions[tabId]) return;
             s.sessions[tabId] = {
@@ -592,6 +795,8 @@ export const useChatStore = createSelectors(
               // Permission mode is a Claude Code feature; Codex drives its
               // modes generically via ACP (acpCurrentMode).
               claudePermissionMode: agentType === "claude-code" ? "default" : undefined,
+              claudePermissionModeExplicit: false,
+              acpModeExplicit: false,
               // Optimistically pre-fill a non-Claude agent's mode picker from the
               // persisted cache so switching feels instant; mark pending until the
               // real session confirms (the picker shows a loading state).
@@ -610,14 +815,27 @@ export const useChatStore = createSelectors(
               ...(() => {
                 const m = loadCachedAcpModels(agentType);
                 return m
-                  ? { acpAvailableModels: m.availableModels, acpCurrentModel: m.currentModel ?? undefined }
+                  ? {
+                      // The list only — the current model belongs to a session,
+                      // not to the agent (see `acp-models-cache`).
+                      acpAvailableModels: m.availableModels,
+                    }
                   : {};
               })(),
             };
             s.activeSessionId = tabId;
+            // Restore the user's last explicit mode pick for this agent so it
+            // survives restarts (marks it explicit; create pushes it after
+            // validating against the agent's advertised modes).
+            applyPersistedModePref(s.sessions[tabId], agentType);
           }),
         switchChatAgent: (tabId, agentType) =>
           set((s) => {
+            // Store-boundary guard: agentType feeds plugin resolution,
+            // localStorage cache keys, and Tauri invoke args — a non-string
+            // (a leaked DOM event, once) poisons all three. Mirrors the
+            // total-by-construction rule on agentMeta().
+            if (typeof agentType !== "string") return;
             const sess = s.sessions[tabId];
             if (!sess) return;
             // Drop any pending permissions that belonged to the old binding so a
@@ -626,17 +844,29 @@ export const useChatStore = createSelectors(
             // we only clear THIS session's queue, not the agent).
             if (sess.acpSessionId) delete s.pendingPermissions[sess.acpSessionId];
             sess.agentType = agentType;
-            sess.claudePermissionMode =
-              agentType === "claude-code" ? "default" : undefined;
+            sess.claudePermissionMode = agentType === "claude-code" ? "default" : undefined;
+            sess.claudePermissionModeExplicit = false;
+            sess.acpModeExplicit = false;
             // Drop the old ACP binding so the chat panel's mount effect re-binds
             // to the newly chosen agent (deps watch acpSessionId + agentType).
             sess.acpAgentId = undefined;
             sess.acpSessionId = undefined;
             sess.acpCurrentMode = undefined;
             sess.acpCurrentModel = undefined;
+            // The old agent's consumption is not the new one's either.
+            forgetSessionUsage(sess);
+            // A dead or removed PREVIOUS agent is not this one's state: the
+            // banner that offered "Switch agent" must not outlive the switch.
+            sess.disconnected = undefined;
+            sess.updatedTo = undefined;
+            sess.bindError = undefined;
             // The provider only applies to the native agent; clear it so the
-            // composer re-defaults from BYOK keys if cersei is chosen.
-            sess.cerseiProvider = undefined;
+            // composer re-defaults from BYOK keys if the native agent is chosen.
+            sess.nativeProvider = undefined;
+            // Slash commands are per-agent (ACP `available_commands_update`);
+            // the old agent's list must not survive the switch or it renders
+            // under the new agent until its own update lands.
+            sess.availableCommands = undefined;
             if (agentType === "claude-code") {
               // Claude has no ACP modes — clear the old agent's so no stale pill.
               sess.acpAvailableModes = [];
@@ -650,10 +880,26 @@ export const useChatStore = createSelectors(
               sess.acpCurrentMode = cached?.currentMode ?? undefined;
               sess.acpModesPending = true;
             }
-            // Models apply to both agents — seed from cache (empty for cersei).
+            // Same restore as createSession: the agent's last explicit pick
+            // wins over the optimistic cache seed above.
+            applyPersistedModePref(sess, agentType);
+            // Models apply to both agents — seed from cache (empty for the native agent).
             const cachedModels = loadCachedAcpModels(agentType);
             sess.acpAvailableModels = cachedModels?.availableModels ?? [];
-            sess.acpCurrentModel = cachedModels?.currentModel ?? undefined;
+            sess.acpCurrentModel = undefined;
+            // The advertised knobs are per-agent too, and this was the one
+            // per-agent list the switch never reset — so the Options pill kept
+            // rendering the PREVIOUS agent's state until the new binding spoke.
+            // Two ways that showed: a settled "Default" carried over from an
+            // agent with no knobs and then snapped to "Options" with no loading
+            // in between, and (worse) another agent's knobs stayed clickable,
+            // writing `set_config_option` for ids the new agent never advertised.
+            //
+            // Same posture as the modes seed above: optimistically adopt the new
+            // agent's cache — including a cached empty list, which is a real
+            // "this agent has no knobs" verdict — and leave it `undefined` on a
+            // miss, which is exactly the pill's loading state.
+            sess.acpConfigOptions = loadCachedAcpConfigOptions(agentType) ?? undefined;
           }),
         setSessionAgentType: (tabId, agentType) =>
           set((s) => {
@@ -661,10 +907,17 @@ export const useChatStore = createSelectors(
             if (!sess) return;
             if (sess.agentType !== agentType) {
               sess.agentType = agentType;
+              // Per-agent ACP command list — stale across an agent change.
+              sess.availableCommands = undefined;
+              // And the per-agent knob list, for the same reason. The resume
+              // snapshot's own `setAcpConfigOptions` lands right after; this is
+              // what the pill shows meanwhile, and it must not be the previous
+              // agent's.
+              sess.acpConfigOptions = loadCachedAcpConfigOptions(agentType) ?? undefined;
               sess.claudePermissionMode =
-                agentType === "claude-code"
-                  ? (sess.claudePermissionMode ?? "default")
-                  : undefined;
+                agentType === "claude-code" ? (sess.claudePermissionMode ?? "default") : undefined;
+              sess.claudePermissionModeExplicit = false;
+              sess.acpModeExplicit = false;
               if (agentType === "claude-code") {
                 // Claude has no ACP modes — clear any stale picker state left
                 // by the previously-selected agent so no ghost mode pill shows.
@@ -672,7 +925,7 @@ export const useChatStore = createSelectors(
                 sess.acpModesPending = false;
                 sess.acpCurrentMode = undefined;
               }
-              // For codex/cersei the resume flow calls `setAcpModes`
+              // For codex and the native agent the resume flow calls `setAcpModes`
               // immediately after with the session's real advertised modes, so
               // no cache seeding is needed here. Crucially the ACP binding
               // (acpAgentId/acpSessionId) is left intact — this only relabels.
@@ -685,10 +938,10 @@ export const useChatStore = createSelectors(
             // same-agent variant). The resume snapshot's real models/current
             // land right after via `setAcpModels` (which only seeds current
             // when unset, so clearing here is what lets it take effect).
-            sess.cerseiProvider = undefined;
+            sess.nativeProvider = undefined;
             const cachedModels = loadCachedAcpModels(agentType);
             sess.acpAvailableModels = cachedModels?.availableModels ?? [];
-            sess.acpCurrentModel = cachedModels?.currentModel ?? undefined;
+            sess.acpCurrentModel = undefined;
           }),
         setActiveSession: (id) =>
           set((s) => {
@@ -723,8 +976,21 @@ export const useChatStore = createSelectors(
             session.messages.push(msg);
             session.updatedAt = new Date().toISOString();
             if (role === "user") {
-              if (!session.firstUserContent) session.firstUserContent = content;
+              // Stored PRE-stripped and PRE-truncated: every consumer is a
+              // preview (≤80 chars after their own stripInjectedContext,
+              // which is idempotent), and the sidebar's sessionsSignature
+              // selector concatenates this field on EVERY store write — an
+              // untruncated multi-KB paste made that O(paste bytes) per
+              // keystroke and per streaming frame, for every mounted sidebar.
+              if (!session.firstUserContent) {
+                session.firstUserContent = firstUserPreview(split ? split.prose : content);
+              }
               session.userMessageCount = (session.userMessageCount ?? 0) + 1;
+              // The ONE row allowed to play the bubble entrance. Resume /
+              // replay paths stamp messages "now", so a timestamp heuristic
+              // animated whole restored threads (and every row mounted during
+              // an early scroll) — id-scoping keeps it to the actual send.
+              session.justSentMessageId = msg.id;
             }
           }),
         appendToolCall: (sessionId, toolName, input) =>
@@ -765,12 +1031,39 @@ export const useChatStore = createSelectors(
         setDisconnected: (sessionId, on) =>
           set((s) => {
             const session = s.sessions[sessionId];
-            if (session) session.disconnected = on || undefined;
+            if (!session) return;
+            session.disconnected = on || undefined;
+            if (!on) session.updatedTo = undefined;
           }),
         setStopping: (sessionId, on) =>
           set((s) => {
             const session = s.sessions[sessionId];
             if (session) session.stopping = on || undefined;
+          }),
+        // Killing an agent drops its connection, and the exit-watch task that
+        // would have produced `agent_disconnected` goes with it. So nothing
+        // arrives to end the turn: this records what that delta does, plus the
+        // turn terminal Rust normally emits ahead of it (`agent_disconnected`
+        // above is written assuming the status is already error). Without the
+        // status and tool-call reset the composer keeps offering Stop for a
+        // process that no longer exists, underneath a Restart banner.
+        //
+        // The transcript is deliberately untouched — the conversation survives
+        // and `acpSessionId` is what a restart resumes from.
+        noteAgentKilled: (sessionId) =>
+          set((s) => {
+            const session = s.sessions[sessionId];
+            if (!session) return;
+            session.status = "error";
+            session.stopping = undefined;
+            session.retryStatus = undefined;
+            session.inflightToolIds = undefined;
+            session.disconnected = true;
+          }),
+        setPendingSend: (sessionId, pending) =>
+          set((s) => {
+            const session = s.sessions[sessionId];
+            if (session) session.pendingSend = pending;
           }),
         setSessionTitle: (sessionId, title) =>
           set((s) => {
@@ -794,8 +1087,10 @@ export const useChatStore = createSelectors(
               session.messages = [];
               session.tasks = [];
               session.status = "idle";
+              session.inflightToolIds = undefined;
               session.acpAgentId = undefined;
               session.acpSessionId = undefined;
+              forgetSessionUsage(session);
               session.title = "New Chat";
               session.firstUserContent = undefined;
               session.userMessageCount = 0;
@@ -805,6 +1100,14 @@ export const useChatStore = createSelectors(
               session.currentTurnSeq = 0;
               session.livePlan = undefined;
               session.turnScratch = undefined;
+              // Commands belong to the ACP session being dropped; the next
+              // binding re-advertises its own list.
+              session.availableCommands = undefined;
+              // The advertised knobs go with it, for the same reason. Reseeded
+              // from this agent's cache rather than blanked, so the Options pill
+              // keeps rendering the right list across a clear instead of
+              // dropping to a spinner for something we already know.
+              session.acpConfigOptions = loadCachedAcpConfigOptions(session.agentType) ?? undefined;
               // The tab no longer points at the session being resumed, so the
               // send gate must drop with it. A resume that gets superseded
               // (New chat / another sidebar click) bails WITHOUT clearing its own
@@ -813,27 +1116,69 @@ export const useChatStore = createSelectors(
               // reset. Leaving it set would silently queue every future send in
               // this tab forever.
               session.resumePending = false;
+              // A first message still waiting on the old bind belongs to the
+              // conversation being dropped, exactly like the queue below.
+              session.pendingSend = undefined;
             }
             delete s.queues[sessionId];
           }),
         cycleClaudePermissionMode: (sessionId) => {
+          let next: ClaudePermissionMode | undefined;
+          let previous: ClaudePermissionMode | undefined;
           set((s) => {
             const session = s.sessions[sessionId];
             if (!session) return;
             const cur = session.claudePermissionMode ?? "default";
+            previous = cur;
             const i = CLAUDE_PERMISSION_MODES.indexOf(cur);
-            const next =
-              CLAUDE_PERMISSION_MODES[(i + 1) % CLAUDE_PERMISSION_MODES.length];
+            next = CLAUDE_PERMISSION_MODES[(i + 1) % CLAUDE_PERMISSION_MODES.length];
             session.claudePermissionMode = next;
+            session.claudePermissionModeExplicit = true;
           });
-          pushPermissionModeToAgent(get(), sessionId);
+          // "default" means "defer to the CLI's own configured default" —
+          // cycling back to it DROPS the persisted pick rather than storing it.
+          if (next) saveLastModePref("claude-code", next === "default" ? null : next);
+          pushPermissionModeToAgent(get(), sessionId, previous);
         },
-        setClaudePermissionMode: (sessionId, mode) => {
+        hydrateClaudePermissionMode: (sessionId, mode) =>
           set((s) => {
             const session = s.sessions[sessionId];
-            if (session) session.claudePermissionMode = mode;
+            if (!session) return;
+            session.claudePermissionMode = mode;
+            session.claudePermissionModeExplicit = false;
+          }),
+        setClaudePermissionMode: (sessionId, mode) => {
+          const previous = get().sessions[sessionId]?.claudePermissionMode ?? "default";
+          set((s) => {
+            const session = s.sessions[sessionId];
+            if (session) {
+              session.claudePermissionMode = mode;
+              session.claudePermissionModeExplicit = true;
+            }
           });
-          pushPermissionModeToAgent(get(), sessionId);
+          saveLastModePref("claude-code", mode === "default" ? null : mode);
+          pushPermissionModeToAgent(get(), sessionId, previous);
+        },
+        applyExitPlanSelection: (sessionId, optionId, override) => {
+          const session = get().sessions[sessionId];
+          if (!session || session.agentType !== "claude-code") return;
+          const mode = override ?? exitPlanModeForOption(optionId);
+          if (!mode) return;
+          const previous = session.claudePermissionMode ?? "default";
+          set((s) => {
+            const sess = s.sessions[sessionId];
+            if (!sess) return;
+            sess.claudePermissionMode = mode;
+            sess.acpCurrentMode = mode;
+          });
+          // A clear-context choice restarts the session; the adapter publishes
+          // the mode itself once the replacement is up, and a set_mode sent
+          // into the restart is refused. The plain choices are applied by the
+          // CLI alone — push so the adapter's own bookkeeping (which builds the
+          // NEXT approval prompt from it) agrees, and so an override actually
+          // takes effect.
+          if (exitPlanOptionRestartsSession(optionId) && !override) return;
+          pushPermissionModeToAgent(get(), sessionId, previous);
         },
         setAcpModes: (sessionId, currentMode, availableModes, sourceAgentType) => {
           const at = get().sessions[sessionId]?.agentType;
@@ -871,7 +1216,10 @@ export const useChatStore = createSelectors(
           // Persist the confirmed modes so the next switch to this agent is
           // instant. Done outside the immer pass (side effect, not state).
           if (availableModes.length > 0 && at && at !== "claude-code") {
-            saveCachedAcpModes(at, { currentMode: currentMode ?? null, availableModes });
+            saveCachedAcpModes(at, {
+              currentMode: currentMode ?? null,
+              availableModes,
+            });
           }
         },
         setAcpModesPending: (sessionId, pending) =>
@@ -880,24 +1228,123 @@ export const useChatStore = createSelectors(
             if (session) session.acpModesPending = pending;
           }),
         setAcpMode: (sessionId, modeId) => {
+          const previous = get().sessions[sessionId]?.acpCurrentMode;
           set((s) => {
             const session = s.sessions[sessionId];
-            if (session) session.acpCurrentMode = modeId;
+            if (session) {
+              session.acpCurrentMode = modeId;
+              session.acpModeExplicit = true;
+            }
           });
-          pushAcpModeToAgent(get(), sessionId);
+          // Persist the explicit pick per agent. agentType IS the plugin id
+          // for registry-installed externals, so every ACP agent — first-party
+          // or installed — keeps its own record.
+          const at = get().sessions[sessionId]?.agentType;
+          if (at && at !== "claude-code") saveLastModePref(at, modeId);
+          pushAcpModeToAgent(get(), sessionId, previous);
+        },
+        clearElicitation: (sessionId) =>
+          set((s) => {
+            const session = s.sessions[sessionId];
+            if (session) session.pendingElicitation = undefined;
+          }),
+        setAcpConfigOption: async (sessionId, configId, value) => {
+          const session = get().sessions[sessionId];
+          if (!session?.acpAgentId || !session.acpSessionId) return;
+          // An explicit pick is worth remembering: the next session on this
+          // agent re-applies it at open, validated against what that session
+          // actually advertises (#33).
+          if (session.agentType) saveConfigOptionPref(session.agentType, configId, value);
+          try {
+            await agents.setConfigOption(
+              {
+                agent_id: session.acpAgentId,
+                session_id: session.acpSessionId,
+              },
+              configId,
+              value,
+            );
+            // No optimistic local write — but not for the reason this once
+            // claimed. A follow-up notification is OPTIONAL and most agents
+            // never send one; the authoritative echo is the set RESPONSE,
+            // which the host now forwards as a `config_options_updated` delta
+            // (#32). The confirmed state arrives through that, so guessing
+            // here would only flicker the control when the agent disagrees.
+          } catch (e) {
+            console.warn("setConfigOption failed:", e);
+          }
+        },
+        setAcpAvailableCommands: (sessionId, commands, sourceAgentType) => {
+          // Same stale-snapshot hazard `setAcpModes`/`setAcpConfigOptions` are
+          // guarded for, with a worse symptom: a tab relabelled to another
+          // agent keeps its old binding until the rebind lands, so a snapshot
+          // fetched off that binding writes the OLD agent's commands under the
+          // new label. Claude advertises its *skills* as commands, which is
+          // how the native agent's picker showed the user's Claude skills and
+          // none of its own commands.
+          const at = get().sessions[sessionId]?.agentType;
+          if (sourceAgentType && at && sourceAgentType !== at) return;
+          set((s) => {
+            const session = s.sessions[sessionId];
+            if (!session) return;
+            // An empty snapshot must not erase a list the live delta already
+            // delivered; it MAY end the picker's loading state (undefined→[])
+            // for agents that genuinely advertise nothing.
+            if (commands.length === 0 && (session.availableCommands?.length ?? 0) > 0) {
+              return;
+            }
+            session.availableCommands = commands;
+          });
+        },
+        setAcpConfigOptions: (tabId, options, sourceAgentType) => {
+          const at = get().sessions[tabId]?.agentType;
+          // Same stale-snapshot hazard `setAcpModes` was versioned for: a tab
+          // relabelled to another agent keeps its old binding, so a snapshot
+          // fetched off that binding can land under the new label — and would
+          // write the OLD agent's knobs into the new agent's pill and cache.
+          // Callers pass the agent the snapshot actually came from; a mismatch
+          // is stale by definition, so drop it.
+          if (sourceAgentType && at && sourceAgentType !== at) return;
+          set((s) => {
+            const session = s.sessions[tabId];
+            if (!session) return;
+            // An empty snapshot must not erase a list the live delta already
+            // delivered; it MAY end the undefined loading state (this agent
+            // advertises no knobs). Same rule as the commands list above.
+            if (options.length === 0 && (session.acpConfigOptions?.length ?? 0) > 0) {
+              return;
+            }
+            session.acpConfigOptions = options;
+          });
+          // Survive the next restart (#36) — modes and models already do;
+          // without this the Options pill died with the process. Outside the
+          // immer pass (side effect, not state), like the sibling caches.
+          //
+          // Cache what actually LANDED, not what was passed: the guard above may
+          // have rejected this call, and an empty list that survived it is a real
+          // verdict ("this agent has no knobs") the pill renders instantly next
+          // launch instead of spinning for it.
+          //
+          // Note there is no agent-id condition here. `claude-code` used to be
+          // excluded, which is why the pill took seconds to appear for exactly
+          // the agent most people run — a spawn-time snapshot cached nothing, so
+          // every cold start waited on a live delta. Capability, never identity
+          // (ADR-0002).
+          const landed = get().sessions[tabId]?.acpConfigOptions;
+          if (at && landed !== undefined) {
+            saveCachedAcpConfigOptions(at, landed);
+          }
         },
         setAcpModels: (sessionId, currentModel, availableModels) => {
           set((s) => {
             const session = s.sessions[sessionId];
             if (!session) return;
-            // Never clobber a good list with an empty snapshot. ACP
-            // `session/load` doesn't re-advertise models, so a resume/re-bind
-            // snapshot can carry [] while the session already has the real
-            // list — and the picker hides itself whenever the list is empty.
-            if (
-              availableModels.length === 0 &&
-              (session.acpAvailableModels?.length ?? 0) > 0
-            ) {
+            // Never clobber a good list with an empty snapshot. A snapshot
+            // taken before the agent's config options landed — or from an
+            // agent that advertises no model select at all — carries [] while
+            // the session may already have the real list, and the picker hides
+            // itself whenever the list is empty.
+            if (availableModels.length === 0 && (session.acpAvailableModels?.length ?? 0) > 0) {
               return;
             }
             session.acpAvailableModels = availableModels;
@@ -911,7 +1358,18 @@ export const useChatStore = createSelectors(
           // `session/load` doesn't re-advertise models).
           const at = get().sessions[sessionId]?.agentType;
           if (availableModels.length > 0 && at) {
-            saveCachedAcpModels(at, { currentModel: currentModel ?? null, availableModels });
+            saveCachedAcpModels(at, { availableModels });
+          }
+        },
+        setAcpModelsForAgent: (agentType, availableModels) => {
+          set((s) => {
+            for (const session of Object.values(s.sessions)) {
+              if (session.agentType !== agentType) continue;
+              session.acpAvailableModels = availableModels;
+            }
+          });
+          if (availableModels.length > 0) {
+            saveCachedAcpModels(agentType, { availableModels });
           }
         },
         setAcpModel: (sessionId, modelId) => {
@@ -921,42 +1379,34 @@ export const useChatStore = createSelectors(
           });
           pushAcpModelToAgent(get(), sessionId);
         },
-        setCerseiProvider: (sessionId, provider) =>
+        setNativeProvider: (sessionId, provider) =>
           set((s) => {
             const session = s.sessions[sessionId];
-            if (!session || session.cerseiProvider === provider) return;
-            session.cerseiProvider = provider;
+            if (!session || session.nativeProvider === provider) return;
+            session.nativeProvider = provider;
             // New provider → the prior model id is meaningless; let the composer
             // pick this provider's default before anything is pushed.
             session.acpCurrentModel = undefined;
           }),
-        setCerseiModel: (sessionId, model) => {
+        setNativeModel: (sessionId, model) => {
           set((s) => {
             const session = s.sessions[sessionId];
             if (session) session.acpCurrentModel = model;
           });
           // Remember the full selection so the next new chat seeds from it.
           const sess = get().sessions[sessionId];
-          if (sess?.cerseiProvider && model) {
-            saveCerseiModelPref({ provider: sess.cerseiProvider, model });
+          if (sess?.nativeProvider && model) {
+            saveNativeModelPref({ provider: sess.nativeProvider, model });
           }
-          pushCerseiModelToAgent(get(), sessionId);
+          pushNativeModelToAgent(get(), sessionId);
         },
-        setCerseiEffort: (sessionId, effort) => {
+        setNativeEffort: (sessionId, effort) => {
           set((s) => {
             const session = s.sessions[sessionId];
-            if (session) session.cerseiEffort = effort;
+            if (session) session.nativeEffort = effort;
           });
-          saveCerseiEffort(effort);
-          pushCerseiEffortToAgent(get(), sessionId);
-        },
-        setCerseiCompress: (sessionId, on) => {
-          set((s) => {
-            const session = s.sessions[sessionId];
-            if (session) session.cerseiCompress = on;
-          });
-          saveCerseiCompress(on);
-          pushCerseiCompressToAgent(get(), sessionId);
+          saveNativeEffort(effort);
+          pushNativeEffortToAgent(get(), sessionId);
         },
         replaceMessages: (sessionId, messages) =>
           set((s) => {
@@ -968,19 +1418,25 @@ export const useChatStore = createSelectors(
                 id: `msg-${Date.now()}-${i}`,
                 role: m.role,
                 content: m.content,
+                // Keep the agent's own id and outcome when the caller has
+                // them. Re-minting both is what made every tool call in a
+                // resumed transcript render as succeeded, failed ones included
+                // (ATL-220). The fallbacks stand only for a paint path that
+                // genuinely has neither.
                 toolCalls: (m.toolCalls ?? []).map((tc, j) => ({
-                  id: `tc-${Date.now()}-${i}-${j}`,
+                  id: tc.id ?? `tc-${Date.now()}-${i}-${j}`,
                   toolName: tc.toolName,
                   kind: tc.kind ?? null,
                   arguments: tc.arguments,
                   result: tc.result ?? null,
-                  status: "completed" as const,
+                  status: tc.status ?? ("completed" as const),
                   duration: null,
                 })),
                 fileChanges: [],
                 plan: null,
                 timestamp: m.timestamp ?? new Date().toISOString(),
                 ...(m.role === "assistant" && m.model ? { model: m.model } : {}),
+                ...(m.attachments?.length ? { attachments: m.attachments } : {}),
                 ...(split && split.context !== null
                   ? {
                       atlasProse: split.prose,
@@ -1011,11 +1467,15 @@ export const useChatStore = createSelectors(
             }
             // Recompute the cached preview/count from the loaded transcript
             // so the sidebar doesn't have to scan messages on every chunk.
+            // Same stripped+truncated form as appendMessage (see note there).
+            const firstUserRaw = messages.find((m) => m.role === "user")?.content;
             session.firstUserContent =
-              messages.find((m) => m.role === "user")?.content;
+              firstUserRaw !== undefined
+                ? firstUserPreview(splitAtlasContext(firstUserRaw).prose)
+                : undefined;
             session.userMessageCount = messages.reduce(
               (n, m) => n + (m.role === "user" ? 1 : 0),
-              0
+              0,
             );
             // Intentionally NOT touching `updatedAt`. This action is called
             // when loading a historical transcript from disk into a tab —
@@ -1039,17 +1499,21 @@ export const useChatStore = createSelectors(
                 ? plan.map((e, idx) => ({
                     id: `plan-${idx}`,
                     description: e.content,
-                    status:
-                      (e.status as "pending" | "in_progress" | "completed") ??
-                      "pending",
+                    status: (e.status as "pending" | "in_progress" | "completed") ?? "pending",
                   }))
                 : undefined;
           }),
         removeSession: (sessionId) => {
           dropBackendSession(get().sessions[sessionId]);
           set((s) => {
+            // pendingPermissions is keyed by acpSessionId, not tab id — resolve
+            // before the session entry goes away (a stale list would resurface
+            // as a ghost prompt if the same acp session is later resumed).
+            const acp = s.sessions[sessionId]?.acpSessionId;
+            if (acp) delete s.pendingPermissions[acp];
             delete s.sessions[sessionId];
             delete s.drafts[sessionId];
+            delete s.queues[sessionId];
             if (s.activeSessionId === sessionId) {
               const keys = Object.keys(s.sessions);
               s.activeSessionId = keys.length > 0 ? keys[0] : null;
@@ -1060,10 +1524,12 @@ export const useChatStore = createSelectors(
           for (const id of sessionIds) dropBackendSession(get().sessions[id]);
           set((s) => {
             for (const id of sessionIds) {
+              // Same acpSessionId-keying note as removeSession above.
+              const acp = s.sessions[id]?.acpSessionId;
+              if (acp) delete s.pendingPermissions[acp];
               delete s.sessions[id];
               delete s.drafts[id];
               delete s.queues[id];
-              delete s.pendingPermissions[id];
               if (s.activeSessionId === id) s.activeSessionId = null;
             }
           });
@@ -1169,11 +1635,11 @@ export const useChatStore = createSelectors(
             if (!session) return;
             // A (re)bind points the tab at a DIFFERENT backend session — a
             // freshly spawned SessionActor whose `turn_seq` counter restarts at
-            // 1 (turn_seq is not persisted; new / resumed / workspace-switched
+            // 1 (turn_seq is not persisted; new / resumed / project-switched
             // sessions all reconstruct it from 0). The frontend `currentTurnSeq`
             // is a monotonic high-water mark that only ratchets UP (see the
             // status handler), so a value retained from the PREVIOUS session —
-            // e.g. after ⌥N launches a new session in a new workspace, or "New
+            // e.g. after ⌥N launches a new session in a new project, or "New
             // Chat" resets the singleton tab in place — would make every
             // terminal of the new session (idle / turn_finished at turn_seq 1)
             // look stale via `isStaleTurn` and get dropped, stranding the
@@ -1184,12 +1650,18 @@ export const useChatStore = createSelectors(
               session.currentTurnSeq = 0;
               session.livePlan = undefined;
               session.turnScratch = undefined;
+              // Usage is per backend session; a different one starts from
+              // nothing (its cached context gauge is restored by
+              // `replaceMessages`, keyed on the new id).
+              forgetSessionUsage(session);
             }
             session.acpAgentId = agentId;
             session.acpSessionId = acpSessionId;
+            // A bind that landed supersedes whatever the last one died of.
+            session.bindError = undefined;
             // Stamp the session's project root the moment it's bound (the agent
             // was created with this cwd). Without it `workingDirectory` stays ""
-            // and the chat never lands in the workspace "Chats" list / running
+            // and the chat never lands in the project "Chats" list / running
             // counts. Callers pass the project path they used for the session.
             if (cwd) session.workingDirectory = cwd;
           }),
@@ -1213,9 +1685,7 @@ export const useChatStore = createSelectors(
         clearPermissionsForAgent: (agentId) =>
           set((s) => {
             for (const sid of Object.keys(s.pendingPermissions)) {
-              const list = s.pendingPermissions[sid].filter(
-                (r) => r.agentId !== agentId
-              );
+              const list = s.pendingPermissions[sid].filter((r) => r.agentId !== agentId);
               if (list.length === 0) delete s.pendingPermissions[sid];
               else s.pendingPermissions[sid] = list;
             }
@@ -1228,9 +1698,67 @@ export const useChatStore = createSelectors(
           set((s) => {
             applyDeltaToDraft(s, env);
           }),
+        setAgentStartingStatus: (pluginId, status) =>
+          set((s) => {
+            if (status === null || status === "") {
+              if (pluginId in s.agentStartingStatus) delete s.agentStartingStatus[pluginId];
+              return;
+            }
+            if (s.agentStartingStatus[pluginId] !== status)
+              s.agentStartingStatus[pluginId] = status;
+          }),
+        failPendingBinds: (pluginId, reason) =>
+          set((s) => {
+            delete s.agentStartingStatus[pluginId];
+            for (const [tabId, session] of Object.entries(s.sessions)) {
+              if (session.acpSessionId) continue;
+              if (pluginIdForAgent(session.agentType) !== pluginId) continue;
+              const starting = !!session.pendingSend || session.status === "running";
+              if (!starting) continue;
+              const held = session.pendingSend;
+              if (held) {
+                session.pendingSend = undefined;
+                s.queues[tabId] = [...(s.queues[tabId] ?? []), held.content];
+              }
+              session.status = "idle";
+              session.stopping = undefined;
+              session.retryStatus = undefined;
+              session.inflightToolIds = undefined;
+              session.acpModesPending = false;
+              session.disconnected = true;
+              if (reason) session.bindError = reason;
+            }
+          }),
+        noteAgentUpdated: (pluginId, version) =>
+          set((s) => {
+            for (const session of Object.values(s.sessions)) {
+              if (pluginIdForAgent(session.agentType) !== pluginId) continue;
+              if (!session.acpSessionId) continue;
+              session.updatedTo = version;
+            }
+          }),
+        noteAgentRemoved: (pluginId, reason) =>
+          set((s) => {
+            delete s.agentStartingStatus[pluginId];
+            for (const [tabId, session] of Object.entries(s.sessions)) {
+              if (pluginIdForAgent(session.agentType) !== pluginId) continue;
+              const held = session.pendingSend;
+              if (held) {
+                session.pendingSend = undefined;
+                s.queues[tabId] = [...(s.queues[tabId] ?? []), held.content];
+              }
+              session.status = "idle";
+              session.stopping = undefined;
+              session.retryStatus = undefined;
+              session.inflightToolIds = undefined;
+              session.acpModesPending = false;
+              session.disconnected = true;
+              session.bindError = reason;
+            }
+          }),
       },
-    }))
-  )
+    })),
+  ),
 );
 
 // ── Draft-mutating helpers ────────────────────────────────────────────────
@@ -1250,13 +1778,25 @@ type ChatDraft = ChatState & ChatActions;
  *  at render time from live session state is what leaked labels across agents
  *  (a later model/agent switch relabeled the whole thread). */
 function stampProducingModel(
-  session: { acpCurrentModel?: string },
+  session: {
+    acpCurrentModel?: string;
+    acpAvailableModels?: SessionModeInfo[];
+    agentType?: string;
+  },
   msg: ChatMessage,
 ): ChatMessage {
   // `session.model` is intentionally NOT a fallback — it's set to "" at
   // creation and never written after, so `acpCurrentModel` is the only real
   // source of the producing model.
-  const m = session.acpCurrentModel;
+  //
+  // Stamped as the DISPLAY NAME, resolved here rather than in the row: rows
+  // can't read session state without relabelling history on a later switch,
+  // and the raw id is a wire token ("default") that means nothing to a reader.
+  const m = resolveModelLabel(
+    session.acpCurrentModel,
+    session.agentType,
+    session.acpAvailableModels,
+  );
   if (m) msg.model = m;
   return msg;
 }
@@ -1323,16 +1863,14 @@ function appendThoughtToDraft(s: ChatDraft, acpSessionId: string, text: string):
 /** A terminal (idle/error) delta carries the `turn_seq` of the turn it ends.
  *  Reject one whose turn is older than the session's current turn — a newer
  *  send already superseded it (the parallel / queued / wake premature-"done"
- *  class). A missing or 0 `turn_seq` (native cersei agent) is treated as
+ *  class). A missing or 0 `turn_seq` (native agent) is treated as
  *  current, so nothing regresses there. */
 /** Fire-and-forget backend teardown for a closed tab's session: the manager
  *  drops the actor + the driver-side guard (M6 — these used to leak for the
  *  whole process lifetime). UI state removal proceeds regardless. */
 function dropBackendSession(session: ChatSession | undefined): void {
   if (!session?.acpAgentId || !session.acpSessionId || session.disconnected) return;
-  void agents
-    .dropSession(session.acpAgentId, session.acpSessionId)
-    .catch(() => {});
+  void agents.dropSession(session.acpAgentId, session.acpSessionId).catch(() => {});
 }
 
 function isStaleTurn(session: ChatSession, turnSeq: number | undefined): boolean {
@@ -1349,7 +1887,11 @@ function applyDeltaToDraft(s: ChatDraft, env: AgentDelta): void {
       const seq = env.turn_seq;
       if (env.status === "running" || env.status === "waiting") {
         // Turn start / paused-for-user (plan / permission): adopt the turn
-        // identity and stay in an active (busy) state.
+        // identity and stay in an active (busy) state. A running/waiting for
+        // an already-superseded turn is dropped like a stale terminal: applied,
+        // it would flip a finished session back to busy with nothing left to
+        // clear it.
+        if (isStaleTurn(session, seq)) return;
         if (seq && seq > (session.currentTurnSeq ?? 0)) {
           session.currentTurnSeq = seq;
           // New turn — clear the previous turn's live plan so the docked panel
@@ -1379,6 +1921,7 @@ function applyDeltaToDraft(s: ChatDraft, env: AgentDelta): void {
       session.status = terminal;
       session.stopping = undefined;
       session.retryStatus = undefined;
+      session.inflightToolIds = undefined;
       // No permission modal survives its turn: the Rust finalize sweep emits
       // permission_resolved for each, but a lost/raced delta must not leave a
       // clickable modal on an idle turn (its click would strand the session).
@@ -1389,24 +1932,24 @@ function applyDeltaToDraft(s: ChatDraft, env: AgentDelta): void {
       // Reject a terminal for a turn already superseded by a newer send —
       // don't flip to idle or inject an empty-turn placeholder for stale turns.
       if (isStaleTurn(session, env.turn_seq)) return;
-                // Empty-turn detection: if no assistant content arrived
-                // between the last user message and turn-end, insert a
-                // placeholder so the UI doesn't show a vanishing spinner.
-                let lastUserIdx = -1;
-                for (let i = session.messages.length - 1; i >= 0; i--) {
-                  if (session.messages[i].role === "user") {
-                    lastUserIdx = i;
-                    break;
-                  }
-                }
-                const responded = session.messages
+      // Empty-turn detection: if no assistant content arrived
+      // between the last user message and turn-end, insert a
+      // placeholder so the UI doesn't show a vanishing spinner.
+      let lastUserIdx = -1;
+      for (let i = session.messages.length - 1; i >= 0; i--) {
+        if (session.messages[i].role === "user") {
+          lastUserIdx = i;
+          break;
+        }
+      }
+      const responded = session.messages
         .slice(lastUserIdx + 1)
         .some(
           (m) =>
             m.role === "assistant" &&
             ((m.content && m.content.length > 0) ||
               m.toolCalls.length > 0 ||
-              (m.thinking && m.thinking.length > 0))
+              (m.thinking && m.thinking.length > 0)),
         );
       if (!responded && env.stop_reason !== "cancelled") {
         const label =
@@ -1414,6 +1957,15 @@ function applyDeltaToDraft(s: ChatDraft, env: AgentDelta): void {
             ? "(no response — the agent ended its turn without output)"
             : `(no response — stop_reason: ${env.stop_reason})`;
         session.messages.push(makeAssistantTextMessage(label));
+      } else if (responded) {
+        // P2.4: an abnormal stop reason has to surface even when output DID
+        // arrive — that is precisely when it is invisible otherwise. A
+        // `max_tokens` reply is truncated mid-thought and reads like a finished
+        // one; a `refusal` reads like the agent simply chose to say that. Only
+        // `end_turn` and `cancelled` are self-explanatory, so only they stay
+        // silent (cancelled already has its own UI).
+        const notice = stopReasonNotice(env.stop_reason);
+        if (notice) session.messages.push(makeAssistantTextMessage(notice));
       }
       // Resolve any tool calls still in pending/running state on EVERY
       // terminal, not just cancel. After Stop the driver gate drops further
@@ -1431,7 +1983,11 @@ function applyDeltaToDraft(s: ChatDraft, env: AgentDelta): void {
       // badge must be a historical fact per message — deriving it from live
       // session state relabels the whole thread when the session's model or
       // agent changes later (the "Claude messages labeled Gemini" leak).
-      const producingModel = session.acpCurrentModel;
+      const producingModel = resolveModelLabel(
+        session.acpCurrentModel,
+        session.agentType,
+        session.acpAvailableModels,
+      );
       if (producingModel) {
         for (let i = lastUserIdx + 1; i < session.messages.length; i++) {
           const m = session.messages[i];
@@ -1439,23 +1995,25 @@ function applyDeltaToDraft(s: ChatDraft, env: AgentDelta): void {
         }
       }
       session.status =
-        env.stop_reason === "end_turn" ||
-        env.stop_reason === "cancelled"
-          ? "idle"
-          : "error";
+        env.stop_reason === "end_turn" || env.stop_reason === "cancelled" ? "idle" : "error";
       session.stopping = undefined;
       session.retryStatus = undefined;
+      session.inflightToolIds = undefined;
       delete s.pendingPermissions[env.session_id];
       // Per-turn usage footer (native agent): derive this turn's tokens/cost as
       // the delta from the previous turn's cumulative snapshot, and attach it to
       // the trailing assistant message so it renders at the end of the turn.
-      if (session.usage && session.agentType === "cersei") {
+      if (session.usage && session.agentType === "atlas-agent") {
         const cum = {
           input: session.usage.input_tokens ?? 0,
           output: session.usage.output_tokens ?? 0,
           cost: session.usage.cost ?? 0,
         };
-        const prev = session.lastUsageSnapshot ?? { input: 0, output: 0, cost: 0 };
+        const prev = session.lastUsageSnapshot ?? {
+          input: 0,
+          output: 0,
+          cost: 0,
+        };
         const turn = {
           input: Math.max(0, cum.input - prev.input),
           output: Math.max(0, cum.output - prev.output),
@@ -1477,7 +2035,7 @@ function applyDeltaToDraft(s: ChatDraft, env: AgentDelta): void {
       // split, but they stream a cumulative context-window gauge. Snapshot the
       // latest onto the trailing assistant message so its turn card renders a
       // context gauge in the same slot the native agent uses for per-turn usage.
-      if (session.contextUsage && session.agentType !== "cersei") {
+      if (session.contextUsage && session.agentType !== "atlas-agent") {
         for (let i = session.messages.length - 1; i >= 0; i--) {
           if (session.messages[i].role === "assistant") {
             session.messages[i].contextUsage = { ...session.contextUsage };
@@ -1505,6 +2063,15 @@ function applyDeltaToDraft(s: ChatDraft, env: AgentDelta): void {
         }
         session.turnScratch = undefined;
       }
+      // "Worked for 7m 37s": the turn's wall time, measured from the user's
+      // message. Only a live turn can be timed honestly — see `workedMs`.
+      if (lastUserIdx >= 0 && responded) {
+        const sentAt = Date.parse(session.messages[lastUserIdx].timestamp);
+        const last = session.messages[session.messages.length - 1];
+        if (Number.isFinite(sentAt) && last.role === "assistant") {
+          last.workedMs = Math.max(0, Date.now() - sentAt);
+        }
+      }
       // Agent-generated next-step chips: extract the trailing assistant reply's
       // hidden `<next_steps>` block into click-to-send suggestions. The raw
       // content (with the block) stays in the store; the display path strips it.
@@ -1513,7 +2080,11 @@ function applyDeltaToDraft(s: ChatDraft, env: AgentDelta): void {
         if (m.role !== "assistant") continue;
         const chips = extractNextSteps(m.content);
         if (chips.length > 0) {
-          m.suggestions = { turnSeq: env.turn_seq ?? 0, status: "ready", chips };
+          m.suggestions = {
+            turnSeq: env.turn_seq ?? 0,
+            status: "ready",
+            chips,
+          };
         }
         break;
       }
@@ -1521,16 +2092,25 @@ function applyDeltaToDraft(s: ChatDraft, env: AgentDelta): void {
     }
     case "turn_failed": {
       if (isStaleTurn(session, env.turn_seq)) return;
-      // Don't hardcode "ACP error" — the native Atlas (cersei) agent is
+      // Sweep live tool calls to failed — turn_finished and the bare terminal
+      // status both have this guard (no spinner outlives its turn), and this was
+      // the one terminal without it. Rust usually pairs TurnFailed with a
+      // Status(error) whose sweep covers it, but the view-side guard exists
+      // precisely because a paired delta can be lost or raced.
+      for (const msg of session.messages) {
+        for (const tc of msg.toolCalls) {
+          if (tc.status === "pending" || tc.status === "running") tc.status = "failed";
+        }
+      }
+      // Don't hardcode "ACP error" — the native Atlas agent is
       // in-process and shares this error delta, so its provider errors (e.g. a
       // Gemini HTTP 400) were being mislabeled as ACP failures. Use a neutral
       // prefix.
-      session.messages.push(
-        makeAssistantTextMessage(`Error: ${env.error}`)
-      );
+      session.messages.push(makeAssistantTextMessage(`Error: ${env.error}`));
       session.status = "error";
       session.stopping = undefined;
       session.retryStatus = undefined;
+      session.inflightToolIds = undefined;
       // Auth failures route to the agent's sign-in flow (P15) instead of
       // dying as a generic banner. The composer components listen for this
       // (Claude → login dialog, Codex → sign-in pill); native/BYOK keys are
@@ -1538,7 +2118,14 @@ function applyDeltaToDraft(s: ChatDraft, env: AgentDelta): void {
       if (env.error_kind === "auth") {
         window.dispatchEvent(
           new CustomEvent("atlas:auth-required", {
-            detail: { sessionId: env.session_id, agentType: session.agentType },
+            // `reason` carries the agent's own words through to the dialog,
+            // which reads them to tell "needs a provider API key Atlas can
+            // collect in-app" apart from "needs a login flow".
+            detail: {
+              sessionId: env.session_id,
+              agentType: session.agentType,
+              reason: env.error,
+            },
           }),
         );
       }
@@ -1595,9 +2182,7 @@ function applyDeltaToDraft(s: ChatDraft, env: AgentDelta): void {
           ? m.plan.map((e, idx) => ({
               id: `plan-${idx}`,
               description: e.content,
-              status:
-                (e.status as "pending" | "in_progress" | "completed") ??
-                "pending",
+              status: (e.status as "pending" | "in_progress" | "completed") ?? "pending",
             }))
           : null,
         timestamp: m.timestamp,
@@ -1618,11 +2203,8 @@ function applyDeltaToDraft(s: ChatDraft, env: AgentDelta): void {
         const kind = classifyToolFileKind(tc.kind, tc.tool_name);
         if (path && kind) {
           const { added, removed } =
-            kind === "edit"
-              ? countEditLines(tc.tool_name, args)
-              : { added: 0, removed: 0 };
-          const created =
-            kind === "edit" ? isFileCreated(tc.tool_name, args) : undefined;
+            kind === "edit" ? countEditLines(tc.tool_name, args) : { added: 0, removed: 0 };
+          const created = kind === "edit" ? isFileCreated(tc.tool_name, args) : undefined;
           session.turnScratch.tools[tc.id] = {
             path,
             kind,
@@ -1632,11 +2214,28 @@ function applyDeltaToDraft(s: ChatDraft, env: AgentDelta): void {
           };
         }
       }
+      // Incremental in-flight index — the O(1) source for the composer's
+      // busy check (hasInFlightToolCalls), replacing a per-frame scan of
+      // every message's toolCalls.
+      if (env.tool_call.status === "pending" || env.tool_call.status === "running") {
+        (session.inflightToolIds ??= {})[env.tool_call.id] = true;
+      } else if (session.inflightToolIds) {
+        delete session.inflightToolIds[env.tool_call.id];
+      }
       const found = findToolCall(session, env.tool_call.id);
       if (found) {
+        // `toChatToolCall` mints a fresh record with no `startedAt`; assigning
+        // it over the existing one leaves the stamp from first sight in place,
+        // which is the whole point — the clock must not restart on the
+        // pending→running→completed updates for the same call.
         Object.assign(found.tc, toChatToolCall(env.tool_call));
         return;
       }
+      // First sight of this call: stamp the start the live elapsed figure
+      // counts from. The delta arrives when the agent announces the call, so
+      // this is its start to within one IPC hop.
+      const fresh = toChatToolCall(env.tool_call);
+      fresh.startedAt = Date.now();
       // Collapse consecutive tool calls into ONE assistant message
       // so the thread doesn't render N separate message-item boxes
       // (each with its own padding) for every Find/Read/Bash the
@@ -1648,20 +2247,21 @@ function applyDeltaToDraft(s: ChatDraft, env: AgentDelta): void {
       // message (text/thinking intervened) do we start a fresh tool
       // message.
       const last = session.messages[session.messages.length - 1];
-      if (
-        last &&
-        last.role === "assistant" &&
-        last.mode === "tool"
-      ) {
-        last.toolCalls.push(toChatToolCall(env.tool_call));
+      if (last && last.role === "assistant" && last.mode === "tool") {
+        last.toolCalls.push(fresh);
         return;
       }
-      session.messages.push(
-        stampProducingModel(
-          session,
-          makeAssistantToolMessage(toChatToolCall(env.tool_call)),
-        )
-      );
+      session.messages.push(stampProducingModel(session, makeAssistantToolMessage(fresh)));
+      return;
+    }
+    case "tool_call_output_chunk": {
+      // Incremental live command output — append to the tool's visible result.
+      // A chunk for an unknown id is dropped (matches the Rust apply rule for
+      // lone updates); the next full snapshot carries the authoritative text.
+      const found = findToolCall(session, env.tool_call_id);
+      if (found) {
+        found.tc.result = (found.tc.result ?? "") + env.delta;
+      }
       return;
     }
     case "plan_updated": {
@@ -1669,23 +2269,55 @@ function applyDeltaToDraft(s: ChatDraft, env: AgentDelta): void {
       const planSteps = env.plan.map((e, idx) => ({
         id: `plan-${idx}`,
         description: e.content,
-        status:
-          (e.status as "pending" | "in_progress" | "completed") ??
-          "pending",
+        status: (e.status as "pending" | "in_progress" | "completed") ?? "pending",
       }));
       if (last && last.role === "assistant") {
         last.plan = planSteps;
-      } else {
+      } else if (planSteps.length > 0) {
         const fresh = stampProducingModel(session, makeAssistantTextMessage(""));
         fresh.plan = planSteps;
         session.messages.push(fresh);
       }
+      // A CLEARED plan now reaches here rather than being swallowed by the
+      // backend (ATL-222), and it has nothing to hang on a message that does
+      // not exist — minting an empty assistant bubble to carry an empty plan
+      // would trade the stale card for a blank one.
       // Mirror onto the session so the docked plan panel selects it directly.
       session.livePlan = planSteps;
       return;
     }
     case "available_commands": {
       session.availableCommands = env.commands;
+      return;
+    }
+    case "history_rewound": {
+      // A rewind (the native agent's /undo). Drop trailing messages through
+      // the `turns`-th user message from the end, so the visible transcript
+      // matches what the agent now remembers. Counted in user messages
+      // because our user rows are optimistic — they carry no wire ids the
+      // backend could address individually.
+      let remaining = (env.turns as number) ?? 0;
+      let cut = session.messages.length;
+      while (cut > 0 && remaining > 0) {
+        cut -= 1;
+        if (session.messages[cut]?.role === "user") remaining -= 1;
+      }
+      if (remaining !== 0) return;
+      const dropped = session.messages.splice(cut);
+      // Splicing the log is not the whole rewind: two caches derived from it
+      // live on the session and neither is recomputed from `messages`.
+      //   * `userMessageCount`, incremented by `addMessage` (:899) and read by
+      //     the sidebar. A rewind that only spliced left it permanently high —
+      //     visibly so under retry, which rewinds and re-adds on every press.
+      //   * `livePlan`, set by the `plan_updated` delta (:2046) and read by
+      //     the docked plan pill. Left alone it kept showing the plan of the
+      //     turn that was just discarded.
+      // `replaceMessages` (:1310) recomputes the count and preview on a
+      // history load; the plan comes back via `hydrateSessionSnapshot` (:1341).
+      const droppedUsers = dropped.reduce((n, m) => (m.role === "user" ? n + 1 : n), 0);
+      session.userMessageCount = Math.max(0, (session.userMessageCount ?? 0) - droppedUsers);
+      if (session.messages.length === 0) session.firstUserContent = undefined;
+      session.livePlan = undefined;
       return;
     }
     case "mode_changed": {
@@ -1705,6 +2337,70 @@ function applyDeltaToDraft(s: ChatDraft, env: AgentDelta): void {
     }
     case "usage_updated": {
       session.usage = env.usage;
+      return;
+    }
+    case "elicitation_requested": {
+      // One at a time per session — an agent that asks twice before the first
+      // is answered replaces it, which matches how the permission modal
+      // behaves and avoids stacking dialogs the user cannot see behind.
+      session.pendingElicitation = {
+        agentId: env.agent_id,
+        requestId: env.request_id,
+        mode: env.mode,
+        message: env.message,
+        requestedSchema: env.requested_schema,
+        url: env.url,
+      };
+      return;
+    }
+    case "title_updated": {
+      // The agent summarised this session better than the first 40 characters
+      // of the prompt Atlas titled it with (Codex and Kilo both do, once they
+      // have seen a turn).
+      session.title = env.title;
+      return;
+    }
+    case "config_options_updated": {
+      // Keeps the mode/model pickers honest when the change came from inside
+      // the agent (its own `/model`, a thinking toggle) rather than from Atlas.
+      session.acpConfigOptions = env.config_options;
+      // Survive the next restart (#36) — the same posture as the model-list
+      // save just below. An empty list is cached too: a live session saying
+      // "no knobs" is the answer the pill shows as "Default", and remembering
+      // it is what stops the next cold start from spinning to re-learn it.
+      if (session.agentType) {
+        saveCachedAcpConfigOptions(session.agentType, env.config_options);
+      }
+      // The model pill rides on this same blob — ACP has no separate model
+      // field, so a `category: "model"` select IS the model list. Without this
+      // the pill only ever saw the bind-time snapshot and went stale (or, for a
+      // session bound before the agent advertised, stayed empty and hid).
+      const models = modelSelectOf(env.config_options);
+      if (models) {
+        session.acpAvailableModels = models.availableModels;
+        if (models.currentModel) session.acpCurrentModel = models.currentModel;
+        if (session.agentType) {
+          saveCachedAcpModels(session.agentType, {
+            availableModels: models.availableModels,
+          });
+        }
+      }
+      // The mode pill rides on it too. The official Claude adapter never
+      // sends `current_mode_update` for an ordinary change — its answer to a
+      // `session/set_mode`, and its only word after the SDK switched modes, is
+      // this blob's `mode` select. Same claude-code + known-mode guard as the
+      // `mode_changed` case, for the same reason (Codex's modes stay out of
+      // the Claude pill). No push back: this is the agent telling us.
+      const modes = modeSelectOf(env.config_options);
+      if (modes?.currentMode) {
+        session.acpCurrentMode = modes.currentMode;
+        if (
+          session.agentType === "claude-code" &&
+          (CLAUDE_PERMISSION_MODES as readonly string[]).includes(modes.currentMode)
+        ) {
+          session.claudePermissionMode = modes.currentMode as ClaudePermissionMode;
+        }
+      }
       return;
     }
     case "context_usage": {
@@ -1730,13 +2426,21 @@ function applyDeltaToDraft(s: ChatDraft, env: AgentDelta): void {
       session.pendingSavedTokens = env.saved_tokens;
       return;
     }
+    case "rate_limits": {
+      session.rateLimits = {
+        primary: env.primary,
+        secondary: env.secondary,
+        planType: env.plan_type,
+      };
+      return;
+    }
     case "model_changed": {
-      // The native Cersei agent's model is UI-driven and stored as a BARE id
-      // (its provider lives in `cerseiProvider`). The worker echoes back the
+      // The native agent's model is UI-driven and stored as a BARE id
+      // (its provider lives in `nativeProvider`). The worker echoes back the
       // full "provider/model" we pushed, so applying it here would re-prefix
       // the value every cycle ("google/google/google/…") via the composer's
-      // re-push. Ignore the echo for cersei — the UI is the source of truth.
-      if (session.agentType !== "cersei") session.acpCurrentModel = env.model_id;
+      // re-push. Ignore the echo for the native agent — the UI is the source of truth.
+      if (session.agentType !== "atlas-agent") session.acpCurrentModel = env.model_id;
       return;
     }
     default:

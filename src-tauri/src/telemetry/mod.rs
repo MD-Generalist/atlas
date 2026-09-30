@@ -86,8 +86,10 @@ struct Identity {
     /// `broadcast` fires on every auth transition *and* every revalidation, so
     /// without this a long session would emit a `$identify` on a timer.
     last_sent: Option<AccountIdentity>,
-    /// PostHog `$groups` for the active Organisation, injected into every event.
-    groups: Option<Value>,
+    /// The active Organisation, injected into every event as `$groups` plus a
+    /// pair of flat properties. Owned by [`TelemetryClient::set_active_org`],
+    /// **not** by sign-in — see that method for why.
+    org: Option<OrgIdentity>,
     /// A device→account merge that could not be sent because consent was off at
     /// the time. Drained on opt-in so the link isn't lost forever.
     pending_merge_anon: Option<String>,
@@ -128,13 +130,102 @@ pub struct AccountIdentity {
     pub org_count: usize,
 }
 
+/// The active Organisation, as telemetry is allowed to know it.
+///
+/// **`name` is only ever set for a synced org.** A local org's name is typed by
+/// the user into a box on their own machine and never leaves it — it is as
+/// likely to be "adib personal" as "Acme" — so only the random local id travels,
+/// which is enough to segment a device's own events without shipping a string
+/// nobody agreed to send. A synced org's name is already server-side and shared
+/// with everyone in it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrgIdentity {
+    /// The **local** org id in both cases. Stable across a device, and what the
+    /// app itself keys everything else on.
+    pub id: String,
+    /// `"cloud"` once the org is synced, `"local"` while it lives only here.
+    pub kind: &'static str,
+    /// Synced orgs only. See the type docs.
+    pub name: Option<String>,
+    /// The signed-in user's role in this org, when it is a synced org they are
+    /// actually a member of.
+    pub role: Option<String>,
+}
+
+impl OrgIdentity {
+    fn groups(&self) -> Value {
+        json!({ "organisation": self.id })
+    }
+}
+
 /// The two auto-update values pulled from PostHog remote config.
 #[derive(Debug, Clone)]
 pub struct RemoteUpdateConfig {
     /// Latest version, raw string (e.g. `"0.1.21"`).
     pub version: String,
-    /// Direct download URL of the release DMG.
+    /// Direct download URL of the release installer (DMG or MSI) **for this
+    /// machine's platform and architecture** — see [`update_uri_flag`].
     pub uri: String,
+}
+
+/// Which remote-config key holds the installer this machine should download.
+///
+/// Atlas builds one installer per platform and architecture — DMGs from
+/// `scripts/build-dmg.sh arm|intel`, the x64 MSI from `bun run build:app:win`
+/// — so PostHog carries one URI for each: `uri_mac_arm`, `uri_mac_intel` and
+/// `uri_win_intel`. There is deliberately no plain `uri` fallback — a single
+/// URL cannot be right for all of them, and silently serving an x86 DMG to an
+/// Apple Silicon Mac (or the reverse) produces an app that either runs
+/// translated or does not run at all. A missing key means no update is
+/// offered, which is the safe answer.
+///
+/// On Windows the x64 MSI is the only build: Windows on ARM runs it under its
+/// x64 emulation, so there is no second key to choose between.
+#[cfg(target_os = "windows")]
+fn update_uri_flag() -> &'static str {
+    "uri_win_intel"
+}
+
+/// macOS (and, until it has an updater, Linux): the architecture picks the
+/// DMG. Compile-time architecture is *almost* the whole story, since each
+/// build is single-arch. The exception is an Intel build running under
+/// **Rosetta** on Apple Silicon: that machine can run the native ARM app, and
+/// keying off the binary alone would pin it to the translated build forever.
+#[cfg(not(target_os = "windows"))]
+fn update_uri_flag() -> &'static str {
+    // Short-circuit: an ARM build is only ever on ARM hardware, so the sysctl
+    // below never runs there.
+    if cfg!(target_arch = "aarch64") || running_under_rosetta() {
+        "uri_mac_arm"
+    } else {
+        "uri_mac_intel"
+    }
+}
+
+/// Is this x86 process being translated onto Apple Silicon?
+///
+/// `sysctl.proc_translated` is macOS's own answer: `1` under Rosetta, `0` for a
+/// native process, and the key is absent entirely on Intel hardware (so a
+/// failed lookup correctly reads as "not translated"). Cached — it cannot
+/// change while the process is alive.
+#[cfg(target_os = "macos")]
+fn running_under_rosetta() -> bool {
+    use std::sync::OnceLock;
+    static TRANSLATED: OnceLock<bool> = OnceLock::new();
+    *TRANSLATED.get_or_init(|| {
+        std::process::Command::new("/usr/sbin/sysctl")
+            .args(["-n", "sysctl.proc_translated"])
+            .output()
+            .ok()
+            .filter(|out| out.status.success())
+            .is_some_and(|out| String::from_utf8_lossy(&out.stdout).trim() == "1")
+    })
+}
+
+/// Not macOS (and not Windows, which never asks): nothing is ever translated.
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn running_under_rosetta() -> bool {
+    false
 }
 
 /// Coerce a PostHog `featureFlagPayloads` value into a plain string. Payloads
@@ -339,7 +430,9 @@ impl TelemetryClient {
         }
     }
 
-    /// Fetch the two auto-update remote-config values (`version`, `uri`) from
+    /// Fetch the two auto-update remote-config values — `version`, and this
+    /// platform's own URI key (`uri_mac_arm` / `uri_mac_intel` /
+    /// `uri_win_intel`) — from
     /// PostHog using the official `posthog-rs` SDK's feature-flag evaluation
     /// (`evaluate_flags` → `/flags/?v=2`), keyed on the project token + anon
     /// distinct id. Both values are stored as PostHog **remote-config flag
@@ -361,9 +454,22 @@ impl TelemetryClient {
             )
             .await
             .ok()?;
-        let version = flags.get_flag_payload("version").as_ref().and_then(payload_string)?;
-        let uri = flags.get_flag_payload("uri").as_ref().and_then(payload_string)?;
+        let version = flags
+            .get_flag_payload("version")
+            .as_ref()
+            .and_then(payload_string)?;
+        // Platform-specific: `uri_mac_arm`, `uri_mac_intel` or `uri_win_intel`,
+        // never a shared `uri` — see `update_uri_flag`.
+        let uri_flag = update_uri_flag();
+        let uri = flags
+            .get_flag_payload(uri_flag)
+            .as_ref()
+            .and_then(payload_string)?;
         if version.trim().is_empty() || uri.trim().is_empty() {
+            tracing::warn!(
+                target: "atlas::updater",
+                "remote config has no usable {uri_flag} — no update offered"
+            );
             return None;
         }
         Some(RemoteUpdateConfig { version, uri })
@@ -432,10 +538,8 @@ impl TelemetryClient {
 
         let merge_anon = {
             let mut g = self.identity.write();
-            g.groups = id
-                .org_id
-                .as_ref()
-                .map(|o| json!({ "organisation": o.clone() }));
+            // Note what is NOT set here: the org. Sign-in does not decide which
+            // Organisation you are working in — see `set_active_org`.
 
             // Nothing has changed since the last send — not the account, not the
             // name, not the active org. Emitting again would only add noise.
@@ -478,16 +582,47 @@ impl TelemetryClient {
             m.insert("$anon_distinct_id".into(), json!(anon));
         }
         self.capture("$identify", props);
+    }
 
-        // Org-level rollups (`$groupidentify` defines the group; `$groups` on
-        // each event associates it).
-        if let Some(org) = id.org_id.as_ref() {
+    /// Set the Organisation every subsequent event is attributed to.
+    ///
+    /// **This is deliberately not driven by sign-in.** The Organisation you are
+    /// working in is a local fact: it is switchable at any moment without any
+    /// auth transition, it exists while signed out, and a local-only org has no
+    /// server row at all. Deriving it from the auth snapshot — as this module
+    /// did through 0.2.4 — meant events were grouped by *whichever org the
+    /// server last thought was active*, so a local org produced ungrouped
+    /// ("global") events and an org switch silently kept filing work under the
+    /// previous tenant until the next revalidation. Both are the same bug: the
+    /// wrong system owned the fact.
+    ///
+    /// The caller is `commands::telemetry::telemetry_set_org`, which resolves
+    /// the whole identity from app state so the frontend only ever passes an id.
+    ///
+    /// Idempotent: an unchanged org re-sends nothing, which matters because the
+    /// startup seed and the store's first hydrate both fire.
+    pub fn set_active_org(&self, org: Option<OrgIdentity>) {
+        if self.inert {
+            return;
+        }
+        {
+            let mut g = self.identity.write();
+            if g.org == org {
+                return;
+            }
+            g.org = org.clone();
+        }
+
+        // `$groupidentify` defines the group; the `$groups` that `inject_common`
+        // puts on every event is what associates it. Only a synced org has
+        // properties worth defining — a local one is an opaque id by design.
+        if let Some(org) = org.filter(|o| o.name.is_some()) {
             self.capture(
                 "$groupidentify",
                 json!({
                     "$group_type": "organisation",
-                    "$group_key": org,
-                    "$group_set": { "name": id.org_name, "role": id.org_role },
+                    "$group_key": org.id,
+                    "$group_set": { "name": org.name, "role": org.role, "kind": org.kind },
                 }),
             );
         }
@@ -500,7 +635,10 @@ impl TelemetryClient {
         let mut g = self.identity.write();
         g.distinct_id = self.device_id.clone();
         g.account_id = None;
-        g.groups = None;
+        // The org is NOT cleared. Signing out does not move you out of the
+        // Organisation you have open — you keep working in it, now as the device
+        // person — so dropping the group here would file that work as ungrouped
+        // and split one continuous session across two buckets.
         g.pending_merge_anon = None;
         // Signing back into the same account must re-identify, so this cannot
         // be remembered across a sign-out.
@@ -641,16 +779,22 @@ impl TelemetryClient {
 
     fn inject_common(&self, properties: &mut Value) {
         if let Value::Object(map) = properties {
-            map.entry("$lib")
-                .or_insert_with(|| json!("atlas-rust"));
+            map.entry("$lib").or_insert_with(|| json!("atlas-rust"));
             map.entry("app_version")
                 .or_insert_with(|| json!(self.app_version));
             map.entry("os").or_insert_with(|| json!(self.os));
             map.entry("arch").or_insert_with(|| json!(self.arch));
-            // Org-level rollups while an Organisation is active. Only the id —
-            // the name and role live on the group itself via `$groupidentify`.
-            if let Some(groups) = self.identity.read().groups.clone() {
-                map.entry("$groups").or_insert(groups);
+            // Org-level rollups while an Organisation is active. `$groups` is
+            // what PostHog's group analytics reads; the two flat properties are
+            // what makes an event filterable in an ordinary insight without
+            // group analytics enabled, and `atlas_org_kind` is the one dimension
+            // that separates "our team's usage" from "someone's private
+            // scratch org" — the two behave nothing alike.
+            if let Some(org) = self.identity.read().org.clone() {
+                map.entry("$groups").or_insert_with(|| org.groups());
+                map.entry("atlas_org_id").or_insert_with(|| json!(org.id));
+                map.entry("atlas_org_kind")
+                    .or_insert_with(|| json!(org.kind));
             }
         }
     }
@@ -702,12 +846,7 @@ pub(crate) async fn run_flush_loop(
     }
 }
 
-async fn send_batch(
-    http: &reqwest::Client,
-    url: &str,
-    api_key: &str,
-    buf: &mut Vec<QueuedEvent>,
-) {
+async fn send_batch(http: &reqwest::Client, url: &str, api_key: &str, buf: &mut Vec<QueuedEvent>) {
     if buf.is_empty() {
         return;
     }
@@ -737,6 +876,50 @@ async fn send_batch(
 mod tests {
     use super::*;
 
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn the_update_uri_key_is_the_x64_msi_on_windows() {
+        // Never the old shared key, and never a DMG key: the one Windows
+        // build is the x64 MSI, whatever the hardware.
+        assert_eq!(update_uri_flag(), "uri_win_intel");
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn the_update_uri_key_matches_the_architecture_that_can_run_the_dmg() {
+        let flag = update_uri_flag();
+        // Never the old shared key: one URL cannot serve both architectures.
+        assert_ne!(flag, "uri");
+        assert!(
+            matches!(flag, "uri_mac_arm" | "uri_mac_intel"),
+            "unexpected key {flag}"
+        );
+
+        if cfg!(target_arch = "aarch64") {
+            // An ARM build only ever runs on ARM hardware.
+            assert_eq!(flag, "uri_mac_arm");
+        } else if running_under_rosetta() {
+            // Translated on Apple Silicon: offer the native build, so a Rosetta
+            // install migrates instead of being pinned to x86 forever.
+            assert_eq!(flag, "uri_mac_arm");
+        } else {
+            assert_eq!(flag, "uri_mac_intel");
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn rosetta_detection_is_stable_and_false_on_native_hardware() {
+        // Cached behind a `OnceLock`, so it must not change between calls.
+        assert_eq!(running_under_rosetta(), running_under_rosetta());
+        // An ARM build is native by definition; on Intel hardware the sysctl
+        // key is absent, which must read as "not translated" rather than
+        // panicking or defaulting to true.
+        if cfg!(target_arch = "aarch64") {
+            assert!(!running_under_rosetta());
+        }
+    }
+
     #[test]
     fn redact_strips_paths_urls_and_truncates() {
         let r = redact_message("failed to read /Users/adib/secret.rs at line 4", 200);
@@ -761,7 +944,6 @@ mod tests {
         assert!(r.contains("error for"));
         assert!(r.contains("here"));
     }
-
 
     /// Build a client without an `AppHandle` (which `resolve_keys` would need).
     /// `enabled` is the consent gate; the returned receiver is the queue tail.
@@ -857,20 +1039,125 @@ mod tests {
         let events = drain(&mut rx);
         let before = &events[0];
         assert_eq!(before.0, "app_started");
-        assert_eq!(before.1, "device-uuid", "pre-sign-in event keeps the device id");
+        assert_eq!(
+            before.1, "device-uuid",
+            "pre-sign-in event keeps the device id"
+        );
 
-        let ident = events.iter().find(|e| e.0 == "$identify").expect("$identify");
+        let ident = events
+            .iter()
+            .find(|e| e.0 == "$identify")
+            .expect("$identify");
         assert_eq!(ident.1, "user-1");
         assert_eq!(ident.2["$anon_distinct_id"], json!("device-uuid"));
         assert_eq!(ident.2["$set"]["email"], json!("a@example.com"));
-        assert_eq!(ident.2["$set_once"]["atlas_device_id"], json!("device-uuid"));
+        assert_eq!(
+            ident.2["$set_once"]["atlas_device_id"],
+            json!("device-uuid")
+        );
 
-        let group = events.iter().find(|e| e.0 == "$groupidentify").expect("group");
-        assert_eq!(group.2["$group_key"], json!("org-1"));
+        // Sign-in does NOT define the group — the active Organisation is a
+        // local fact owned by `set_active_org`.
+        assert!(
+            !events.iter().any(|e| e.0 == "$groupidentify"),
+            "identify must not group; the org layer owns that"
+        );
 
         let after = events.last().expect("post-identify event");
         assert_eq!(after.0, "agent_turn_started");
         assert_eq!(after.1, "user-1");
+    }
+
+    /// Every event carries the active Organisation, whoever (or nobody) is
+    /// signed in — that is the whole point of the org layer being separate.
+    #[test]
+    fn active_org_groups_every_event() {
+        let (c, mut rx) = client(true, false);
+
+        c.capture("app_started", json!({}));
+        c.set_active_org(Some(OrgIdentity {
+            id: "local-org-9".into(),
+            kind: "local",
+            name: None,
+            role: None,
+        }));
+        c.capture("agent_turn_started", json!({}));
+
+        let events = drain(&mut rx);
+        assert!(
+            events[0].2.get("$groups").is_none(),
+            "no org set yet → ungrouped"
+        );
+        assert!(
+            !events.iter().any(|e| e.0 == "$groupidentify"),
+            "a local org is an opaque id — nothing to define"
+        );
+
+        let after = events.last().expect("post-org event");
+        assert_eq!(after.2["$groups"]["organisation"], json!("local-org-9"));
+        assert_eq!(after.2["atlas_org_id"], json!("local-org-9"));
+        assert_eq!(after.2["atlas_org_kind"], json!("local"));
+    }
+
+    /// A synced org has a server-side name worth defining on the group; a local
+    /// one deliberately travels as a bare id.
+    #[test]
+    fn a_synced_org_defines_the_group_and_a_local_one_does_not() {
+        let (c, mut rx) = client(true, false);
+        c.set_active_org(Some(OrgIdentity {
+            id: "org-1".into(),
+            kind: "cloud",
+            name: Some("Acme".into()),
+            role: Some("admin".into()),
+        }));
+
+        let events = drain(&mut rx);
+        let group = events
+            .iter()
+            .find(|e| e.0 == "$groupidentify")
+            .expect("group");
+        assert_eq!(group.2["$group_key"], json!("org-1"));
+        assert_eq!(group.2["$group_set"]["name"], json!("Acme"));
+        assert_eq!(group.2["$group_set"]["role"], json!("admin"));
+    }
+
+    /// Re-seeding the same org must not re-emit: the startup seed and the
+    /// store's first hydrate both fire on every launch.
+    #[test]
+    fn set_active_org_is_idempotent() {
+        let (c, mut rx) = client(true, false);
+        let org = OrgIdentity {
+            id: "org-1".into(),
+            kind: "cloud",
+            name: Some("Acme".into()),
+            role: None,
+        };
+        c.set_active_org(Some(org.clone()));
+        c.set_active_org(Some(org));
+        let groups = drain(&mut rx)
+            .into_iter()
+            .filter(|e| e.0 == "$groupidentify")
+            .count();
+        assert_eq!(groups, 1);
+    }
+
+    /// Signing out does not move you out of the Organisation you have open, so
+    /// the work either side of it must not land in two different buckets.
+    #[test]
+    fn signing_out_keeps_the_active_org() {
+        let (c, mut rx) = client(true, false);
+        c.set_active_org(Some(OrgIdentity {
+            id: "org-1".into(),
+            kind: "local",
+            name: None,
+            role: None,
+        }));
+        c.identify_account(&account("user-1"));
+        c.reset_identity();
+        c.capture("agent_turn_started", json!({}));
+
+        let after = drain(&mut rx).pop().expect("post-signout event");
+        assert_eq!(after.1, "device-uuid", "back to the device person");
         assert_eq!(after.2["$groups"]["organisation"], json!("org-1"));
     }
 
@@ -881,7 +1168,10 @@ mod tests {
         let (c, mut rx) = client(true, false);
         c.identify_account(&account("user-1"));
         c.identify_account(&account("user-1"));
-        let identifies = drain(&mut rx).into_iter().filter(|e| e.0 == "$identify").count();
+        let identifies = drain(&mut rx)
+            .into_iter()
+            .filter(|e| e.0 == "$identify")
+            .count();
         assert_eq!(identifies, 1);
     }
 
@@ -894,7 +1184,10 @@ mod tests {
         c.identify_account(&account("user-1"));
         c.identify_account(&account("user-2"));
 
-        let identifies: Vec<_> = drain(&mut rx).into_iter().filter(|e| e.0 == "$identify").collect();
+        let identifies: Vec<_> = drain(&mut rx)
+            .into_iter()
+            .filter(|e| e.0 == "$identify")
+            .collect();
         assert_eq!(identifies.len(), 2);
         assert_eq!(identifies[0].2["$anon_distinct_id"], json!("device-uuid"));
         assert!(
@@ -917,7 +1210,10 @@ mod tests {
         c.capture("app_started", json!({}));
         let ev = drain(&mut rx);
         assert_eq!(ev[0].1, "device-uuid");
-        assert!(ev[0].2.get("$groups").is_none(), "groups cleared on reset");
+        // No org was ever set here, so there is still nothing to group by —
+        // but note that reset does NOT clear one that was; see
+        // `signing_out_keeps_the_active_org`.
+        assert!(ev[0].2.get("$groups").is_none());
     }
 
     /// The surviving half of ATL-52: signing in is not a telemetry backdoor. A
@@ -945,7 +1241,10 @@ mod tests {
         c.set_enabled(true);
         let events = drain(&mut rx);
         assert_eq!(events[0].0, "telemetry_opt_in");
-        let ident = events.iter().find(|e| e.0 == "$identify").expect("$identify");
+        let ident = events
+            .iter()
+            .find(|e| e.0 == "$identify")
+            .expect("$identify");
         assert_eq!(ident.1, "user-1");
         assert_eq!(ident.2["$anon_distinct_id"], json!("device-uuid"));
     }

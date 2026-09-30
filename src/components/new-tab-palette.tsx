@@ -1,19 +1,19 @@
 import { useState, useMemo, useRef, useEffect, useLayoutEffect, type ElementType } from "react";
-import * as Dialog from "@radix-ui/react-dialog";
+import { ActionKbd } from "@/features/keybindings/components/action-kbd";
+import type { ActionId } from "@/features/keybindings/lib/actions";
+import { Dialog } from "@base-ui/react/dialog";
 import {
-  MessageSquare,
-  Terminal,
   Map,
+  Terminal,
   Globe,
-  BookOpen,
   Brain,
   Network,
   BrainCircuit,
   ScrollText,
+  Gauge,
   Code,
   Settings,
   Search,
-  Timer,
   GitCompare,
   type LucideProps,
 } from "lucide-react";
@@ -21,7 +21,6 @@ import { useLayoutStore } from "@/features/layout/stores/layout-store";
 import { openNewAgentChat } from "@/features/chat/lib/open-agent-session";
 import { AtlasIcon } from "@/components/atlas-icon";
 import { cn } from "@/lib/utils";
-import { KbdCombo } from "@/ui/kbd";
 import type { TabType } from "@/lib/constants";
 
 interface ModuleEntry {
@@ -29,7 +28,7 @@ interface ModuleEntry {
   type: TabType;
   label: string;
   icon: ElementType<LucideProps>;
-  shortcut?: string;
+  actionId?: ActionId;
 }
 
 /**
@@ -39,20 +38,36 @@ interface ModuleEntry {
  * palettes read as one consistent system.
  */
 const MODULES: ModuleEntry[] = [
-  { id: "chat", type: "chat", label: "New Agents Chat", icon: AtlasIcon as ElementType<LucideProps>, shortcut: "⌘T" },
-  { id: "model-chat", type: "model-chat", label: "New Chat", icon: MessageSquare },
-  { id: "terminal", type: "terminal", label: "New Terminal", icon: Terminal, shortcut: "⌘⇧T" },
+  {
+    id: "chat",
+    type: "chat",
+    label: "New Agents Chat",
+    icon: AtlasIcon as ElementType<LucideProps>,
+    actionId: "tabs.newChat",
+  },
+  { id: "canvas", type: "canvas", label: "Spaces", icon: Map },
+  {
+    id: "terminal",
+    type: "terminal",
+    label: "New Terminal",
+    icon: Terminal,
+    actionId: "tabs.newTerminal",
+  },
   { id: "knowledge", type: "knowledge", label: "Knowledge", icon: Brain },
   { id: "knowledge-graph", type: "knowledge-graph", label: "Knowledge Graph", icon: Network },
   { id: "memory", type: "memory", label: "Memory", icon: BrainCircuit },
-  { id: "research", type: "research", label: "Research", icon: BookOpen },
-  { id: "canvas", type: "canvas", label: "Spaces", icon: Map },
   { id: "diff", type: "diff", label: "Git Diff", icon: GitCompare },
   { id: "browser", type: "browser", label: "Browser", icon: Globe },
-  { id: "editor", type: "editor", label: "Untitled Editor", icon: Code, shortcut: "⌘N" },
+  {
+    id: "editor",
+    type: "editor",
+    label: "Untitled Editor",
+    icon: Code,
+    actionId: "tabs.newUntitled",
+  },
   { id: "log", type: "log", label: "Log", icon: ScrollText },
-  { id: "pomodoro", type: "pomodoro", label: "Pomodoro", icon: Timer },
-  { id: "settings", type: "settings", label: "Settings", icon: Settings, shortcut: "⌘," },
+  { id: "usage", type: "usage", label: "Usage", icon: Gauge, actionId: "usage.open" },
+  { id: "settings", type: "settings", label: "Settings", icon: Settings, actionId: "app.settings" },
 ];
 
 export function NewTabPalette({
@@ -79,9 +94,7 @@ export function NewTabPalette({
     const q = query.trim().toLowerCase();
     if (!q) return MODULES;
     return MODULES.filter(
-      (m) =>
-        m.label.toLowerCase().includes(q) ||
-        m.type.toLowerCase().includes(q),
+      (m) => m.label.toLowerCase().includes(q) || m.type.toLowerCase().includes(q),
     );
   }, [query]);
 
@@ -104,15 +117,6 @@ export function NewTabPalette({
       // Singleton agent chat — focus the existing chat tab (resetting it to a
       // fresh session) instead of opening a second one.
       openNewAgentChat();
-    } else if (item.type === "model-chat") {
-      addTab({
-        id: `model-chat-${ts}`,
-        type: "model-chat",
-        title: "Chat",
-        closable: true,
-        dirty: false,
-        data: {},
-      });
     } else if (item.type === "editor") {
       addTab({
         id: `editor-untitled-${ts}`,
@@ -136,15 +140,6 @@ export function NewTabPalette({
         id: "settings",
         type: "settings",
         title: "Settings",
-        closable: true,
-        dirty: false,
-        data: {},
-      });
-    } else if (item.type === "pomodoro") {
-      addTab({
-        id: "pomodoro",
-        type: "pomodoro",
-        title: "Pomodoro",
         closable: true,
         dirty: false,
         data: {},
@@ -178,37 +173,36 @@ export function NewTabPalette({
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 bg-black/60 z-[var(--z-overlay)]" />
-        <Dialog.Content
+        <Dialog.Backdrop className="fixed inset-0 scrim z-overlay" />
+        <Dialog.Popup
           aria-describedby={undefined}
           className={cn(
-            "fixed top-[20%] left-1/2 -translate-x-1/2 z-[var(--z-modal)]",
+            "fixed top-[20%] left-1/2 -translate-x-1/2 z-modal",
             "w-[520px] max-h-[400px] rounded-xl overflow-hidden",
-            "bg-[var(--bg-secondary)] border border-[var(--border-default)]",
-            "shadow-[var(--shadow-overlay)]",
+            "bg-[var(--card)] border border-[var(--border)]",
+            "shadow-md",
             "flex flex-col",
           )}
-          onOpenAutoFocus={(e) => {
-            e.preventDefault();
-            inputRef.current?.focus();
-          }}
+          // Base UI's initialFocus replaces Radix's onOpenAutoFocus +
+          // preventDefault + focus(): hand it the element to land on.
+          initialFocus={inputRef}
         >
           <Dialog.Title className="sr-only">Open module</Dialog.Title>
-          <div className="flex items-center gap-2 px-4 h-[44px] shrink-0 border-b border-[var(--border-default)]">
-            <Search size={14} className="text-[var(--text-tertiary)] shrink-0" />
+          <div className="flex items-center gap-2 px-4 h-[44px] shrink-0 border-b border-[var(--border)]">
+            <Search size={14} className="text-[var(--muted-foreground)] shrink-0" />
             <input
               ref={inputRef}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder="Open a module..."
-              className="flex-1 bg-transparent border-none outline-none text-sm text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)]"
+              className="flex-1 bg-transparent border-none outline-none text-sm text-[var(--foreground)] placeholder:text-[var(--muted-foreground)]"
             />
           </div>
 
           <div ref={listRef} className="overflow-y-auto flex-1 py-1">
             {items.length === 0 && (
-              <div className="px-4 py-6 text-center text-xs text-[var(--text-tertiary)]">
+              <div className="px-4 py-6 text-center text-xs text-[var(--muted-foreground)]">
                 No modules match "{query}"
               </div>
             )}
@@ -224,18 +218,18 @@ export function NewTabPalette({
                   className={cn(
                     "w-full flex items-center gap-3 px-4 h-[36px] text-left text-sm transition-colors",
                     active
-                      ? "bg-[var(--bg-hover)] text-[var(--text-primary)]"
-                      : "text-[var(--text-secondary)]",
+                      ? "bg-[var(--atlas-element-hover)] text-[var(--foreground)]"
+                      : "text-[var(--secondary-foreground)]",
                   )}
                 >
-                  <Icon size={14} className="shrink-0 text-[var(--text-tertiary)]" />
+                  <Icon size={14} className="shrink-0 text-[var(--muted-foreground)]" />
                   <span className="flex-1 truncate">{item.label}</span>
-                  {item.shortcut && <KbdCombo combo={item.shortcut} />}
+                  {item.actionId && <ActionKbd id={item.actionId} />}
                 </button>
               );
             })}
           </div>
-        </Dialog.Content>
+        </Dialog.Popup>
       </Dialog.Portal>
     </Dialog.Root>
   );

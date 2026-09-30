@@ -3,14 +3,10 @@
 // (AWS Bedrock, Google Vertex) are intentionally omitted — they need more than
 // one field and don't fit the single masked-key UX.
 //
-// `id` doubles as the keychain account name (see Rust `byok.rs`) and must stay
+// `id` is the provider identity used across Atlas (see Rust `byok.rs`) and must stay
 // stable. `env` is the conventional environment variable a consumer injects.
 
-export type ProviderCategory =
-  | "Frontier"
-  | "Inference"
-  | "Gateway"
-  | "Embeddings";
+export type ProviderCategory = "Frontier" | "Inference" | "Gateway" | "Embeddings";
 
 export interface ProviderDef {
   id: string;
@@ -160,6 +156,15 @@ export const PROVIDERS: ProviderDef[] = [
     placeholder: "pplx-...",
     chat: true,
   },
+  {
+    id: "empero",
+    name: "Empero",
+    env: "EMPERO_API_KEY",
+    category: "Inference",
+    docsUrl: "https://free.empero.org",
+    placeholder: "free",
+    chat: true,
+  },
 
   // ── Gateways / proxies ───────────────────────────────────────────
   {
@@ -169,6 +174,15 @@ export const PROVIDERS: ProviderDef[] = [
     category: "Gateway",
     docsUrl: "https://openrouter.ai/keys",
     placeholder: "sk-or-...",
+    chat: true,
+  },
+  {
+    id: "orcarouter",
+    name: "OrcaRouter",
+    env: "ORCAROUTER_API_KEY",
+    category: "Gateway",
+    docsUrl: "https://www.orcarouter.ai",
+    placeholder: "sk-orca-...",
     chat: true,
   },
   {
@@ -183,8 +197,7 @@ export const PROVIDERS: ProviderDef[] = [
     name: "Azure OpenAI",
     env: "AZURE_API_KEY",
     category: "Gateway",
-    docsUrl:
-      "https://learn.microsoft.com/azure/ai-services/openai/quickstart",
+    docsUrl: "https://learn.microsoft.com/azure/ai-services/openai/quickstart",
   },
 
   // ── Embeddings & audio ───────────────────────────────────────────

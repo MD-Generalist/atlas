@@ -1,16 +1,10 @@
 import { useMemo, useState, useEffect } from "react";
-import * as Dialog from "@radix-ui/react-dialog";
+import { Dialog } from "@base-ui/react/dialog";
 import { toast } from "sonner";
-import {
-  Check,
-  Search,
-  Loader2,
-  GitMerge,
-  AlertTriangle,
-  Ban,
-} from "lucide-react";
+import { Check, Search, Loader2, GitMerge, AlertTriangle, Ban } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useGitStore, type MergePreview } from "../../stores/git-store";
+import { handleGitError } from "../../lib/git-errors";
 
 /**
  * GitHub-Desktop-style "Choose a branch to merge into <current>" dialog.
@@ -34,13 +28,19 @@ export function MergeBranchDialog({
   const [preview, setPreview] = useState<MergePreview | null>(null);
   const [previewing, setPreviewing] = useState(false);
   const [merging, setMerging] = useState(false);
+  // Fetch-on-open: without it every preview compares against WHATEVER the last
+  // fetch left in refs/remotes — unfetched remote commits are invisible to
+  // git, so "merge main" against a stale origin said "already up to date"
+  // while the remote had moved on. GitHub Desktop hides this with a periodic
+  // background fetcher; Atlas fetches when the dialog opens instead. The
+  // `fetchNonce` bump re-runs the live preview once fresh refs land.
+  const [fetching, setFetching] = useState(false);
+  const [fetchNonce, setFetchNonce] = useState(0);
 
   // Everything except the branch we're merging *into*.
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return branchesFull.filter(
-      (b) => !b.isCurrent && (!q || b.name.toLowerCase().includes(q)),
-    );
+    return branchesFull.filter((b) => !b.isCurrent && (!q || b.name.toLowerCase().includes(q)));
   }, [branchesFull, query]);
 
   // Reset all transient state whenever the dialog closes.
@@ -50,7 +50,32 @@ export function MergeBranchDialog({
       setSelected(null);
       setPreview(null);
       setPreviewing(false);
+      setFetching(false);
     }
+  }, [open]);
+
+  // Refresh remote refs the moment the dialog opens (non-blocking — the list
+  // and preview stay usable; they just re-verify once the fetch lands).
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setFetching(true);
+    actions
+      .fetch()
+      .catch(() => {
+        // Offline / no remote — previews still work against local refs.
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setFetching(false);
+        setFetchNonce((n) => n + 1);
+        // Rebuild branchesFull so ahead/behind + remote tips reflect the fetch.
+        void actions.refreshStatusNow();
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   // Recompute the preview whenever the chosen branch changes.
@@ -76,7 +101,21 @@ export function MergeBranchDialog({
     return () => {
       cancelled = true;
     };
-  }, [selected, actions]);
+  }, [selected, actions, fetchNonce]);
+
+  // The GitHub-Desktop insight the old dialog missed: picking a stale LOCAL
+  // branch (e.g. `main` while `origin/main` is ahead) previews "up to date"
+  // even though the remote has new work. `behind` on a local BranchInfo is
+  // exactly "commits its upstream has that it lacks" — surface it and offer
+  // the upstream ref instead.
+  const selectedInfo = useMemo(
+    () => branchesFull.find((b) => b.name === selected) ?? null,
+    [branchesFull, selected],
+  );
+  const staleUpstream =
+    selectedInfo && !selectedInfo.isRemote && selectedInfo.upstream && selectedInfo.behind > 0
+      ? { upstream: selectedInfo.upstream, behind: selectedInfo.behind }
+      : null;
 
   const canMerge =
     !!selected &&
@@ -85,6 +124,25 @@ export function MergeBranchDialog({
     preview != null &&
     preview.kind !== "uptodate" &&
     preview.kind !== "invalid";
+
+  const doRebase = async () => {
+    if (!selected) return;
+    setMerging(true);
+    try {
+      await actions.rebase(selected);
+      toast.success(`Rebased ${branch} onto ${selected}`);
+      onOpenChange(false);
+    } catch (e) {
+      // Conflicts pause the rebase — the in-progress banner + conflicts
+      // view take over; other failures get the typed treatment.
+      handleGitError(e);
+      onOpenChange(false);
+    } finally {
+      void actions.refreshStatusNow();
+      void actions.loadInProgress();
+      setMerging(false);
+    }
+  };
 
   const doMerge = async () => {
     if (!selected) return;
@@ -101,7 +159,7 @@ export function MergeBranchDialog({
       if (wasConflicts) {
         toast.warning(`Merged ${selected} with conflicts — resolve them to finish`);
       } else {
-        toast.error(String(e));
+        handleGitError(e);
       }
       onOpenChange(false);
     } finally {
@@ -116,38 +174,35 @@ export function MergeBranchDialog({
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 bg-black/60 z-[var(--z-overlay)]" />
-        <Dialog.Content
-          className="fixed left-1/2 top-[22%] -translate-x-1/2 z-[var(--z-modal)] w-[420px] rounded-xl overflow-hidden bg-[var(--bg-elevated)] border border-border-default shadow-[var(--shadow-overlay)] flex flex-col"
-          onOpenAutoFocus={(e) => {
-            // Keep focus on the filter input (rendered below), not the list.
-            e.preventDefault();
-          }}
+        <Dialog.Backdrop className="fixed inset-0 scrim z-overlay" />
+        <Dialog.Popup
+          className="fixed left-1/2 top-[22%] -translate-x-1/2 z-modal w-[420px] rounded-xl overflow-hidden bg-[var(--card)] border border-border shadow-md flex flex-col"
+          // Keep focus on the filter input (rendered below), not the list.
+          // `false` is Base UI's spelling of Radix's preventDefault() here.
+          initialFocus={false}
         >
-          <div className="px-4 pt-3.5 pb-3 border-b border-border-default">
-            <Dialog.Title className="text-[13px] font-semibold text-text-primary flex items-center gap-1.5">
-              <GitMerge size={13} className="text-text-secondary shrink-0" />
+          <div className="px-4 pt-3.5 pb-3 border-b border-border">
+            <Dialog.Title className="text-base font-semibold text-foreground flex items-center gap-1.5">
+              <GitMerge size={13} className="text-secondary-foreground shrink-0" />
               <span>
-                Merge into{" "}
-                <span className="font-mono text-accent">{branch || "—"}</span>
+                Merge into <span className="font-mono text-primary">{branch || "—"}</span>
               </span>
             </Dialog.Title>
-            <Dialog.Description className="text-[11px] text-text-tertiary mt-1">
+            <Dialog.Description className="text-xs text-muted-foreground mt-1">
               Choose a branch to merge into{" "}
-              <span className="font-mono">{branch || "the current branch"}</span>
-              .
+              <span className="font-mono">{branch || "the current branch"}</span>.
             </Dialog.Description>
           </div>
 
           {/* Filter */}
-          <div className="flex items-center gap-1.5 px-3 h-[32px] border-b border-border-default shrink-0">
-            <Search size={11} className="text-text-tertiary shrink-0" />
+          <div className="flex items-center gap-1.5 px-3 h-control-lg border-b border-border shrink-0">
+            <Search size={11} className="text-muted-foreground shrink-0" />
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Filter branches…"
               autoFocus
-              className="flex-1 bg-transparent outline-none text-[11px] text-text-primary placeholder:text-text-tertiary min-w-0"
+              className="flex-1 bg-transparent outline-none text-xs text-foreground placeholder:text-muted-foreground min-w-0"
             />
           </div>
 
@@ -162,19 +217,19 @@ export function MergeBranchDialog({
                   aria-selected={isSel}
                   onClick={() => setSelected(b.name)}
                   className={cn(
-                    "group flex items-center gap-2 px-3 h-[28px] text-[11px] cursor-pointer",
+                    "group flex items-center gap-2 px-3 h-[28px] text-xs cursor-pointer",
                     isSel
-                      ? "bg-bg-selected text-text-primary"
-                      : "text-text-secondary hover:bg-bg-hover hover:text-text-primary",
+                      ? "bg-element-selected text-foreground"
+                      : "text-secondary-foreground hover:bg-element-hover hover:text-foreground",
                   )}
                 >
                   <Check
                     size={12}
-                    className={cn("shrink-0", isSel ? "text-accent" : "opacity-0")}
+                    className={cn("shrink-0", isSel ? "text-primary" : "opacity-0")}
                   />
                   <span className="truncate flex-1 font-mono">{b.name}</span>
                   {b.isRemote && (
-                    <span className="shrink-0 text-[8px] font-mono uppercase tracking-wide text-text-tertiary border border-border-default rounded px-1">
+                    <span className="shrink-0 text-3xs font-mono uppercase tracking-wide text-muted-foreground border border-border rounded px-1">
                       remote
                     </span>
                   )}
@@ -182,14 +237,38 @@ export function MergeBranchDialog({
               );
             })}
             {filtered.length === 0 && (
-              <div className="px-3 py-3 text-[10px] text-text-tertiary text-center">
+              <div className="px-3 py-3 text-2xs text-muted-foreground text-center">
                 No other branches
               </div>
             )}
           </div>
 
           {/* Preview + actions */}
-          <div className="border-t border-border-default px-3 py-2.5 flex flex-col gap-2.5">
+          <div className="border-t border-border px-3 py-2.5 flex flex-col gap-2.5">
+            {fetching && (
+              <p className="text-2xs text-muted-foreground flex items-center gap-1.5">
+                <Loader2 size={10} className="animate-spin shrink-0" />
+                Checking origin for new commits…
+              </p>
+            )}
+            {staleUpstream && (
+              <p className="text-xs text-[var(--atlas-status-warning-foreground)] flex items-start gap-1.5">
+                <AlertTriangle size={11} className="shrink-0 mt-0.5" />
+                <span>
+                  <span className="font-mono">{selected}</span> is behind{" "}
+                  <span className="font-mono">{staleUpstream.upstream}</span> by{" "}
+                  {staleUpstream.behind} commit
+                  {staleUpstream.behind === 1 ? "" : "s"}.{" "}
+                  <button
+                    onClick={() => setSelected(staleUpstream.upstream)}
+                    className="underline underline-offset-2 hover:text-foreground cursor-pointer"
+                  >
+                    Merge {staleUpstream.upstream} instead
+                  </button>{" "}
+                  to bring in the latest changes.
+                </span>
+              </p>
+            )}
             <MergePreviewLine
               selected={selected}
               current={branch}
@@ -199,30 +278,41 @@ export function MergeBranchDialog({
             <div className="flex items-center justify-end gap-2">
               <button
                 onClick={() => onOpenChange(false)}
-                className="px-3 h-7 rounded text-[11px] text-text-secondary hover:bg-bg-hover transition-colors"
+                className="px-3 h-7 rounded text-xs text-secondary-foreground hover:bg-element-hover transition-colors"
               >
                 Cancel
               </button>
               <button
-                onClick={() => void doMerge()}
+                onClick={() => void doRebase()}
                 disabled={!canMerge}
+                title={selected ? `Rebase ${branch} onto ${selected}` : "Rebase"}
                 className={cn(
-                  "flex items-center gap-1.5 px-3 h-7 rounded text-[11px] font-medium transition-colors",
+                  "px-3 h-7 rounded text-xs font-medium transition-colors",
                   canMerge
-                    ? "text-white bg-accent hover:opacity-90"
-                    : "text-text-tertiary bg-bg-hover cursor-not-allowed",
+                    ? "text-foreground border border-border hover:bg-element-hover"
+                    : "text-muted-foreground bg-element-hover cursor-not-allowed",
                 )}
               >
-                {merging ? (
-                  <Loader2 size={11} className="animate-spin" />
-                ) : (
-                  <GitMerge size={11} />
+                Rebase
+              </button>
+              <button
+                onClick={() => void doMerge()}
+                disabled={!canMerge}
+                // `text-primary-foreground` on the accent fill, never the white literal —
+                // see the note in `git-error-dialog`.
+                className={cn(
+                  "flex items-center gap-1.5 px-3 h-7 rounded text-xs font-medium transition-colors",
+                  canMerge
+                    ? "text-primary-foreground bg-primary hover:opacity-90"
+                    : "text-muted-foreground bg-element-hover cursor-not-allowed",
                 )}
+              >
+                {merging ? <Loader2 size={11} className="animate-spin" /> : <GitMerge size={11} />}
                 {selected ? `Merge ${selected}` : "Merge"}
               </button>
             </div>
           </div>
-        </Dialog.Content>
+        </Dialog.Popup>
       </Dialog.Portal>
     </Dialog.Root>
   );
@@ -241,14 +331,14 @@ function MergePreviewLine({
 }) {
   if (!selected) {
     return (
-      <p className="text-[11px] text-text-tertiary">
+      <p className="text-xs text-muted-foreground">
         Select a branch to see what merging it would do.
       </p>
     );
   }
   if (previewing || !preview) {
     return (
-      <p className="text-[11px] text-text-tertiary flex items-center gap-1.5">
+      <p className="text-xs text-muted-foreground flex items-center gap-1.5">
         <Loader2 size={11} className="animate-spin shrink-0" />
         Checking for ability to merge automatically…
       </p>
@@ -258,43 +348,42 @@ function MergePreviewLine({
   const src = <span className="font-mono">{selected}</span>;
   const dst = <span className="font-mono">{current}</span>;
   const n = preview.commitCount;
-  const plural = (count: number, word: string) =>
-    `${count} ${word}${count === 1 ? "" : "s"}`;
+  const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"}`;
 
   switch (preview.kind) {
     case "uptodate":
       return (
-        <p className="text-[11px] text-text-tertiary">
+        <p className="text-xs text-muted-foreground">
           {dst} is already up to date with {src}.
         </p>
       );
     case "invalid":
       return (
-        <p className="text-[11px] text-[var(--status-error)] flex items-center gap-1.5">
+        <p className="text-xs text-[var(--atlas-status-error-foreground)] flex items-center gap-1.5">
           <Ban size={11} className="shrink-0" />
           Unable to merge unrelated histories.
         </p>
       );
     case "conflicts":
       return (
-        <p className="text-[11px] text-[var(--status-warning)] flex items-center gap-1.5">
+        <p className="text-xs text-[var(--atlas-status-warning-foreground)] flex items-center gap-1.5">
           <AlertTriangle size={11} className="shrink-0" />
           <span>
-            {plural(preview.conflictedFiles, "file")} will conflict when merging{" "}
-            {src} into {dst}. You can still merge and resolve them.
+            {plural(preview.conflictedFiles, "file")} will conflict when merging {src} into {dst}.
+            You can still merge and resolve them.
           </span>
         </p>
       );
     case "unsupported":
       return (
-        <p className="text-[11px] text-text-secondary">
+        <p className="text-xs text-secondary-foreground">
           This will merge {plural(n, "commit")} from {src} into {dst}.
         </p>
       );
     case "clean":
     default:
       return (
-        <p className="text-[11px] text-text-secondary">
+        <p className="text-xs text-secondary-foreground">
           This will merge {plural(n, "commit")} from {src} into {dst}.
         </p>
       );

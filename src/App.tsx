@@ -1,62 +1,97 @@
-import { startTransition, useState, useEffect, useRef } from "react";
+import { startTransition, useState, useEffect, useMemo, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { AppLayout } from "@/features/layout/components/app-layout";
 import { AppContextMenu } from "@/components/app-context-menu";
+import { TooltipProvider } from "@/ui/tooltip";
 import { CommandPalette } from "@/components/command-palette";
 import { NewTabPalette } from "@/components/new-tab-palette";
 import { LayoutSwitcher } from "@/features/layout/components/layout-switcher";
 import { SearchOverlay } from "@/components/search-overlay";
-import { useHotkeys } from "@/hooks/use-hotkey";
+import { useActionHotkeys } from "@/hooks/use-hotkey";
+import {
+  useKeybindingsStore,
+  watchKeybindingsOnFocus,
+} from "@/features/keybindings/stores/keybindings-store";
+import { KeymapOnboarding } from "@/features/keybindings/components/keymap-onboarding";
+import { useNativeCloseTabAccelerator } from "@/features/keybindings/lib/use-native-close-tab-accelerator";
 import { useLayoutStore } from "@/features/layout/stores/layout-store";
 import { useTerminalStore } from "@/features/terminal/stores/terminal-store";
 import {
-  useProjectStore,
+  useAppStore,
+  setAppStateWritable,
   type AppStateWire,
-} from "@/features/project/stores/project-store";
+} from "@/features/app/stores/app-store";
 import { useChatStore } from "@/features/chat/stores/chat-store";
 import {
   listenAgents,
+  pluginIdForAgentId,
   resetAgentByAgentId,
 } from "@/features/chat/lib/agents-api";
 import type { PendingPermission } from "@/types/acp";
 import type { AgentDelta } from "@/types/agents";
-import { SWITCHABLE_AGENTS } from "@/types/agent";
+import { cycleChatAgent } from "@/features/chat/lib/switch-agent";
 import { FilePicker } from "@/features/file-picker/components/file-picker";
 import { HintOverlay } from "@/features/hint-nav/components/hint-overlay";
 import { BrowserOverlayWatcher } from "@/features/browser/components/browser-overlay-watcher";
-import { fileIndex, openFileIndex, markFileIndexClosed } from "@/features/file-picker/lib/file-picker-api";
-import { activeWorkspaceId } from "@/features/workspaces/lib/active-workspace";
-import { useWorkspaceStore } from "@/features/workspaces/stores/workspace-store";
-import { pickAndAddWorkspace } from "@/features/workspaces/lib/pick-workspace";
-import { flushAll } from "@/features/workspaces/lib/flush-registry";
-import { captureSnapshot } from "@/features/workspaces/lib/workspace-snapshot";
+import {
+  fileIndex,
+  openFileIndex,
+  markFileIndexClosed,
+} from "@/features/file-picker/lib/file-picker-api";
+import { activeProjectId } from "@/features/projects/lib/active-project";
+import { useProjectStore } from "@/features/projects/stores/project-store";
+import { pickAndAddProject } from "@/features/projects/lib/pick-project";
+import { flushAll } from "@/features/projects/lib/flush-registry";
+import { captureSnapshot } from "@/features/projects/lib/project-snapshot";
 import { useExplorerStore } from "@/features/explorer/stores/explorer-store";
+import { useGitStore } from "@/features/git/stores/git-store";
 import { listen } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   useRecentFilesStore,
   ensureRecentFilesListener,
   type RecentFile,
 } from "@/features/chat/stores/recent-files-store";
-import { useRecentChatsStore } from "@/features/workspaces/stores/recent-chats-store";
+import { useRecentChatsStore } from "@/features/projects/stores/recent-chats-store";
 import { stripInjectedContext } from "@/features/chat/lib/atlas-context";
 import { openNewAgentChat } from "@/features/chat/lib/open-agent-session";
-import { refreshCachedAcpModels } from "@/features/chat/lib/warm-acp-models";
-import { useClaudeSetupStore } from "@/features/claude-setup/stores/claude-setup-store";
-import { useNodeSetupStore } from "@/features/node-setup/stores/node-setup-store";
+import { requestCloseTab } from "@/features/chat/lib/close-tab";
+import { jumpToSession } from "@/features/chat/lib/tab-project";
+import { pruneContextUsageCache } from "@/features/chat/lib/context-usage-cache";
+import { isScrollHot } from "@/lib/scroll-hot";
+import { isWindows, isLinux } from "@/lib/platform";
+import type { CliStatus } from "@/features/settings/components/settings-panel";
+import { basename } from "@/lib/paths";
 import {
-  isPermissionGranted,
-  requestPermission,
-  sendNotification,
-} from "@tauri-apps/plugin-notification";
+  hydrateAgentRegistry,
+  setAgentUpdatePhase,
+  startCatalogListener,
+} from "@/features/agents/stores/agent-registry-store";
+import { AgentOAuthModalHost } from "@/features/agents/components/agent-oauth-modal";
+import { watchRemovedAgents } from "@/features/chat/lib/removed-agents";
+import { AgentElicitationHost } from "@/features/chat/components/agent-elicitation-host";
+import { UiActionBridge } from "@/features/ui-actions/components/ui-action-bridge";
+import { OrgActionLogBridge } from "@/features/org-actions/components/org-action-log-bridge";
+import { initWindowFocusTracking, isWindowFocused } from "@/lib/window-focus";
+import { primeNativeNotificationPermission, sendNativeNotification } from "@/lib/native-notify";
 import { logEvent } from "@/features/log/lib/log";
-import { warmMarkdownWorker } from "@/lib/markdown-cache";
+import { warmMarkdownWorker, primeMarkdownRenderer } from "@/lib/markdown-cache";
+import { primeMarkdown } from "@/lib/markdown";
 import { useNotificationsStore } from "@/features/notifications/stores/notifications-store";
 import { NotificationPanel } from "@/features/notifications/components/notification-panel";
 import { FeedbackPanel } from "@/features/feedback/components/feedback-panel";
 import { UpdateAvailableModal } from "@/features/updater/components/update-available-modal";
 import { LoadingOrganisationOverlay } from "@/features/organisations/components/loading-organisation-overlay";
+import { StopAgentsDialog } from "@/features/projects/components/stop-agents-dialog";
+import { RemoveAgentDialog } from "@/features/agents/components/remove-agent-dialog";
 import { useOrgStore } from "@/features/organisations/stores/org-store";
+import { useActiveOrgProjects } from "@/features/projects/lib/org-scope";
+import {
+  isOrgReconciled,
+  markOrgReconciled,
+} from "@/features/organisations/lib/org-reconciliation";
+import { comms, listenComms, type CommsEnvelope } from "@/features/comms/lib/comms-api";
+import { useSettingsStore } from "@/features/settings/stores/settings-store";
+import { commsActions, pruneTyping } from "@/features/comms/stores/comms-store";
 import { useUpdaterStore } from "@/features/updater/stores/updater-store";
 import {
   updater,
@@ -67,37 +102,69 @@ import {
   listenUpdateChecking,
 } from "@/features/updater/lib/updater-api";
 import { Toaster, toast } from "sonner";
+import { agentMeta } from "@/features/agents/lib/agent-meta";
+import { IconThemeFonts } from "@/features/icon-theme/components/file-icon";
 import {
+  auth,
   listenAuthChanged,
   listenAuthError,
   listenAuthSignedOut,
 } from "@/features/auth/lib/auth-api";
 import { useAuthStore } from "@/features/auth/stores/auth-store";
+import { createWakeRefresher } from "@/features/auth/lib/refresh-on-wake";
+import { useMembersStore } from "@/features/organisations/stores/members-store";
 import { ConnectDialog } from "@/features/auth/components/connect-dialog";
 import { clampScale, SCALE_STEP, DEFAULT_SCALE } from "@/features/settings/lib/ui-scale";
+import { useModelsStore } from "@/features/settings/stores/models-store";
+
+/** Minimum gap between two wake-triggered account re-pulls. Long enough that a
+ *  burst of focus edges (Space switches) costs one pull; short enough that a
+ *  rename made on the web is visible the next time the user comes back. */
+const AUTH_WAKE_REFRESH_MS = 5 * 60_000;
 
 // Interface-zoom helpers (⌘+/⌘-/⌘0). They read + write the persisted
 // `uiScale` setting; `updateSettings` applies it to the native WebView zoom.
 function stepZoom(delta: number) {
-  const { settings, actions } = useProjectStore.getState();
+  const { settings, actions } = useSettingsStore.getState();
   actions.updateSettings({ uiScale: clampScale(settings.uiScale + delta) });
 }
 const zoomIn = () => stepZoom(SCALE_STEP);
 const zoomOut = () => stepZoom(-SCALE_STEP);
 const zoomReset = () =>
-  useProjectStore.getState().actions.updateSettings({ uiScale: DEFAULT_SCALE });
+  useSettingsStore.getState().actions.updateSettings({ uiScale: DEFAULT_SCALE });
 
 export function App() {
-  // Probe Claude Code (installed? authed?) on mount. Drives the banner
-  // above the message composer and the hard-disabled state of the input
-  // when the CLI isn't ready. Fast — two parallel subprocesses, totals
-  // <100ms on a warm machine.
+  // Own model download listeners at app scope so completion notifications are
+  // delivered even when Settings is closed.
   useEffect(() => {
-    // Probe the Node runtime first (the ACP agents launch via `npx`). If it's
-    // missing or too old, the store auto-installs the latest LTS via the
-    // bundled nvm in the background and re-runs ACP discovery when ready.
-    void useNodeSetupStore.getState().actions.check();
-    void useClaudeSetupStore.getState().actions.refreshStatus();
+    void useModelsStore.getState().actions.init();
+  }, []);
+
+  // Keybinding profiles: load once, then pick up hand edits to
+  // keybindings.json whenever the window regains focus.
+  useEffect(() => {
+    void useKeybindingsStore.getState().actions.load();
+    return watchKeybindingsOnFocus();
+  }, []);
+  useNativeCloseTabAccelerator();
+
+  // No Claude probe here any more. It used to run at boot to drive a banner
+  // above the composer and hard-disable the input; both are gone, and probing
+  // meant a fresh install spawned subprocesses for an agent it does not have
+  // (ADR-0002). The one caller that still needs the answer — the post-auth
+  // re-check in `agent-auth-hooks` — asks for it itself.
+  useEffect(() => {
+    // Agent identity registry (the native agent + registry-installed
+    // externals):
+    // hydrate once so pickers/glyphs/memory dropdown resolve external
+    // metadata; the marketplace re-hydrates after installs.
+    void hydrateAgentRegistry();
+    // …and stay current: discovery finishes after boot, and installs /
+    // acquisitions / settings toggles all change how an agent launches.
+    startCatalogListener();
+    // An uninstall drops the agent's connection with no delta to any tab on
+    // it; the catalog shrinking is what settles those tabs.
+    return watchRemovedAgents();
   }, []);
 
   // Refresh the `atlas` CLI helper at `~/.local/bin/atlas` on every
@@ -105,17 +172,29 @@ export function App() {
   // replaced with the current version. Failures are non-fatal — the
   // app still works without the helper, the user just can't type
   // `atlas ./` in their terminal until they hit the install button
-  // in Settings → General.
+  // in Settings → General. Not on Windows: the helper is a bash script
+  // (see `commands::cli::cli_install_helper`). On Linux, skip if a
+  // system-wide /usr/bin/atlas exists so ~/.local/bin/atlas does not shadow it.
   useEffect(() => {
-    void invoke("cli_install_helper").catch((e) => {
-      console.warn("atlas CLI helper refresh failed:", e);
-    });
+    if (isWindows) return;
+    void invoke<CliStatus>("cli_status")
+      .then((status) => {
+        // If installed system-wide outside ~/.local/ (e.g. /usr/bin/atlas on Linux), don't shadow it
+        if (status?.installed && status.path && !status.path.includes("/.local/")) return;
+        // If already installed and up to date on Linux, skip (macOS re-runs to self-heal edited/deleted helpers)
+        if (isLinux && status?.installed && status.installedVersion === status.currentVersion)
+          return;
+        return invoke("cli_install_helper");
+      })
+      .catch((e) => {
+        console.warn("atlas CLI helper refresh failed:", e);
+      });
   }, []);
 
   // Warm-launch CLI: when `atlas <path>` runs while Atlas is already open, the
   // Rust single-instance callback forwards the folder here. The app is already
-  // hydrated, so we just ADD it to the workspace list and switch to it (no race
-  // with hydration). `openProject` → `addWorkspace` dedupes by path.
+  // hydrated, so we just ADD it to the project list and switch to it (no race
+  // with hydration). `openProject` → `addProject` dedupes by path.
   useEffect(() => {
     const unlisten = listen<string>("atlas:cli-open-project", (event) => {
       const path = event.payload;
@@ -123,11 +202,11 @@ export function App() {
       logEvent({
         source: "atlas",
         kind: "cli-launch-open-project",
-        summary: `Adding workspace from CLI (warm launch): ${path}`,
+        summary: `Adding project from CLI (warm launch): ${path}`,
         status: "success",
         payload: { path },
       });
-      void useProjectStore.getState().actions.openProject(path);
+      void useAppStore.getState().actions.openProject(path);
     });
     return () => {
       void unlisten.then((off) => off());
@@ -141,7 +220,7 @@ export function App() {
   useEffect(() => {
     const unlisten = listen("atlas:close-active-tab", () => {
       const current = useLayoutStore.getState().activeTabId;
-      if (current) useLayoutStore.getState().actions.closeTab(current);
+      if (current) requestCloseTab(current);
     });
     return () => {
       void unlisten.then((off) => off());
@@ -186,7 +265,8 @@ export function App() {
     const offs: Array<Promise<() => void>> = [
       listenAuthChanged((snapshot) => {
         a.setSnapshot(snapshot);
-        // Add-only merge of the server's org list into the local switcher.
+        // Merge the server's org list into the local switcher (adds new ones,
+        // takes renamed names onto linked ones, never removes).
         // Guarded on `orgs !== null` (three-state): `null` is "not known yet"
         // (offline), not "no orgs", and must never touch the local list.
         if (snapshot.status === "signed-in" && snapshot.orgs) {
@@ -200,13 +280,142 @@ export function App() {
       listenAuthSignedOut((e) => toast.error(e.message)),
     ];
     void a.hydrate();
+    // Re-pull on wake so an org renamed on the web shows up when the user
+    // comes back to Atlas, not at the next relaunch. `atlas:window-active` is
+    // the focus rising edge / page-visible signal from `window-focus.ts`, and
+    // the first input after 30 s idle (below) — all throttled by one gate.
+    const refreshOnWake = createWakeRefresher({
+      refresh: auth.refresh,
+      isSignedIn: () => useAuthStore.getState().snapshot.status === "signed-in",
+      minIntervalMs: AUTH_WAKE_REFRESH_MS,
+    });
+    window.addEventListener("atlas:window-active", refreshOnWake);
     return () => {
+      window.removeEventListener("atlas:window-active", refreshOnWake);
       for (const p of offs) void p.then((off) => off());
     };
   }, []);
 
+  // Boot reconciliation of the ACTIVE org. Rust's stored value is seeded from
+  // the web and historically fell back to the account's *first* organisation,
+  // while the desktop's real choice lives in the local org store and is only
+  // pushed on an explicit switch. Push it once at boot too, so the auth
+  // snapshot — and everything keyed off it: the chat socket's target and the
+  // gateway `atlas-org` billing header — follows the org actually on screen
+  // rather than whichever one the server listed first.
+  const orgReconciledRef = useRef(false);
+  const bootAuthStatus = useAuthStore((s) => s.snapshot.status);
+  const bootLocalActiveOrg = useOrgStore.use.activeOrganisationId();
+  const bootOrganisations = useOrgStore.use.organisations();
+  useEffect(() => {
+    // `isOrgReconciled` covers the other pusher: an explicit `switchOrg` that
+    // ran before sign-in settled has already told Rust, and this push landing
+    // after it would drag the chat socket back to the org just left.
+    if (orgReconciledRef.current || isOrgReconciled()) return;
+    if (bootAuthStatus !== "signed-in" || !bootLocalActiveOrg) return;
+    const active = bootOrganisations.find((o) => o.id === bootLocalActiveOrg);
+    if (!active) return;
+    orgReconciledRef.current = true;
+    markOrgReconciled();
+    void invoke("auth_set_active_org", { orgId: active.remoteId ?? null }).catch((e) => {
+      console.warn("boot org reconciliation failed:", e);
+    });
+  }, [bootAuthStatus, bootLocalActiveOrg, bootOrganisations]);
+
+  // The Timeline's cloud half, pointed at the Organisation on screen.
+  //
+  // App scope rather than the Timeline panel, for the same reason the chat
+  // socket is: the sockets are how a teammate's Session and a new comment
+  // arrive, and a panel-scoped target would mean "Timeline closed, nothing
+  // arrives". Rust reads each project's binding to decide which of them are
+  // actually bound to Cloud — passing paths keeps that judgement in one place.
+  const cloudProjects = useActiveOrgProjects();
+  const cloudProjectsKey = useMemo(
+    () =>
+      cloudProjects
+        .map((p) => p.path)
+        .sort()
+        .join("\n"),
+    [cloudProjects],
+  );
+  useEffect(() => {
+    const active = bootOrganisations.find((o) => o.id === bootLocalActiveOrg);
+    // A local-only Organisation has no `remoteId` and nothing to point at;
+    // `null` is what tears the previous tenant's sockets down.
+    const orgId = bootAuthStatus === "signed-in" ? (active?.remoteId ?? null) : null;
+    void invoke("artifacts_cloud_retarget", {
+      orgId,
+      projectPaths: cloudProjectsKey ? cloudProjectsKey.split("\n") : [],
+    }).catch((e) => {
+      // The Timeline still renders every local Session without this; a toast
+      // for a background target would be noise.
+      console.warn("timeline cloud retarget failed:", e);
+    });
+  }, [bootAuthStatus, bootLocalActiveOrg, bootOrganisations, cloudProjectsKey]);
+
+  // Team chat: the renderer is a projection of Rust's chat state. The socket
+  // lives in Rust for the app's lifetime (it is also the notification
+  // transport), so this listener runs at app scope rather than with the panel —
+  // a panel-scoped one would mean "panel closed, no notifications".
+  useEffect(() => {
+    // rAF-coalesced, the agent-delta batcher's shape: a burst of socket frames
+    // (a backfill, a reaction flood, a presence storm) used to be one zustand
+    // `set` — and one React commit — PER FRAME. Buffer and drain once per
+    // animation frame; React 18 batches every `set` inside the synchronous
+    // drain into a single commit. The timeout backstop drains while the
+    // window is hidden, where rAF never fires (same trap as the delta path).
+    let buffer: CommsEnvelope[] = [];
+    let scheduled = 0;
+    let backstop = 0;
+    const drain = () => {
+      scheduled = 0;
+      if (backstop) {
+        window.clearTimeout(backstop);
+        backstop = 0;
+      }
+      const batch = buffer;
+      buffer = [];
+      const apply = commsActions().applyEnvelope;
+      for (const envelope of batch) apply(envelope);
+    };
+    const off = listenComms((envelope) => {
+      buffer.push(envelope);
+      if (!scheduled) {
+        scheduled = window.requestAnimationFrame(drain);
+        backstop = window.setTimeout(drain, 120);
+      }
+    });
+    // Subscribe FIRST, then ask Rust to re-announce. Tauri events are not
+    // buffered and the socket opens seconds after launch — possibly before this
+    // component mounts — so a `resync` emitted into a void was leaving the panel
+    // empty until an org switch happened to fire another one.
+    void off.then(() => comms.ready()).catch(() => {});
+    // There is no "stopped typing" frame, so hints are aged out on a timer.
+    const prune = window.setInterval(pruneTyping, 2_000);
+    return () => {
+      void off.then((fn) => fn());
+      window.clearInterval(prune);
+      if (scheduled) window.cancelAnimationFrame(scheduled);
+      if (backstop) window.clearTimeout(backstop);
+    };
+  }, []);
+
+  // Warm the member roster at APP scope, so the chat panel's first paint has
+  // names — the panel used to be the only fetcher, which meant a boot with the
+  // panel closed guaranteed an "Unknown"-titled DM list on first open. Guarded
+  // AND keyed on the auth transition (the members-modal pattern): the org id
+  // is persisted locally and ready long before the credential is.
+  const bootRemoteOrgId =
+    bootOrganisations.find((o) => o.id === bootLocalActiveOrg)?.remoteId ?? null;
+  const bootSignedIn = bootAuthStatus === "signed-in";
+  useEffect(() => {
+    if (bootRemoteOrgId && bootSignedIn) {
+      void useMembersStore.getState().actions.load(bootRemoteOrgId);
+    }
+  }, [bootRemoteOrgId, bootSignedIn]);
+
   // NOTE: we intentionally do NOT wipe localStorage on boot anymore. Several
-  // stores legitimately persist there via zustand `persist` — the workspace
+  // stores legitimately persist there via zustand `persist` — the project
   // "Chats" list (`atlas-recent-chats`), layout prefs (`atlas-layout-prefs`),
   // the review provider/model selection — and a blanket clear was silently
   // dropping all of them on every restart. Each store carries its own
@@ -237,34 +446,68 @@ export function App() {
     (async () => {
       // A terminal `atlas <path>` launch stashes the path in Rust (single-shot,
       // so a window reload won't re-trigger). Consume it BEFORE hydrating: the
-      // CLI project must be ADDED to the workspace list and switched to, but
+      // CLI project must be ADDED to the project list and switched to, but
       // hydrate replaces that list and fires its own `switchTo` — which would
-      // both clobber the CLI workspace and swallow the CLI switch (`switching`
+      // both clobber the CLI project and swallow the CLI switch (`switching`
       // guard). So we suppress hydrate's auto-switch when a CLI path is present
       // and perform the CLI open as the sole, final switch.
       const cliPath = await invoke<string | null>("cli_take_initial_project_path").catch(
         () => null,
       );
-      try {
-        const payload = await invoke<AppStateWire>("bootstrap_app_state");
-        if (cancelled) return;
-        startTransition(() => {
-          useProjectStore
-            .getState()
-            .actions.hydrate(payload, { skipActiveSwitch: !!cliPath });
-          // Hydration replaces the org list wholesale, so re-apply any server
-          // orgs from a snapshot that may have already arrived — otherwise a
-          // sign-in that landed before this bootstrap would be overwritten.
-          const snap = useAuthStore.getState().snapshot;
-          if (snap.status === "signed-in" && snap.orgs) {
-            useOrgStore.getState().actions.mergeServerOrgs(snap.orgs);
+      // `bootstrap_app_state` is the only read of `state.json` Atlas ever
+      // performs, so a failure here is NOT "start empty and carry on": the
+      // stores keep their empty defaults, `AppState::apply_patch` replaces the
+      // persisted lists wholesale, and the unconditional quit flush would then
+      // write that emptiness over the user's real projects and orgs. Retry
+      // first — a transient IPC hiccup shouldn't cost a session.
+      let snapshot: AppStateWire | null = null;
+      for (let attempt = 1; attempt <= 3 && !snapshot; attempt++) {
+        try {
+          snapshot = await invoke<AppStateWire>("bootstrap_app_state");
+        } catch (e) {
+          console.warn(`bootstrap_app_state attempt ${attempt} failed:`, e);
+          if (attempt < 3) {
+            await new Promise((resolve) => setTimeout(resolve, 150 * attempt));
           }
-        });
-      } catch (e) {
-        console.warn("bootstrap_app_state failed; starting empty:", e);
-        if (!cancelled) {
+        }
+      }
+      if (cancelled) return;
+      try {
+        if (snapshot) {
+          const payload = snapshot;
           startTransition(() => {
-            useProjectStore.getState().actions.hydrate(
+            // The stores are about to hold the user's real state, so writing
+            // them back is safe from here on. Before this line they hold empty
+            // defaults and persistence is denied — see `appStateWritable`.
+            setAppStateWritable(true);
+            useAppStore.getState().actions.hydrate(payload, { skipActiveSwitch: !!cliPath });
+            // Hydration replaces the org list wholesale, so re-apply any server
+            // orgs from a snapshot that may have already arrived — otherwise a
+            // sign-in that landed before this bootstrap would be overwritten.
+            const snap = useAuthStore.getState().snapshot;
+            if (snap.status === "signed-in" && snap.orgs) {
+              useOrgStore.getState().actions.mergeServerOrgs(snap.orgs);
+            }
+          });
+        } else {
+          // Every attempt failed. Come up in an explicitly READ-ONLY session
+          // rather than letting the empty stores overwrite `state.json`: the
+          // user's projects and orgs are still on disk, and a restart is what
+          // brings them back. Without this the app looks merely "empty" and
+          // then makes that permanent on quit.
+          setAppStateWritable(false);
+          logEvent({
+            source: "atlas",
+            kind: "bootstrap-failed",
+            summary: "bootstrap_app_state failed after 3 attempts; app-state writes suspended",
+            status: "failure",
+          });
+          toast.error(
+            "Atlas couldn't load your projects. Your saved data is safe on disk — restart Atlas to get it back.",
+            { duration: Infinity },
+          );
+          startTransition(() => {
+            useAppStore.getState().actions.hydrate(
               {
                 currentProject: null,
                 recentProjects: [],
@@ -276,15 +519,19 @@ export function App() {
         }
       } finally {
         if (!cancelled) {
-          if (cliPath) {
+          // Only open the CLI path when we actually have a snapshot. Without
+          // one there is no org to own the project, so `addProject` would
+          // refuse anyway — and its "no organisation" toast would bury the
+          // boot-failure one that actually tells the user what to do.
+          if (cliPath && snapshot) {
             logEvent({
               source: "atlas",
               kind: "cli-launch-open-project",
-              summary: `Adding workspace from CLI argv: ${cliPath}`,
+              summary: `Adding project from CLI argv: ${cliPath}`,
               status: "success",
               payload: { path: cliPath },
             });
-            await useProjectStore
+            await useAppStore
               .getState()
               .actions.openProject(cliPath)
               .catch((err) => {
@@ -298,6 +545,12 @@ export function App() {
               });
           }
           signalReady();
+          // First paint is done — pull in the main-thread markdown renderer
+          // now so the first small chat block still parses synchronously. It
+          // is deliberately NOT a static import (it would land in the eager
+          // entry chunk); see `primeMarkdownRenderer`.
+          primeMarkdownRenderer();
+          primeMarkdown();
         }
       }
     })();
@@ -308,19 +561,33 @@ export function App() {
 
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [newTabPaletteOpen, setNewTabPaletteOpen] = useState(false);
+  // The project rail's "Open module" row opens the same palette ⌘⌥N does.
+  // The palette's state lives here, so the rail asks for it by event rather
+  // than the state being lifted into a store for one caller.
+  useEffect(() => {
+    const open = () => setNewTabPaletteOpen(true);
+    window.addEventListener("atlas:new-tab-palette", open);
+    return () => window.removeEventListener("atlas:new-tab-palette", open);
+  }, []);
+  // Same arrangement for ⌘K: the rail's org-row search button asks for the
+  // command palette by event, because the palette's open state lives here and
+  // one caller does not justify lifting it into a store.
+  useEffect(() => {
+    const open = () => setCommandPaletteOpen(true);
+    window.addEventListener("atlas:command-palette", open);
+    return () => window.removeEventListener("atlas:command-palette", open);
+  }, []);
   const [layoutSwitcherOpen, setLayoutSwitcherOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [filePickerOpen, setFilePickerOpen] = useState(false);
   const {
     toggleLeftPanel,
     toggleRightPanel,
-    toggleBottomPanel,
+    toggleRightChatPanel,
     toggleChatSidebar,
-    toggleModelChatSidebar,
     toggleTabBar,
     addTab,
     setActiveTab,
-    closeTab,
     activateTabByIndex,
     cycleTab,
     addGroup,
@@ -375,19 +642,7 @@ export function App() {
       focusTerminalSoon(newTabId);
     }
   };
-  const currentProject = useProjectStore.use.currentProject();
-
-  // Silent startup refresh of cached ACP model lists (Claude Code / Codex) so
-  // the model picker stays fresh — optimistic UI: the cache drives the picker
-  // immediately, this updates it in the background. Only re-warms agents already
-  // cached (i.e. used before), so we never spawn an agent the user never touches.
-  // Deferred so it never competes with launch.
-  useEffect(() => {
-    const cwd = currentProject?.path;
-    if (!cwd) return;
-    const t = setTimeout(() => refreshCachedAcpModels(cwd), 4000);
-    return () => clearTimeout(t);
-  }, [currentProject?.path]);
+  const currentProject = useAppStore.use.currentProject();
 
   // Global agent event bus. One listener routes atlas-agents SessionDelta
   // events into the chat-store, queues permission requests for the
@@ -418,49 +673,19 @@ export function App() {
     // runs breaks the run so ordering is preserved. (Previously text was
     // bucketed separately and applied BEFORE other deltas, which reordered the
     // anchoring `message_appended` after its text — invisible for ACP agents
-    // whose IPC latency spread deltas across frames, but the in-process Cersei
+    // whose IPC latency spread deltas across frames, but the in-process native
     // agent emits a whole turn in one frame and the text shattered into
     // mis-ordered fragments.)
     const pendingDeltas: AgentDelta[] = [];
     const toolDeltaPos = new Map<string, number>(); // dedup key → index in pendingDeltas
+    const outputChunkPos = new Map<string, number>(); // live-output coalesce key → index
     let rafId: number | null = null;
+    /** Timer drain that survives RAF being paused — see `schedule` below. */
+    let backstopId: ReturnType<typeof setTimeout> | null = null;
 
-    // "Is Atlas actually in front of the user?" — tracked via the NATIVE window
-    // focus, NOT web focus/blur. The web events keep reporting "focused" when
-    // Atlas is fullscreen on its own macOS Space and the user swipes to another
-    // desktop (the webview never blurs), so notifications would wrongly stay
-    // suppressed. The native key-window status flips correctly on a Space
-    // switch / app deactivation, which is the signal we actually want.
-    let windowFocused = true;
-    let unlistenFocus: (() => void) | null = null;
-    const appWindow = getCurrentWindow();
-    void appWindow
-      .isFocused()
-      .then((f) => {
-        windowFocused = f;
-      })
-      .catch(() => {});
-    // Front-load the "cold wake" after the window has been idle/occluded: WebKit
-    // throttles the WKWebView's main thread + rAF + layout while inactive, so the
-    // first interaction (e.g. scrolling the chat) eats the catch-up. Firing this
-    // on the focus/visibility RISING edge lets listeners (chat virtualizer,
-    // markdown worker) warm the pipeline before the user touches anything.
-    const signalActive = () => window.dispatchEvent(new CustomEvent("atlas:window-active"));
-    void appWindow
-      .onFocusChanged(({ payload: focused }) => {
-        if (focused && !windowFocused) signalActive();
-        windowFocused = focused;
-      })
-      .then((un) => {
-        unlistenFocus = un;
-      })
-      .catch(() => {});
-    // Space switches / occlusion don't always flip native key-window focus, so
-    // also wake on the page becoming visible again.
-    const onVisible = () => {
-      if (document.visibilityState === "visible") signalActive();
-    };
-    document.addEventListener("visibilitychange", onVisible);
+    // Native window focus + the "cold wake" signal live in `src/lib/window-focus.ts`
+    // now — the terminal notifier needs the same answer this file did.
+    const stopFocusTracking = initWindowFocusTracking();
 
     // ── Idle-while-focused cold wake ─────────────────────────────────────────
     // The focus/visibility edges above never fire when Atlas stays the focused,
@@ -477,6 +702,7 @@ export function App() {
     //      a 3s watchdog → main-thread sync fallback on the first big message).
     const IDLE_RETURN_MS = 30_000;
     const KEEP_WARM_MS = 20_000;
+    const signalActive = () => window.dispatchEvent(new CustomEvent("atlas:window-active"));
     let lastActivityAt = Date.now();
     const onUserActivity = () => {
       const now = Date.now();
@@ -488,82 +714,95 @@ export function App() {
     window.addEventListener("keydown", onUserActivity, { passive: true });
     window.addEventListener("wheel", onUserActivity, { passive: true });
     const keepWarm = window.setInterval(() => {
-      if (windowFocused && document.visibilityState === "visible") {
+      if (isWindowFocused() && document.visibilityState === "visible") {
         warmMarkdownWorker();
       }
     }, KEEP_WARM_MS);
 
-    let permissionState: "unknown" | "granted" | "denied" = "unknown";
-    // Establish notification permission EAGERLY at startup. The old lazy path
-    // only asked the OS the first time a notification fired while unfocused —
-    // so if every agent turn finished while Atlas was focused, permission was
-    // never granted and the first real (background) notification was lost to
-    // the permission prompt. Priming it here means later notifications just
-    // fire. (Best-effort; macOS still needs the app code-signed to deliver.)
-    void (async () => {
-      try {
-        permissionState = (await isPermissionGranted())
-          ? "granted"
-          : (await requestPermission()) === "granted"
-            ? "granted"
-            : "denied";
-      } catch {
-        /* permission unavailable — notifications silently no-op */
-      }
-    })();
-    const notifyAgentDone = async () => {
-      if (windowFocused) return;
-      try {
-        if (permissionState === "unknown") {
-          const granted = (await isPermissionGranted())
-            ? true
-            : (await requestPermission()) === "granted";
-          permissionState = granted ? "granted" : "denied";
-        }
-        if (permissionState !== "granted") return;
-        const proj = useProjectStore.getState().currentProject;
-        const projectName = proj?.name ?? "Atlas";
-        sendNotification({
-          title: `Atlas: ${projectName}`,
-          body: "Agent task finished.",
-        });
-      } catch (e) {
-        console.warn("agent-done notification failed:", e);
-      }
+    // Housekeeping, well off the startup critical path: sweep stale
+    // per-session context-usage gauges out of localStorage (they had no
+    // other removal path and grew one key per session forever).
+    const pruneTimer = window.setTimeout(() => pruneContextUsageCache(), 15_000);
+
+    // Establish notification permission EAGERLY at startup (see native-notify.ts
+    // for why lazy asking lost the first real background notification).
+    void primeNativeNotificationPermission();
+    // Name the SESSION's project, not the active project — a finish in
+    // project B while A is focused used to read "Atlas — A".
+    const sessionProjectName = (acpSessionId: string): string => {
+      const sess = Object.values(useChatStore.getState().sessions).find(
+        (s) => s.acpSessionId === acpSessionId,
+      );
+      const byPath = useProjectStore
+        .getState()
+        .projects.find((w) => w.path === sess?.workingDirectory)?.name;
+      return byPath ?? useAppStore.getState().currentProject?.name ?? "Atlas";
     };
+    const notifyAgentDone = (acpSessionId: string) =>
+      sendNativeNotification({
+        title: `Atlas: ${sessionProjectName(acpSessionId)}`,
+        body: "Agent task finished.",
+      });
 
     // Sibling of notifyAgentDone — fires when the agent issues a
-    // permission_request and the window isn't focused. Shares the
-    // permission state machine and focus tracker above so we never
-    // double-prompt for OS notification access.
-    const notifyPermissionRequested = async (toolTitle: string) => {
-      if (windowFocused) return;
-      try {
-        if (permissionState === "unknown") {
-          const granted = (await isPermissionGranted())
-            ? true
-            : (await requestPermission()) === "granted";
-          permissionState = granted ? "granted" : "denied";
-        }
-        if (permissionState !== "granted") return;
-        const proj = useProjectStore.getState().currentProject;
-        const projectName = proj?.name ?? "Atlas";
-        sendNotification({
-          title: `Atlas: ${projectName} needs permission`,
-          body: `Approve "${toolTitle}" to continue.`,
-        });
-      } catch (e) {
-        console.warn("permission-request notification failed:", e);
-      }
-    };
+    // permission_request and the window isn't focused (the gate lives in
+    // `sendNativeNotification`).
+    const notifyPermissionRequested = (toolTitle: string, acpSessionId: string) =>
+      sendNativeNotification({
+        title: `Atlas: ${sessionProjectName(acpSessionId)} needs permission`,
+        body: `Approve "${toolTitle}" to continue.`,
+      });
 
-    const flush = () => {
-      rafId = null;
-      if (pendingDeltas.length === 0) return;
+    /** Longest a batch may be held for an active scroll gesture. Bounded so a
+     *  continuous fling can never starve the stream — worst case the reader
+     *  sees updates land ~2-3× per second instead of per frame while flicking. */
+    const SCROLL_HOLD_MAX_MS = 400;
+    /** When the oldest un-flushed delta was buffered (null = buffer empty). */
+    let oldestBufferedAt: number | null = null;
+
+    const flush = (force = false) => {
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
+      if (backstopId !== null) {
+        clearTimeout(backstopId);
+        backstopId = null;
+      }
+      if (pendingDeltas.length === 0) {
+        oldestBufferedAt = null;
+        return;
+      }
+      // Mid-fling, hold the batch: applying it re-renders ChatPanel →
+      // Transcript → a reconcile of every mounted row, and when that lands in
+      // a momentum-scroll frame WKWebView misses tile deadlines — the
+      // viewport blanks. Deltas keep buffering; they land the moment the
+      // gesture goes quiet or the hold cap expires.
+      if (
+        !force &&
+        isScrollHot() &&
+        oldestBufferedAt !== null &&
+        performance.now() - oldestBufferedAt < SCROLL_HOLD_MAX_MS
+      ) {
+        backstopId = setTimeout(flush, 100);
+        return;
+      }
+      oldestBufferedAt = null;
       const deltas = pendingDeltas.slice();
       pendingDeltas.length = 0;
       toolDeltaPos.clear();
-      useChatStore.getState().actions.applyAgentBatch({ texts: [], thoughts: [], deltas });
+      outputChunkPos.clear();
+      try {
+        useChatStore.getState().actions.applyAgentBatch({ texts: [], thoughts: [], deltas });
+      } catch (e) {
+        // The batch is already out of the buffer, so it is lost either way —
+        // re-queueing a batch that throws would just loop on it forever. What
+        // must NOT happen is the exception escaping into the RAF/timer callback
+        // and taking the scheduler down with it: every later delta would then
+        // buffer against a drain that never runs again, which presents as the
+        // thread freezing mid-turn.
+        console.error("applyAgentBatch failed; dropped", deltas.length, "deltas:", e);
+      }
     };
     // Coalesce a streaming text/thinking chunk into the trailing pendingDeltas
     // entry when it's the same kind + session; otherwise append in order. Keeps
@@ -584,9 +823,27 @@ export function App() {
         pendingDeltas.push(env);
       }
     };
+    // Two independent drains, because RAF alone is not a guarantee that the
+    // buffer is ever emptied.
+    //
+    // WebKit pauses `requestAnimationFrame` whenever the WKWebView isn't
+    // frontmost — not just when it's hidden. A user who leaves Atlas on screen
+    // while working in another app is watching a window whose RAF queue is
+    // stopped: deltas keep arriving over IPC and keep buffering, and NOTHING
+    // renders. The whole turn then lands in one batch the instant something
+    // wakes the webview, which reads as "it was stuck, then it caught up".
+    // `atlas:window-active` covered part of this, but only on a focus/visibility
+    // edge — it can't help a reader watching an unfocused window.
+    //
+    // `setTimeout` is throttled in that state (to roughly a second) but never
+    // paused, so it is the drain that always eventually fires. When RAF is
+    // healthy it wins every race and clears the backstop, so this costs one
+    // cancelled timer per frame and changes nothing about normal streaming.
+    const BACKSTOP_MS = 250;
     const schedule = () => {
-      if (rafId !== null) return;
-      rafId = requestAnimationFrame(flush);
+      if (oldestBufferedAt === null) oldestBufferedAt = performance.now();
+      if (rafId === null) rafId = requestAnimationFrame(() => flush());
+      if (backstopId === null) backstopId = setTimeout(flush, BACKSTOP_MS);
     };
 
     // When the webview is hidden/throttled, requestAnimationFrame is paused, so
@@ -603,8 +860,7 @@ export function App() {
     const isStaleAgentTurn = (sessionId: string, turnSeq?: number): boolean => {
       if (!turnSeq) return false;
       for (const sess of Object.values(useChatStore.getState().sessions)) {
-        if (sess.acpSessionId === sessionId)
-          return turnSeq < (sess.currentTurnSeq ?? 0);
+        if (sess.acpSessionId === sessionId) return turnSeq < (sess.currentTurnSeq ?? 0);
       }
       return false;
     };
@@ -625,25 +881,98 @@ export function App() {
       pendingDeltas.push(env);
     };
 
+    // Coalesce incremental live tool output. Priority order matters for
+    // correctness, not just batching:
+    // 1. A full `tool_call_upserted` snapshot for this tool is already
+    //    buffered — fold the delta into ITS `result`. A separate chunk entry
+    //    would double-apply: a later snapshot replaces that buffer slot with
+    //    a result that already contains every earlier chunk, and the stray
+    //    chunk entry would then append the same bytes again.
+    // 2. This tool's previous buffered entry is a chunk — concatenate.
+    // 3. Fresh chunk entry. (Chunks buffered BEFORE a tool's first snapshot
+    //    of the frame stay safe: they apply first and the later snapshot
+    //    replaces the result wholesale.)
+    const bufferOutputChunk = (env: Extract<AgentDelta, { kind: "tool_call_output_chunk" }>) => {
+      const key = `${env.session_id}::${env.tool_call_id}`;
+      const upsertAt = toolDeltaPos.get(key);
+      if (upsertAt !== undefined) {
+        const entry = pendingDeltas[upsertAt];
+        if (entry?.kind === "tool_call_upserted") {
+          pendingDeltas[upsertAt] = {
+            ...entry,
+            tool_call: {
+              ...entry.tool_call,
+              result: (entry.tool_call.result ?? "") + env.delta,
+            },
+          };
+          return;
+        }
+      }
+      const chunkAt = outputChunkPos.get(key);
+      const prev = chunkAt !== undefined ? pendingDeltas[chunkAt] : undefined;
+      if (prev?.kind === "tool_call_output_chunk" && chunkAt !== undefined) {
+        pendingDeltas[chunkAt] = { ...prev, delta: prev.delta + env.delta };
+        return;
+      }
+      outputChunkPos.set(key, pendingDeltas.length);
+      pendingDeltas.push(env);
+    };
+
     // Resolve the chat tab + title for an ACP session, for in-app notifications.
     const agentSessionInfo = (acpSessionId: string) => {
       const sessions = useChatStore.getState().sessions;
       for (const [tabId, s] of Object.entries(sessions)) {
         if (s.acpSessionId === acpSessionId) return { tabId, title: s.title };
       }
-      return { tabId: undefined as string | undefined, title: undefined as string | undefined };
+      return {
+        tabId: undefined as string | undefined,
+        title: undefined as string | undefined,
+      };
     };
     const notify = () => useNotificationsStore.getState().actions;
 
+    // In-app toast for events from a session the user ISN'T looking at (another
+    // tab or another project) — the OS notification only fires when the whole
+    // window is unfocused, so without this a background project's permission
+    // prompt was invisible until the user happened to switch. Click jumps to
+    // the owning project + tab.
+    const toastBackgroundSession = (
+      tabId: string | undefined,
+      acpSessionId: string,
+      title: string,
+      body: string,
+      kind: "attention" | "done" | "failed",
+    ) => {
+      if (!tabId) return;
+      if (useLayoutStore.getState().activeTabId === tabId) return;
+      const wsName = (() => {
+        const path = useChatStore.getState().sessions[tabId]?.workingDirectory;
+        if (!path) return null;
+        const ws = useProjectStore.getState();
+        const w = ws.projects.find((x) => x.path === path);
+        return w && w.id !== ws.activeProjectId ? w.name : null;
+      })();
+      const fn = kind === "failed" ? toast.error : kind === "done" ? toast.success : toast;
+      fn(wsName ? `${title} — ${wsName}` : title, {
+        id: `bg-session-${kind}-${acpSessionId}`,
+        description: body,
+        duration: kind === "attention" ? 15000 : 5000,
+        action: {
+          label: "Open",
+          onClick: () => void jumpToSession(tabId),
+        },
+      });
+    };
+
     // After a native-agent turn that may have changed files, refresh the
     // project's codebase index (incremental + structural — cheap, no LLM) so
-    // `search_memory` and the Memory tab stay current. Debounced per project so
+    // `memory_search` and the Memory tab stay current. Debounced per project so
     // a burst of turns triggers one rebuild.
     const indexTimers = new Map<string, ReturnType<typeof setTimeout>>();
     const autoIndexAfterTurn = (acpSessionId: string) => {
       const sessions = useChatStore.getState().sessions;
       const sess = Object.values(sessions).find((s) => s.acpSessionId === acpSessionId);
-      if (sess?.agentType !== "cersei") return;
+      if (sess?.agentType !== "atlas-agent") return;
       const path = sess.workingDirectory;
       if (!path) return;
       const existing = indexTimers.get(path);
@@ -656,7 +985,9 @@ export function App() {
           // "Indexing…" then refresh its status.
           const emit = (active: boolean) =>
             window.dispatchEvent(
-              new CustomEvent("atlas:cersei-index", { detail: { path, active } }),
+              new CustomEvent("atlas:agent-index", {
+                detail: { path, active },
+              }),
             );
           emit(true);
           void invoke("codebase_index_build", {
@@ -681,7 +1012,7 @@ export function App() {
         useRecentChatsStore.getState().actions.record({
           tabId,
           projectPath: path,
-          projectName: path.split("/").pop() || path,
+          projectName: basename(path),
           // Strip any Atlas-injected memory scaffolding the title may carry
           // (resumed sessions); a dirty fragment cleans to "" → fall back.
           title: stripInjectedContext(s.title) || "Chat",
@@ -696,6 +1027,40 @@ export function App() {
 
     listenAgents((env) => {
       if (cancelled) return;
+      const actions = useChatStore.getState().actions;
+      // Session-less: the manager's per-plugin install/launch progress. Not a
+      // delta, so it never enters the RAF buffer — the label it drives is a
+      // single store write per change, and every tab on that agent reads it.
+      if (env.kind === "loading_status") {
+        actions.setAgentStartingStatus(env.plugin_id, env.status);
+        return;
+      }
+      // Session-less too: an installed agent was updated on a registry bump.
+      // Rust waited for it to go idle before restarting it, so nothing was
+      // cut off; open chats already got `agent_disconnected` and reconnect on
+      // their next send. The toast is the only place an update is announced.
+      if (env.kind === "agent_update") {
+        const name = agentMeta(env.plugin_id).label;
+        if (env.phase === "waiting" || env.phase === "restarting" || env.phase === "installing") {
+          setAgentUpdatePhase(env.plugin_id, { phase: env.phase, version: env.version });
+          if (env.phase === "restarting") actions.noteAgentUpdated(env.plugin_id, env.version);
+          return;
+        }
+        setAgentUpdatePhase(env.plugin_id, null);
+        if (env.phase === "ready") {
+          // Same id as the marketplace's own Update toast: a manual update can
+          // also be installed by the background pass, and that is one update.
+          toast.success(`${name} updated to v${env.version}`, {
+            id: `agent-update:${env.plugin_id}:${env.version}`,
+          });
+        } else {
+          toast.warning(
+            `${name} v${env.version} couldn't install in the background. It will retry the next time you use it.`,
+            { description: env.error ?? undefined },
+          );
+        }
+        return;
+      }
       if (
         env.kind === "status" ||
         env.kind === "message_appended" ||
@@ -703,7 +1068,6 @@ export function App() {
       ) {
         recordRecentChat(env.session_id);
       }
-      const actions = useChatStore.getState().actions;
       switch (env.kind) {
         case "text_chunk":
           bufferChunk(env);
@@ -711,6 +1075,10 @@ export function App() {
           return;
         case "thinking_chunk":
           bufferChunk(env);
+          schedule();
+          return;
+        case "tool_call_output_chunk":
+          bufferOutputChunk(env);
           schedule();
           return;
         case "permission_request": {
@@ -733,7 +1101,7 @@ export function App() {
             (typeof tc?.title === "string" && tc.title) ||
             (typeof tc?.kind === "string" && tc.kind) ||
             "tool call";
-          void notifyPermissionRequested(toolTitle);
+          void notifyPermissionRequested(toolTitle, env.session_id);
           {
             const info = agentSessionInfo(env.session_id);
             notify().add({
@@ -744,6 +1112,13 @@ export function App() {
               sessionId: env.session_id,
               tabId: info.tabId,
             });
+            toastBackgroundSession(
+              info.tabId,
+              env.session_id,
+              info.title || "Agent needs permission",
+              `Approve "${toolTitle}" to continue.`,
+              "attention",
+            );
           }
           return;
         }
@@ -753,13 +1128,17 @@ export function App() {
         case "agent_disconnected":
           // Flush whatever's buffered before tearing the agent down
           // so we don't lose a final chunk to the post-disconnect
-          // discard.
-          if (rafId !== null) {
-            cancelAnimationFrame(rafId);
-            rafId = null;
-          }
-          flush();
+          // discard. `flush` cancels both pending drains itself.
+          // Forced: teardown correctness outranks the scroll-hold.
+          flush(true);
           actions.clearPermissionsForAgent(env.agent_id);
+          // Tabs still waiting to be bound on this agent have no session id
+          // for the reducer to route by; fail them by plugin instead. Read
+          // the pairing BEFORE the cache reset below forgets it.
+          {
+            const pluginId = pluginIdForAgentId(env.agent_id);
+            if (pluginId) actions.failPendingBinds(pluginId, env.reason);
+          }
           // Reset the spawn cache for the plugin that actually died — the old
           // resetDefaultAgent() only ever cleared claude-code-ts, so a crashed
           // Codex adapter stayed cached-dead until app restart (H4).
@@ -801,7 +1180,7 @@ export function App() {
           // user-cancelled turns — that's a click the user just made,
           // they don't need to be told about it.
           if (env.stop_reason !== "cancelled") {
-            void notifyAgentDone();
+            void notifyAgentDone(env.session_id);
             const info = agentSessionInfo(env.session_id);
             notify().add({
               kind: "agent-done",
@@ -811,6 +1190,13 @@ export function App() {
               sessionId: env.session_id,
               tabId: info.tabId,
             });
+            toastBackgroundSession(
+              info.tabId,
+              env.session_id,
+              info.title || "Agent",
+              "Task finished.",
+              "done",
+            );
           }
           return;
         case "turn_failed": {
@@ -826,6 +1212,13 @@ export function App() {
             sessionId: env.session_id,
             tabId: info.tabId,
           });
+          toastBackgroundSession(
+            info.tabId,
+            env.session_id,
+            info.title || "Agent failed",
+            (env as { error?: string }).error || "The agent run failed.",
+            "failed",
+          );
           return;
         }
         default:
@@ -849,13 +1242,14 @@ export function App() {
     return () => {
       cancelled = true;
       if (rafId !== null) cancelAnimationFrame(rafId);
+      if (backstopId !== null) clearTimeout(backstopId);
       window.removeEventListener("atlas:window-active", flushOnWake);
-      unlistenFocus?.();
-      document.removeEventListener("visibilitychange", onVisible);
+      stopFocusTracking();
       window.removeEventListener("pointerdown", onUserActivity);
       window.removeEventListener("keydown", onUserActivity);
       window.removeEventListener("wheel", onUserActivity);
       window.clearInterval(keepWarm);
+      window.clearTimeout(pruneTimer);
       indexTimers.forEach((t) => clearTimeout(t));
       unlisten?.();
     };
@@ -869,12 +1263,16 @@ export function App() {
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | null = null;
-    type Payload = { workspaceId?: string; dirs: string[]; fullRefresh: boolean };
+    type Payload = {
+      workspaceId?: string;
+      dirs: string[];
+      fullRefresh: boolean;
+    };
     listen<Payload>("atlas:explorer:changed", (e) => {
       if (cancelled) return;
-      // Ignore changes from a backgrounded workspace's resident watcher —
-      // only the active workspace's explorer should reconcile.
-      const active = activeWorkspaceId();
+      // Ignore changes from a backgrounded project's resident watcher —
+      // only the active project's explorer should reconcile.
+      const active = activeProjectId();
       if (e.payload.workspaceId && active && e.payload.workspaceId !== active) {
         return;
       }
@@ -917,8 +1315,7 @@ export function App() {
   useEffect(() => {
     const projectPath = currentProject?.path ?? "";
     for (const t of tabs) {
-      if (t.type !== "editor" && t.type !== "media" && t.type !== "unsupported")
-        continue;
+      if (t.type !== "editor" && t.type !== "media" && t.type !== "unsupported") continue;
       const absPath = (t.data as Record<string, unknown> | undefined)?.filePath as
         | string
         | undefined;
@@ -928,7 +1325,7 @@ export function App() {
       const rel =
         projectPath && absPath.startsWith(projectPath + "/")
           ? absPath.slice(projectPath.length + 1)
-          : absPath.split("/").pop() ?? absPath;
+          : (absPath.split("/").pop() ?? absPath);
       useRecentFilesStore.getState().actions.push({ absPath, rel });
     }
   }, [tabs, currentProject?.path]);
@@ -941,10 +1338,15 @@ export function App() {
       fileIndex.closeProject().catch(() => {});
       markFileIndexClosed();
       // Deliberately does NOT stop git watchers. This branch runs whenever the
-      // *current* project becomes null, but watchers are per-workspace and a
-      // backgrounded workspace must keep watching — its commits still need
+      // *current* project becomes null, but watchers are per-project and a
+      // backgrounded project must keep watching — its commits still need
       // linking to its Sessions. Tearing one down is `teardownHot`'s job, with
-      // the workspace id it actually owns.
+      // the project id it actually owns.
+      // Auto-fetch, by contrast, only follows the project on screen.
+      void useGitStore
+        .getState()
+        .actions.setAutoFetchProject(null)
+        .catch(() => {});
       void invoke("recent_files_close_project").catch(() => {});
       // Drop the mention cache so the @-picker doesn't briefly
       // surface the previous project's notes / symbols on a fresh
@@ -952,20 +1354,31 @@ export function App() {
       void invoke("mention_cache_clear").catch(() => {});
       return;
     }
-    markFileIndexClosed();
-    const workspaceId = activeWorkspaceId();
+    // Deliberately NOT `markFileIndexClosed()` here: switching projects keeps
+    // every hot project's Rust index resident (`fileindex_open_project` is
+    // idempotent for a live one), so previously-confirmed roots stay valid —
+    // clearing them made the first Cmd+P/@ after every switch pay a status
+    // round-trip. Roots are forgotten where indexes actually die: project
+    // close (above) and project teardown (`markFileIndexClosedFor`).
+    const projectId = activeProjectId();
     void openFileIndex(currentProject.path);
     // Git watcher: emits `atlas:git-changed` on commit / checkout /
     // branch ops. Replaces the 3-second polling that git-graph-panel
     // used to do via `refetchInterval` on `git_graph_signature`.
-    // Keyed by workspace so each open workspace keeps its own resident watcher.
+    // Keyed by project so each open project keeps its own resident watcher.
     void invoke("git_watch_start", {
       projectPath: currentProject.path,
-      workspaceId,
+      workspaceId: projectId,
     }).catch((e) => console.warn("git watch start failed:", e));
-    // Capture: a bound Workspace just became active — open its store (which
+    // Background fetch follows the project this window shows, so its Pull
+    // badge reflects the remote (Rust `git_autofetch`).
+    void useGitStore
+      .getState()
+      .actions.setAutoFetchProject(currentProject.path)
+      .catch(() => {});
+    // Capture: a bound Project just became active — open its store (which
     // also heals a folder rename) and kick its transcript import and drain.
-    // A no-op for Workspaces that never enabled capture.
+    // A no-op for Projects that never enabled capture.
     void invoke("capture_activate", { projectPath: currentProject.path }).catch((e) =>
       console.warn("capture activate failed:", e),
     );
@@ -979,7 +1392,7 @@ export function App() {
     // first render of the new project.
     void invoke<RecentFile[]>("recent_files_open_project", {
       projectPath: currentProject.path,
-      workspaceId,
+      workspaceId: projectId,
     })
       .then((items) => {
         useRecentFilesStore.getState().actions.hydrate(items);
@@ -1002,293 +1415,202 @@ export function App() {
   }, []);
 
   // Quit durability: per-switch flushes are fire-and-forget, so on window
-  // close flush the ACTIVE workspace's pending writes (background workspaces
+  // close flush the ACTIVE project's pending writes (background projects
   // were already flushed when we left them). beforeunload can't await, but it
   // cancels the debounce and kicks the write immediately.
   useEffect(() => {
     const onBeforeUnload = () => {
-      const wsId = useWorkspaceStore.getState().activeWorkspaceId;
-      const path = useProjectStore.getState().currentProject?.path ?? null;
+      const wsId = useProjectStore.getState().activeProjectId;
+      const path = useAppStore.getState().currentProject?.path ?? null;
       // Capture first so the flush dedup compares against the CURRENT state
       // (not a stale capture from the last switch-away).
       if (wsId) captureSnapshot(wsId);
-      void flushAll({ workspaceId: wsId, path });
+      void flushAll({ projectId: wsId, path });
     };
     window.addEventListener("beforeunload", onBeforeUnload);
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
   }, []);
 
-  useHotkeys([
-    {
-      // ⌘⇧N — "new workspace": pick a folder and add it as a workspace in
-      // this window (Atlas is single-window now; this replaces the old
-      // "open a new native window" behaviour).
-      combo: { key: "n", meta: true, shift: true },
-      action: () => {
-        void pickAndAddWorkspace();
-      },
+  // Chords live in the active keybinding profile (Settings → Keybindings);
+  // this is only the action-id → behaviour map. See
+  // `src/features/keybindings/lib/actions.ts` for the registry.
+  useActionHotkeys({
+    // ⌘⇧N — "new project": pick a folder and add it as a project in
+    // this window (Atlas is single-window now; this replaces the old
+    // "open a new native window" behaviour).
+    "workspace.add": () => {
+      void pickAndAddProject();
     },
-    {
-      // ⌘⇧. — toggle the Arc-like workspace sidebar. (⌘. alone is the macOS
-      // system "Cancel" chord and gets swallowed before reaching the webview.)
-      combo: { key: ".", meta: true, shift: true },
-      action: () => useWorkspaceStore.getState().actions.toggleSidebar(),
+    // ⌘⇧. — toggle the Arc-like project sidebar. (⌘. alone is the macOS
+    // system "Cancel" chord and gets swallowed before reaching the webview.)
+    "workspace.toggleSidebar": () => useProjectStore.getState().actions.toggleSidebar(),
+    "nav.commandPalette": () => setCommandPaletteOpen(true),
+    "nav.filePicker": () => setFilePickerOpen(true),
+    "nav.search": () => setSearchOpen(true),
+    "panels.left": toggleLeftPanel,
+    "panels.right": toggleRightPanel,
+    // ⌘⇧C — team chat. Shares the right slot with source control: pressing
+    // this while source control is open swaps the occupant rather than
+    // opening a second panel, and pressing it again closes the slot.
+    "panels.teamChat": toggleRightChatPanel,
+    "panels.terminal": toggleTerminal,
+    "panels.agentSidebar": toggleChatSidebar,
+    // ⌥J — open the Knowledge Base, or jump to it if already open, WITHIN
+    // the focused split column.
+    "panels.knowledge": () => {
+      const st = useLayoutStore.getState();
+      const g = st.focusedGroupId;
+      const existing = st.tabs.find((t) => (t.groupId ?? "main") === g && t.type === "knowledge");
+      if (existing) {
+        setActiveTab(existing.id);
+        return;
+      }
+      addTab({
+        id: `knowledge-${Date.now()}`,
+        type: "knowledge",
+        title: "Knowledge",
+        closable: true,
+        dirty: false,
+        data: {},
+      });
     },
-    {
-      combo: { key: "k", meta: true },
-      action: () => setCommandPaletteOpen(true),
+    "panels.tabBar": toggleTabBar,
+    // ⌘1–8 select by index; ⌘9 always jumps to the LAST tab (browser
+    // convention) — the store treats i<0 as "last".
+    ...Object.fromEntries(
+      Array.from({ length: 9 }, (_, i) => [
+        `tabs.focus${i + 1}`,
+        i === 8 ? () => activateTabByIndex(-1) : () => activateTabByIndex(i),
+      ]),
+    ),
+    "tabs.close": () => {
+      const current = useLayoutStore.getState().activeTabId;
+      if (current) requestCloseTab(current);
     },
-    {
-      combo: { key: "p", meta: true },
-      action: () => setFilePickerOpen(true),
-    },
-    {
-      combo: { key: "f", meta: true, shift: true },
-      action: () => setSearchOpen(true),
-    },
-    {
-      combo: { key: "b", meta: true },
-      action: toggleLeftPanel,
-    },
-    {
-      combo: { key: "b", meta: true, shift: true },
-      action: toggleRightPanel,
-    },
-    {
-      combo: { key: "j", meta: true },
-      action: toggleTerminal,
-    },
-    {
-      combo: { key: "b", meta: true, alt: true },
-      action: toggleBottomPanel,
-    },
-    {
-      combo: { key: "j", meta: true, alt: true },
-      action: toggleChatSidebar,
-    },
-    {
-      // ⌘⌥K — toggle the Model-Chat history sidebar (mirror of ⌘⌥J).
-      combo: { key: "k", meta: true, alt: true },
-      action: toggleModelChatSidebar,
-    },
-    {
-      // ⌥J — open the Knowledge Base, or jump to it if already open. Placed
-      // after ⌘⌥J (chat sidebar) so the matcher resolves that combo first;
-      // plain ⌥J (no ⌘) only matches here.
-      combo: { key: "j", alt: true },
-      action: () => {
-        // Open/focus Knowledge WITHIN the focused split column.
-        const st = useLayoutStore.getState();
-        const g = st.focusedGroupId;
-        const existing = st.tabs.find(
-          (t) => (t.groupId ?? "main") === g && t.type === "knowledge",
-        );
-        if (existing) {
-          setActiveTab(existing.id);
-          return;
-        }
-        addTab({
-          id: `knowledge-${Date.now()}`,
-          type: "knowledge",
-          title: "Knowledge",
-          closable: true,
-          dirty: false,
-          data: {},
-        });
-      },
-    },
-    {
-      combo: { key: "t", meta: true, alt: true },
-      action: toggleTabBar,
-    },
-    ...Array.from({ length: 9 }, (_, i) => ({
-      combo: { key: String(i + 1), meta: true },
-      // ⌘9 always jumps to the LAST tab (browser convention), regardless
-      // of how many tabs there are; ⌘1–8 select by index.
-      // ⌘9 = last tab in the focused column (the store treats i<0 as "last").
-      action: i === 8 ? () => activateTabByIndex(-1) : () => activateTabByIndex(i),
-    })),
-    {
-      combo: { key: "w", meta: true },
-      action: () => {
-        const current = useLayoutStore.getState().activeTabId;
-        if (current) closeTab(current);
-      },
-    },
-    {
-      combo: { key: "[", meta: true, shift: true },
-      action: () => cycleTab(-1),
-    },
-    {
-      combo: { key: "]", meta: true, shift: true },
-      action: () => cycleTab(1),
-    },
+    "tabs.prev": () => cycleTab(-1),
+    "tabs.next": () => cycleTab(1),
     // ── Split view ──
-    {
-      // ⌘\ — open a new split column to the right (max 3).
-      combo: { key: "\\", meta: true },
-      action: () => addGroup(),
+    "split.new": () => addGroup(),
+    "split.focusLeft": () => focusAdjacentGroup(-1),
+    "split.focusRight": () => focusAdjacentGroup(1),
+    // Close the focused split column (tabs move to the left neighbour).
+    "split.close": () => closeGroup(useLayoutStore.getState().focusedGroupId),
+    // Zen mode: Knowledge │ Chat │ Browser, side panels hidden. Again restores.
+    "panels.zen": () => {
+      if (currentProject) toggleZenMode();
     },
-    {
-      // ⌥; — focus the split to the left.
-      combo: { key: ";", alt: true },
-      action: () => focusAdjacentGroup(-1),
+    // ⌥/ — cycle the coding agent (Claude Code → Codex → Atlas → …). A
+    // session is paired to one agent: an empty chat flips in place; a started
+    // chat opens a NEW chat bound to the next agent (per the pairing rule).
+    "chat.cycleAgent": () => {
+      const layout = useLayoutStore.getState();
+      const tab = layout.tabs.find((t) => t.id === layout.activeTabId);
+      if (!tab || tab.type !== "chat") return;
+      cycleChatAgent(tab.id);
     },
-    {
-      // ⌥' — focus the split to the right.
-      combo: { key: "'", alt: true },
-      action: () => focusAdjacentGroup(1),
+    // ⌘T — new agent chat. Singleton: focuses the existing chat tab and resets
+    // it to a fresh session rather than opening a second chat tab.
+    "tabs.newChat": () => openNewAgentChat(),
+    // ⌘N — new untitled editor. The synthetic `untitled:<ts>` path
+    // tells the editor to start with an empty buffer and to fall
+    // into the save-as flow on ⌘S (see `editor-panel.tsx`).
+    "tabs.newUntitled": () => {
+      const ts = Date.now();
+      addTab({
+        id: `editor-untitled-${ts}`,
+        type: "editor",
+        title: "Untitled",
+        closable: true,
+        dirty: false,
+        data: { filePath: `untitled:${ts}` },
+      });
     },
-    {
-      // ⌥W — close the focused split column (tabs move to the left neighbour).
-      combo: { key: "w", alt: true },
-      action: () => closeGroup(useLayoutStore.getState().focusedGroupId),
-    },
-    {
-      // ⌥Z — Zen mode: Knowledge │ Chat │ Browser, side panels hidden. Again restores.
-      combo: { key: "z", alt: true },
-      action: () => {
-        if (currentProject) toggleZenMode();
-      },
-    },
-    {
-      // ⌥/ — cycle the coding agent (Claude Code → Codex → Atlas → …). A
-      // session is paired to one agent: an empty chat flips in place; a started
-      // chat opens a NEW chat bound to the next agent (per the pairing rule).
-      combo: { key: "/", alt: true },
-      action: () => {
-        const layout = useLayoutStore.getState();
-        const tab = layout.tabs.find((t) => t.id === layout.activeTabId);
-        if (!tab || tab.type !== "chat") return;
-        const chat = useChatStore.getState();
-        const sess = chat.sessions[tab.id];
-        const curIdx = SWITCHABLE_AGENTS.indexOf(
-          (sess?.agentType ?? "claude-code") as (typeof SWITCHABLE_AGENTS)[number]
-        );
-        const next = SWITCHABLE_AGENTS[(Math.max(curIdx, 0) + 1) % SWITCHABLE_AGENTS.length];
-        // Empty chat flips agent in place. A started chat always starts a fresh
-        // session in the SAME tab bound to the next agent (singleton model —
-        // never a new tab, even mid-stream; the abandoned turn persists to the
-        // history sidebar).
-        if ((sess?.messages.length ?? 0) === 0) {
-          chat.actions.switchChatAgent(tab.id, next);
-        } else {
-          chat.actions.clearSession(tab.id);
-          chat.actions.switchChatAgent(tab.id, next);
-          window.dispatchEvent(
-            new CustomEvent("atlas:chat-focus", { detail: { tabId: tab.id } }),
-          );
-        }
-      },
-    },
-    {
-      // ⌘T — new agent chat. Singleton: focuses the existing chat tab and resets
-      // it to a fresh session rather than opening a second chat tab.
-      combo: { key: "t", meta: true },
-      action: () => openNewAgentChat(),
-    },
-    {
-      // ⌘N — new untitled editor. The synthetic `untitled:<ts>` path
-      // tells the editor to start with an empty buffer and to fall
-      // into the save-as flow on ⌘S (see `editor-panel.tsx`).
-      combo: { key: "n", meta: true },
-      action: () => {
-        const ts = Date.now();
-        addTab({
-          id: `editor-untitled-${ts}`,
-          type: "editor",
-          title: "Untitled",
-          closable: true,
-          dirty: false,
-          data: { filePath: `untitled:${ts}` },
-        });
-      },
-    },
-    {
-      // ⌘⌥N — open the new-tab palette (keyboard-first equivalent of
-      // the `+` button's dropdown). Lists every module type and lets
-      // the user open one without touching the mouse.
-      combo: { key: "n", meta: true, alt: true },
-      action: () => setNewTabPaletteOpen(true),
-    },
-    {
-      // ⌘⌥L — open the layout switcher (Windows-task-view-style grid of
-      // predefined layout templates, navigable by arrow keys or mouse).
-      combo: { key: "l", meta: true, alt: true },
-      action: () => setLayoutSwitcherOpen(true),
-    },
-    {
-      combo: { key: "t", meta: true, shift: true },
-      action: () =>
-        addTab({
-          id: `terminal-${Date.now()}`,
-          type: "terminal",
-          title: "Terminal",
-          closable: true,
-          dirty: false,
-          data: {},
-        }),
-    },
-    {
-      combo: { key: ",", meta: true },
-      action: () =>
-        addTab({
-          id: "settings",
-          type: "settings",
-          title: "Settings",
-          closable: true,
-          dirty: false,
-          data: {},
-        }),
-    },
-    // ── Interface zoom (⌘+ / ⌘- / ⌘0) ──
-    // `⌘+` on a US layout arrives as Shift+`=` (e.key === "+"); `⌘=` works too.
-    // Both step the global UI scale up; `⌘-` down; `⌘0` resets to 100%.
-    { combo: { key: "=", meta: true }, action: zoomIn },
-    { combo: { key: "+", meta: true, shift: true }, action: zoomIn },
-    { combo: { key: "-", meta: true }, action: zoomOut },
-    { combo: { key: "0", meta: true }, action: zoomReset },
-  ]);
+    // Keyboard-first equivalent of the `+` button's dropdown.
+    "nav.newTabPalette": () => setNewTabPaletteOpen(true),
+    "nav.layoutSwitcher": () => setLayoutSwitcherOpen(true),
+    "tabs.newTerminal": () =>
+      addTab({
+        id: `terminal-${Date.now()}`,
+        type: "terminal",
+        title: "Terminal",
+        closable: true,
+        dirty: false,
+        data: {},
+      }),
+    "app.settings": () =>
+      addTab({
+        id: "settings",
+        type: "settings",
+        title: "Settings",
+        closable: true,
+        dirty: false,
+        data: {},
+      }),
+    // The org's Usage dashboard — a singleton tab, so re-running focuses it.
+    "usage.open": () =>
+      addTab({
+        id: "usage",
+        type: "usage",
+        title: "Usage",
+        closable: true,
+        dirty: false,
+        data: {},
+      }),
+    // Session Capture (the popover behind the titlebar's project pill). Local
+    // `captureOpen` state lives in `ProjectLabel`, so this reaches it via the
+    // same `atlas:open-capture` event the command palette entry dispatches.
+    "app.capture": () => window.dispatchEvent(new CustomEvent("atlas:open-capture")),
+    // ── Interface zoom ──
+    "view.zoomIn": zoomIn,
+    "view.zoomOut": zoomOut,
+    "view.zoomReset": zoomReset,
+  });
 
   return (
-    <>
+    // One provider at the root so every tooltip in the app shares a delay and
+    // a SKIP group: hovering along a facepile shows each name instantly after
+    // the first, instead of re-waiting per avatar.
+    <TooltipProvider>
       <AppContextMenu>
         <div className="h-screen w-screen" onContextMenu={(e) => e.preventDefault()}>
           <AppLayout />
         </div>
       </AppContextMenu>
-      <CommandPalette
-        open={commandPaletteOpen}
-        onOpenChange={setCommandPaletteOpen}
-      />
-      <NewTabPalette
-        open={newTabPaletteOpen}
-        onOpenChange={setNewTabPaletteOpen}
-      />
-      <LayoutSwitcher
-        open={layoutSwitcherOpen}
-        onOpenChange={setLayoutSwitcherOpen}
-      />
+      <CommandPalette open={commandPaletteOpen} onOpenChange={setCommandPaletteOpen} />
+      <NewTabPalette open={newTabPaletteOpen} onOpenChange={setNewTabPaletteOpen} />
+      <LayoutSwitcher open={layoutSwitcherOpen} onOpenChange={setLayoutSwitcherOpen} />
       <SearchOverlay open={searchOpen} onOpenChange={setSearchOpen} />
       <FilePicker open={filePickerOpen} onOpenChange={setFilePickerOpen} />
       <HintOverlay />
+      <AgentOAuthModalHost />
+      {/* Sign-in asks questions of its own (device codes, login URLs), and they
+          arrive before the agent has any session to route them by. */}
+      <AgentElicitationHost />
+      <UiActionBridge />
+      <OrgActionLogBridge />
       <NotificationPanel />
       <FeedbackPanel />
       <UpdateAvailableModal />
+      <KeymapOnboarding />
       <ConnectDialog />
       <LoadingOrganisationOverlay />
+      <StopAgentsDialog />
+      <RemoveAgentDialog />
       <BrowserOverlayWatcher />
+      {/* Renders nothing at all until a glyph-based icon theme is in use, and
+          so costs an SVG theme (including the bundled default) nothing. */}
+      <IconThemeFonts />
       <Toaster
         position="bottom-right"
         toastOptions={{
           style: {
-            background: "var(--bg-elevated)",
-            border: "1px solid var(--border-default)",
-            color: "var(--text-primary)",
-            fontSize: "var(--font-size-sm)",
+            background: "var(--card)",
+            border: "1px solid var(--border)",
+            color: "var(--foreground)",
+            fontSize: "var(--text-sm)",
           },
         }}
       />
-    </>
+    </TooltipProvider>
   );
 }

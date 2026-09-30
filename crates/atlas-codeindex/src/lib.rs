@@ -1,16 +1,22 @@
 //! `atlas-codeindex` — turn a live codebase into fresh, embeddable documents.
 //!
 //! Deterministic half of the Memory-Chat codebase indexer: walk the project
-//! (gitignore-respecting), parse each supported source file with Cersei's
-//! tree-sitter `code_intel`, and emit one [`CodebaseDoc`] per file carrying its
-//! language, imports, top-level symbols, and a content hash for incremental
-//! rebuilds. The LLM-summary (Tier 2) and embedding steps live in the app's
-//! command layer; this crate stays pure (no I/O beyond reading source files).
+//! (gitignore-respecting), parse each supported source file with Atlas's own
+//! tree-sitter [`code_intel`], and emit one [`CodebaseDoc`] per file carrying
+//! its language, imports, top-level symbols, and a content hash for incremental
+//! rebuilds. The embedding step and the optional Tier-2 LLM summary both live
+//! in the app's command layer; this crate is pure (no network, and no I/O
+//! beyond reading source files).
+
+pub mod code_intel;
+
+#[cfg(test)]
+mod tests;
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use cersei::tools::tool_primitives::code_intel::{self, Language, SymbolKind};
+use code_intel::{Language, SymbolKind};
 use ignore::WalkBuilder;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -69,14 +75,7 @@ pub struct ScannedFile {
 }
 
 fn language_label(language: Language) -> &'static str {
-    match language {
-        Language::Rust => "rust",
-        Language::TypeScript => "typescript",
-        Language::JavaScript => "javascript",
-        Language::Python => "python",
-        Language::Go => "go",
-        Language::Unknown => "unknown",
-    }
+    language.label()
 }
 
 fn symbol_label(kind: SymbolKind) -> &'static str {
@@ -119,7 +118,11 @@ pub fn scan(root: &Path, mtime_ms_of: impl Fn(&Path) -> i64) -> Vec<ScannedFile>
         if matches!(Language::from_extension(ext), Language::Unknown) {
             continue;
         }
-        if entry.metadata().map(|m| m.len() > MAX_SOURCE_BYTES).unwrap_or(true) {
+        if entry
+            .metadata()
+            .map(|m| m.len() > MAX_SOURCE_BYTES)
+            .unwrap_or(true)
+        {
             continue;
         }
         let Ok(rel) = path.strip_prefix(root) else {
@@ -152,13 +155,23 @@ pub fn scan(root: &Path, mtime_ms_of: impl Fn(&Path) -> i64) -> Vec<ScannedFile>
             hash: content_hash(&source),
             mtime_ms: mtime_ms_of(path),
         });
+        // The cap counts files that produced an index entry, not files walked,
+        // so a tree full of unsupported or empty files can't starve it.
+        if out.len() >= DEFAULT_MAX_FILES {
+            break;
+        }
     }
     out
 }
 
 /// Deterministic embeddable text for a file: a compact, natural-language-ish
 /// description of what it defines and imports, so a vector query can match it.
-pub fn structural_text(rel: &str, language: &str, symbols: &[CodebaseSymbol], imports: &[String]) -> String {
+pub fn structural_text(
+    rel: &str,
+    language: &str,
+    symbols: &[CodebaseSymbol],
+    imports: &[String],
+) -> String {
     let mut s = format!("File {rel} ({language}).");
     if !symbols.is_empty() {
         let defs: Vec<String> = symbols
@@ -203,7 +216,9 @@ pub fn aliases(rel: &str, symbols: &[CodebaseSymbol]) -> Vec<String> {
 // ── Persistence ──────────────────────────────────────────────────────────────
 
 pub fn index_dir(project_path: &str) -> PathBuf {
-    Path::new(project_path).join(".atlas").join("codebase-index")
+    Path::new(project_path)
+        .join(".atlas")
+        .join("codebase-index")
 }
 
 pub fn docs_path(project_path: &str) -> PathBuf {

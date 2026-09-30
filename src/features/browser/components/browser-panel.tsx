@@ -1,12 +1,14 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import * as ContextMenu from "@radix-ui/react-context-menu";
-import { useProjectStore } from "@/features/project/stores/project-store";
+import { ContextMenu } from "@base-ui/react/context-menu";
+import { useAppStore } from "@/features/app/stores/app-store";
 import { useLayoutStore } from "@/features/layout/stores/layout-store";
 import { logEvent } from "@/features/log/lib/log";
 import { cn } from "@/lib/utils";
+import { isBrowserMock } from "@/lib/env";
 import { safeUnlistenPromise } from "@/lib/safe-unlisten";
+import { HintGroup, HintItem } from "@/ui/hint-group";
 import { useBrowserOverlayStore } from "../stores/browser-overlay-store";
 import {
   Globe,
@@ -43,6 +45,30 @@ interface BrowserNav {
 
 type BrowserMode = "live" | "reader";
 
+/** Window-relative rect the native child webview is positioned to. */
+interface EmbedRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** Sub-pixel geometry churn isn't worth a native reposition. */
+const RECT_EPSILON = 0.5;
+
+function rectsMatch(a: EmbedRect, b: EmbedRect): boolean {
+  return (
+    Math.abs(a.x - b.x) < RECT_EPSILON &&
+    Math.abs(a.y - b.y) < RECT_EPSILON &&
+    Math.abs(a.width - b.width) < RECT_EPSILON &&
+    Math.abs(a.height - b.height) < RECT_EPSILON
+  );
+}
+
+/** Frames of stillness before the settle loop parks itself. ~200ms at 60Hz —
+ *  long enough to ride out a CSS transition's easing tail. */
+const SETTLE_FRAMES = 12;
+
 interface BrowserPanelProps {
   tabId?: string;
   initialUrl?: string;
@@ -63,8 +89,7 @@ function toNavUrl(input: string): string {
   if (!t) return "";
   if (/^https?:\/\//i.test(t)) return t;
   // A bare host (has a dot, no spaces) or localhost → treat as a URL.
-  const looksLikeUrl =
-    /^localhost(:\d+)?(\/.*)?$/i.test(t) || /^[^\s]+\.[^\s]{2,}(\/.*)?$/.test(t);
+  const looksLikeUrl = /^localhost(:\d+)?(\/.*)?$/i.test(t) || /^[^\s]+\.[^\s]{2,}(\/.*)?$/.test(t);
   if (looksLikeUrl) return `https://${t}`;
   return `https://www.google.com/search?q=${encodeURIComponent(t)}`;
 }
@@ -113,14 +138,32 @@ export function BrowserPanel({ tabId, initialUrl, groupId }: BrowserPanelProps) 
   const [searchOpen, setSearchOpen] = useState(false);
   const [embedError, setEmbedError] = useState<string | null>(null);
   const contentRef = useRef<HTMLDivElement>(null);
-  const currentProject = useProjectStore.use.currentProject();
+  const currentProject = useAppStore.use.currentProject();
 
-  const lastRectRef = useRef<{ x: number; y: number; width: number; height: number } | null>(null);
+  /** Previous frame's rect — drives the "geometry has settled" counter only. */
+  const prevRectRef = useRef<EmbedRect | null>(null);
   const stableCountRef = useRef(0);
+  /** Last rect we told Rust about. Deliberately SEPARATE from `prevRectRef`:
+   *  bounds are diffed against what the native webview is actually parked at,
+   *  never against the previous frame. A transition moving <0.5px/frame reads
+   *  as "unchanged" every single frame, so a previous-frame diff would let the
+   *  placeholder drift arbitrarily far while the webview never moves.
+   *  `null` = nothing sent yet, or the last send failed — either way, re-send. */
+  const sentRectRef = useRef<EmbedRect | null>(null);
+  /** Last visibility we told Rust about; `null` = unknown, so re-send. */
+  const lastVisibleRef = useRef<boolean | null>(null);
+  /** Handle for the settle loop (see `pump`), or null when parked. */
+  const rafRef = useRef<number | null>(null);
+  const idleFramesRef = useRef(0);
 
   // ── Live: geometry + lifecycle ──────────────────────────────────────────
 
-  const currentRect = useCallback((): { x: number; y: number; width: number; height: number } | null => {
+  const currentRect = useCallback((): {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  } | null => {
     const el = placeholderRef.current;
     if (!el) return null;
     const r = el.getBoundingClientRect();
@@ -140,37 +183,78 @@ export function BrowserPanel({ tabId, initialUrl, groupId }: BrowserPanelProps) 
   }, []);
 
   // Single source of truth for the native webview's visibility & bounds.
-  const syncVisibility = useCallback(() => {
-    if (modeRef.current !== "live" || !createdRef.current) return;
+  // Returns true while geometry is still moving, so the settle loop knows it
+  // can't park yet.
+  const syncVisibility = useCallback((): boolean => {
+    if (modeRef.current !== "live" || !createdRef.current) return false;
     const rect = currentRect();
-    const lastRect = lastRectRef.current;
+    const prevRect = prevRectRef.current;
+    const isStable = !!rect && !!prevRect && rectsMatch(rect, prevRect);
 
-    const isStable =
-      rect &&
-      lastRect &&
-      Math.abs(rect.x - lastRect.x) < 0.5 &&
-      Math.abs(rect.y - lastRect.y) < 0.5 &&
-      Math.abs(rect.width - lastRect.width) < 0.5 &&
-      Math.abs(rect.height - lastRect.height) < 0.5;
+    // Drives the settle loop. Starts as "did it move since last frame", but a
+    // reposition also counts: a drift slower than the epsilon reads as stable
+    // every frame, and without this the loop would park mid-transition and
+    // stop tracking a still-moving element.
+    let changed = !isStable;
 
     if (rect) {
-      if (isStable) {
-        stableCountRef.current += 1;
-      } else {
-        stableCountRef.current = 1;
+      stableCountRef.current = isStable ? stableCountRef.current + 1 : 1;
+      prevRectRef.current = rect;
+
+      // Diffed against the last SENT rect, not the previous frame — see
+      // `sentRectRef`. Cached optimistically and invalidated on failure so a
+      // rejected call retries on the next sync instead of stranding the
+      // webview at stale bounds forever.
+      const sent = sentRectRef.current;
+      if (!sent || !rectsMatch(rect, sent)) {
+        changed = true;
+        sentRectRef.current = rect;
+        invoke("browser_embed_set_bounds", { id: embedId, rect }).catch(() => {
+          sentRectRef.current = null;
+        });
       }
-      lastRectRef.current = rect;
-      invoke("browser_embed_set_bounds", { id: embedId, rect }).catch(() => {});
     } else {
       stableCountRef.current = 0;
-      lastRectRef.current = null;
+      prevRectRef.current = null;
     }
 
     // Require stable geometry (at least 2 consecutive checks) before showing native webview
     const isGeometryStable = rect && stableCountRef.current >= 2;
     const visible = !!isGeometryStable && !overlayOpenRef.current;
-    invoke("browser_embed_set_visible", { id: embedId, visible }).catch(() => {});
+    if (lastVisibleRef.current !== visible) {
+      lastVisibleRef.current = visible;
+      invoke("browser_embed_set_visible", { id: embedId, visible }).catch(() => {
+        // Same self-healing rationale as bounds: without this, one swallowed
+        // rejection leaves the pane natively hidden while the cache claims
+        // it's visible, and nothing ever retries.
+        lastVisibleRef.current = null;
+      });
+    }
+
+    return changed;
   }, [embedId, currentRect]);
+
+  /**
+   * Kick a short rAF burst so a CSS transition (splitter drag, panel collapse)
+   * is tracked frame-by-frame, then park once the rect holds still for
+   * `SETTLE_FRAMES`. The previous shape ran rAF unconditionally for the life of
+   * the window — and since the browser is a persistent module that survives tab
+   * switches, that was a forced layout read every frame forever, per embed.
+   */
+  const pump = useCallback(() => {
+    idleFramesRef.current = 0;
+    if (rafRef.current !== null) return; // already running; the reset above extends it
+    const step = () => {
+      const moving = syncVisibility();
+      idleFramesRef.current = moving ? 0 : idleFramesRef.current + 1;
+      if (idleFramesRef.current >= SETTLE_FRAMES) {
+        rafRef.current = null;
+        return;
+      }
+      rafRef.current = requestAnimationFrame(step);
+    };
+    rafRef.current = requestAnimationFrame(step);
+  }, [syncVisibility]);
 
   const ensureLive = useCallback(
     async (url: string) => {
@@ -191,11 +275,15 @@ export function BrowserPanel({ tabId, initialUrl, groupId }: BrowserPanelProps) 
           setEmbedError(null);
           requestAnimationFrame(() => {
             requestAnimationFrame(() => {
-              syncVisibility();
+              pump();
             });
           });
         } else {
           await invoke("browser_embed_navigate", { id: embedId, url });
+          // A later successful navigation has to retire the fallback, or one
+          // transient failure pins the panel to the error UI for the rest of
+          // the tab's life even though the embed is working again.
+          setEmbedError(null);
         }
       } catch (e) {
         const errorMsg = String(e);
@@ -209,7 +297,7 @@ export function BrowserPanel({ tabId, initialUrl, groupId }: BrowserPanelProps) 
         });
       }
     },
-    [embedId, currentRect, registerEmbed, syncVisibility],
+    [embedId, currentRect, registerEmbed, pump],
   );
 
   // Listen for Rust-owned navigation deltas for this embed.
@@ -230,36 +318,37 @@ export function BrowserPanel({ tabId, initialUrl, groupId }: BrowserPanelProps) 
     };
   }, [embedId, groupId, tabId, focusThisGroup]);
 
-  // Track geometry + visibility continuously during layout changes & transitions.
+  // Track geometry + visibility across layout changes & transitions.
+  // `mode` is a dependency because the placeholder div only exists in Live
+  // mode — a Live→Reader→Live round-trip mounts a NEW node, and without the
+  // re-run the observer would stay attached to the detached one and silently
+  // stop reporting.
   useEffect(() => {
+    if (mode !== "live") return;
     const el = placeholderRef.current;
     if (!el) return;
 
-    let animFrame: number | null = null;
-    const loop = () => {
-      syncVisibility();
-      animFrame = requestAnimationFrame(loop);
-    };
-
-    const ro = new ResizeObserver(syncVisibility);
+    const ro = new ResizeObserver(pump);
     ro.observe(el);
-    window.addEventListener("resize", syncVisibility);
-    window.addEventListener("fullscreenchange", syncVisibility);
-
-    animFrame = requestAnimationFrame(loop);
+    window.addEventListener("resize", pump);
+    window.addEventListener("fullscreenchange", pump);
+    pump();
 
     return () => {
-      if (animFrame !== null) cancelAnimationFrame(animFrame);
       ro.disconnect();
-      window.removeEventListener("resize", syncVisibility);
-      window.removeEventListener("fullscreenchange", syncVisibility);
+      window.removeEventListener("resize", pump);
+      window.removeEventListener("fullscreenchange", pump);
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
     };
-  }, [syncVisibility]);
+  }, [mode, pump]);
 
   // Hide/restore the moment a DOM overlay opens or closes.
   useEffect(() => {
-    syncVisibility();
-  }, [overlayOpen, syncVisibility]);
+    pump();
+  }, [overlayOpen, pump]);
 
   // Create the embed once we have an initial URL and the placeholder is laid out.
   useEffect(() => {
@@ -275,11 +364,20 @@ export function BrowserPanel({ tabId, initialUrl, groupId }: BrowserPanelProps) 
   useEffect(() => {
     if (!createdRef.current) return;
     if (mode === "live") {
-      syncVisibility();
+      pump();
     } else {
-      invoke("browser_embed_set_visible", { id: embedId, visible: false }).catch(() => {});
+      // Reader mode tears the placeholder out of the tree, so the next Live
+      // pass starts from scratch: drop both caches or the re-show is skipped
+      // as "already sent" and the webview never comes back.
+      lastVisibleRef.current = false;
+      sentRectRef.current = null;
+      prevRectRef.current = null;
+      stableCountRef.current = 0;
+      invoke("browser_embed_set_visible", { id: embedId, visible: false }).catch(() => {
+        lastVisibleRef.current = null;
+      });
     }
-  }, [mode, embedId, syncVisibility]);
+  }, [mode, embedId, pump]);
 
   // Destroy the native webview when the tab closes (panel unmounts).
   useEffect(() => {
@@ -292,23 +390,26 @@ export function BrowserPanel({ tabId, initialUrl, groupId }: BrowserPanelProps) 
   }, [embedId, unregisterEmbed]);
 
   // ── Reader: sanitized fetch ─────────────────────────────────────────────
-  const fetchPage = useCallback(async (url: string) => {
-    url = normalizeUrl(url);
-    setInputUrl(url);
-    setLoading(true);
-    setError(null);
-    try {
-      const result = await invoke<ReadableContent>("fetch_readable", { url });
-      setPage(result);
-      setInputUrl(result.url);
-      setHistory((h) => [...h.slice(0, historyIndex + 1), result]);
-      setHistoryIndex((i) => i + 1);
-    } catch (e) {
-      setError(String(e));
-      setPage(null);
-    }
-    setLoading(false);
-  }, [historyIndex]);
+  const fetchPage = useCallback(
+    async (url: string) => {
+      url = normalizeUrl(url);
+      setInputUrl(url);
+      setLoading(true);
+      setError(null);
+      try {
+        const result = await invoke<ReadableContent>("fetch_readable", { url });
+        setPage(result);
+        setInputUrl(result.url);
+        setHistory((h) => [...h.slice(0, historyIndex + 1), result]);
+        setHistoryIndex((i) => i + 1);
+      } catch (e) {
+        setError(String(e));
+        setPage(null);
+      }
+      setLoading(false);
+    },
+    [historyIndex],
+  );
 
   // ── Unified navigation (dispatches by mode) ─────────────────────────────
   const navigate = useCallback(
@@ -320,6 +421,21 @@ export function BrowserPanel({ tabId, initialUrl, groupId }: BrowserPanelProps) 
     },
     [mode, ensureLive, fetchPage],
   );
+
+  // An agent's UI action pointing this (already mounted) tab at a new URL —
+  // `initialUrl` is only read on mount.
+  useEffect(() => {
+    if (!tabId) return;
+    const onNavigate = (e: Event) => {
+      const detail = (e as CustomEvent<{ tabId?: string; url?: string }>).detail;
+      if (detail?.tabId === tabId && detail.url) {
+        setInputUrl(detail.url);
+        navigate(detail.url);
+      }
+    };
+    window.addEventListener("atlas:browser-navigate", onNavigate);
+    return () => window.removeEventListener("atlas:browser-navigate", onNavigate);
+  }, [tabId, navigate]);
 
   const goBack = () => {
     if (mode === "live") {
@@ -348,15 +464,18 @@ export function BrowserPanel({ tabId, initialUrl, groupId }: BrowserPanelProps) 
     else if (page) fetchPage(page.url);
   };
 
-  const handleContentClick = useCallback((e: React.MouseEvent) => {
-    const target = e.target as HTMLElement;
-    const anchor = target.closest("a");
-    if (!anchor) return;
-    e.preventDefault();
-    const href = anchor.getAttribute("href");
-    if (!href || href.startsWith("#") || href.startsWith("javascript:")) return;
-    fetchPage(href);
-  }, [fetchPage]);
+  const handleContentClick = useCallback(
+    (e: React.MouseEvent) => {
+      const target = e.target as HTMLElement;
+      const anchor = target.closest("a");
+      if (!anchor) return;
+      e.preventDefault();
+      const href = anchor.getAttribute("href");
+      if (!href || href.startsWith("#") || href.startsWith("javascript:")) return;
+      fetchPage(href);
+    },
+    [fetchPage],
+  );
 
   const currentUrl = () => (mode === "live" ? liveNav?.url || inputUrl : page?.url || inputUrl);
 
@@ -365,9 +484,21 @@ export function BrowserPanel({ tabId, initialUrl, groupId }: BrowserPanelProps) 
     const url = currentUrl();
     try {
       await invoke("browser_open_window", { url });
-      logEvent({ source: "atlas", kind: "browser-open-window", summary: `Opened ${url} in a browser window`, status: "success", payload: { url } });
+      logEvent({
+        source: "atlas",
+        kind: "browser-open-window",
+        summary: `Opened ${url} in a browser window`,
+        status: "success",
+        payload: { url },
+      });
     } catch (e) {
-      logEvent({ source: "atlas", kind: "browser-open-window", summary: `Failed to open browser window: ${url}`, status: "failure", payload: { url, error: String(e) } });
+      logEvent({
+        source: "atlas",
+        kind: "browser-open-window",
+        summary: `Failed to open browser window: ${url}`,
+        status: "failure",
+        payload: { url, error: String(e) },
+      });
     }
   };
 
@@ -376,10 +507,22 @@ export function BrowserPanel({ tabId, initialUrl, groupId }: BrowserPanelProps) 
     try {
       const { openUrl } = await import("@tauri-apps/plugin-opener");
       await openUrl(url);
-      logEvent({ source: "atlas", kind: "browser-open-external", summary: `Opened ${url} in system browser`, status: "success", payload: { url } });
+      logEvent({
+        source: "atlas",
+        kind: "browser-open-external",
+        summary: `Opened ${url} in system browser`,
+        status: "success",
+        payload: { url },
+      });
     } catch (e) {
       window.open(url, "_blank");
-      logEvent({ source: "atlas", kind: "browser-open-external-fallback", summary: `Tauri opener failed; fell back to window.open: ${url}`, status: "failure", payload: { url, error: String(e) } });
+      logEvent({
+        source: "atlas",
+        kind: "browser-open-external-fallback",
+        summary: `Tauri opener failed; fell back to window.open: ${url}`,
+        status: "failure",
+        payload: { url, error: String(e) },
+      });
     }
   };
 
@@ -423,7 +566,10 @@ export function BrowserPanel({ tabId, initialUrl, groupId }: BrowserPanelProps) 
         range.setStart(node, idx);
         range.setEnd(node, idx + searchQuery.length);
         sel.addRange(range);
-        (node as HTMLElement).parentElement?.scrollIntoView({ behavior: "smooth", block: "center" });
+        (node as HTMLElement).parentElement?.scrollIntoView({
+          behavior: "smooth",
+          block: "center",
+        });
         return;
       }
     }
@@ -449,26 +595,49 @@ export function BrowserPanel({ tabId, initialUrl, groupId }: BrowserPanelProps) 
   const isLoading = isLive ? !!liveNav?.loading : loading;
 
   return (
-    <div className="h-full flex flex-col bg-bg-base" onMouseDownCapture={focusThisGroup}>
+    <div className="h-full flex flex-col bg-background" onMouseDownCapture={focusThisGroup}>
       {/* Address bar */}
-      <div className="flex items-center gap-1.5 px-2 h-[36px] shrink-0 border-b border-border-default bg-bg-primary">
-        <button onClick={goBack} disabled={!canBack} className="p-1 rounded hover:bg-bg-hover text-text-tertiary transition-colors cursor-pointer disabled:opacity-30">
-          <ArrowLeft size={12} />
-        </button>
-        <button onClick={goForward} disabled={!canFwd} className="p-1 rounded hover:bg-bg-hover text-text-tertiary transition-colors cursor-pointer disabled:opacity-30">
-          <ArrowRight size={12} />
-        </button>
-        <button onClick={reload} className="p-1 rounded hover:bg-bg-hover text-text-tertiary transition-colors cursor-pointer" title="Reload">
-          {isLoading ? <Loader2 size={12} className="animate-spin" /> : <RotateCw size={12} />}
-        </button>
+      <div className="flex items-center gap-1.5 px-2 h-[36px] shrink-0 border-b border-border bg-background">
+        {/* The live webview paints over anything below this bar, so the
+            address-bar tooltips open upward. */}
+        <HintGroup side="top">
+          <HintItem label="Back">
+            <button
+              onClick={goBack}
+              disabled={!canBack}
+              className="p-1 rounded hover:bg-element-hover text-muted-foreground transition-colors cursor-pointer disabled:opacity-30"
+            >
+              <ArrowLeft size={12} />
+            </button>
+          </HintItem>
+          <HintItem label="Forward">
+            <button
+              onClick={goForward}
+              disabled={!canFwd}
+              className="p-1 rounded hover:bg-element-hover text-muted-foreground transition-colors cursor-pointer disabled:opacity-30"
+            >
+              <ArrowRight size={12} />
+            </button>
+          </HintItem>
+          <HintItem label="Reload">
+            <button
+              onClick={reload}
+              className="p-1 rounded hover:bg-element-hover text-muted-foreground transition-colors cursor-pointer"
+            >
+              {isLoading ? <Loader2 size={12} className="animate-spin" /> : <RotateCw size={12} />}
+            </button>
+          </HintItem>
+        </HintGroup>
 
-        <div className="flex-1 flex items-center gap-2 h-7 rounded border border-border-default bg-bg-secondary px-2 focus-within:ring-1 focus-within:ring-border-focus">
-          <Globe size={11} className="text-text-tertiary shrink-0" />
+        <div className="flex-1 flex items-center gap-2 h-7 rounded border border-border bg-card px-2 focus-within:ring-1 focus-within:ring-border-strong">
+          <Globe size={11} className="text-muted-foreground shrink-0" />
           <input
             value={inputUrl}
             onChange={(e) => setInputUrl(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") navigate(inputUrl); }}
-            className="flex-1 bg-transparent outline-none text-[11px] text-text-primary font-mono placeholder:text-text-tertiary"
+            onKeyDown={(e) => {
+              if (e.key === "Enter") navigate(inputUrl);
+            }}
+            className="flex-1 bg-transparent outline-none text-xs text-foreground font-mono placeholder:text-muted-foreground"
             placeholder="Search or enter URL"
           />
         </div>
@@ -480,42 +649,67 @@ export function BrowserPanel({ tabId, initialUrl, groupId }: BrowserPanelProps) 
           className={cn(
             "flex items-center gap-1 px-1.5 h-6 rounded transition-colors cursor-pointer",
             mode === "reader"
-              ? "bg-bg-hover text-text-primary"
-              : "hover:bg-bg-hover text-text-tertiary",
+              ? "bg-element-hover text-foreground"
+              : "hover:bg-element-hover text-muted-foreground",
           )}
           title={mode === "reader" ? "Back to live page" : "Reader view of this page"}
         >
           {mode === "reader" ? <Zap size={11} /> : <BookText size={11} />}
-          <span className="text-[10px]">{mode === "reader" ? "Live" : "Reader"}</span>
+          <span className="text-2xs">{mode === "reader" ? "Live" : "Reader"}</span>
         </button>
 
-        {!isLive && page && currentProject && (
-          <button onClick={saveToKnowledge} className="p-1 rounded hover:bg-bg-hover text-text-tertiary transition-colors cursor-pointer" title="Save to knowledge base">
-            <Save size={12} />
-          </button>
-        )}
-        {!isLive && (
-          <button onClick={() => setSearchOpen(!searchOpen)} className="p-1 rounded hover:bg-bg-hover text-text-tertiary transition-colors cursor-pointer" title="Find in page">
-            <Search size={12} />
-          </button>
-        )}
-        <button onClick={openBrowserWindow} className="p-1 rounded hover:bg-bg-hover text-text-tertiary transition-colors cursor-pointer" title="Open in browser window">
-          <AppWindow size={12} />
-        </button>
-        <button onClick={openExternal} className="p-1 rounded hover:bg-bg-hover text-text-tertiary transition-colors cursor-pointer" title="Open in system browser">
-          <ExternalLink size={12} />
-        </button>
+        <HintGroup side="top">
+          {!isLive && page && currentProject && (
+            <HintItem label="Save to knowledge base">
+              <button
+                onClick={saveToKnowledge}
+                className="p-1 rounded hover:bg-element-hover text-muted-foreground transition-colors cursor-pointer"
+              >
+                <Save size={12} />
+              </button>
+            </HintItem>
+          )}
+          {!isLive && (
+            <HintItem label="Find in page">
+              <button
+                onClick={() => setSearchOpen(!searchOpen)}
+                className="p-1 rounded hover:bg-element-hover text-muted-foreground transition-colors cursor-pointer"
+              >
+                <Search size={12} />
+              </button>
+            </HintItem>
+          )}
+          <HintItem label="Open in browser window">
+            <button
+              onClick={openBrowserWindow}
+              className="p-1 rounded hover:bg-element-hover text-muted-foreground transition-colors cursor-pointer"
+            >
+              <AppWindow size={12} />
+            </button>
+          </HintItem>
+          <HintItem label="Open in system browser">
+            <button
+              onClick={openExternal}
+              className="p-1 rounded hover:bg-element-hover text-muted-foreground transition-colors cursor-pointer"
+            >
+              <ExternalLink size={12} />
+            </button>
+          </HintItem>
+        </HintGroup>
       </div>
 
       {/* Search bar (Reader only) */}
       {!isLive && searchOpen && (
-        <div className="flex items-center gap-1.5 px-2 h-[32px] shrink-0 border-b border-border-default bg-bg-primary">
-          <Search size={11} className="text-text-tertiary shrink-0" />
+        <div className="flex items-center gap-1.5 px-2 h-[32px] shrink-0 border-b border-border bg-background">
+          <Search size={11} className="text-muted-foreground shrink-0" />
           <input
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") handleSearch(); if (e.key === "Escape") setSearchOpen(false); }}
-            className="flex-1 bg-transparent outline-none text-[11px] text-text-primary placeholder:text-text-tertiary"
+            onKeyDown={(e) => {
+              if (e.key === "Enter") handleSearch();
+              if (e.key === "Escape") setSearchOpen(false);
+            }}
+            className="flex-1 bg-transparent outline-none text-xs text-foreground placeholder:text-muted-foreground"
             placeholder="Find in page..."
             autoFocus
           />
@@ -524,43 +718,43 @@ export function BrowserPanel({ tabId, initialUrl, groupId }: BrowserPanelProps) 
 
       {/* ── Live mode: placeholder the native webview is positioned over ── */}
       {isLive && (
-        <div ref={placeholderRef} className="flex-1 relative bg-bg-base">
+        <div ref={placeholderRef} className="flex-1 relative bg-background">
+          <NativeOnlyNotice />
           {/* Safe fallback UI when native webview containment or creation fails */}
           {embedError && (
-            <div className="absolute inset-0 flex items-center justify-center p-6 pointer-events-auto bg-bg-base z-10">
+            <div className="absolute inset-0 flex items-center justify-center p-6 pointer-events-auto bg-background z-10">
               <div className="flex max-w-[380px] flex-col items-center gap-4 text-center">
-                <div className="flex h-12 w-12 items-center justify-center rounded-full border border-border-default bg-bg-secondary">
-                  <Globe size={22} className="text-text-tertiary" />
+                <div className="flex h-12 w-12 items-center justify-center rounded-full border border-border bg-card">
+                  <Globe size={22} className="text-muted-foreground" />
                 </div>
                 <div className="space-y-1.5">
-                  <p className="text-sm font-medium text-text-primary">Native Embed Fallback</p>
-                  <p className="text-xs leading-relaxed text-text-tertiary">
-                    The embedded live browser could not be native-contained in this panel area. You can view in Reader mode or open in a separate window:
+                  <p className="text-sm font-medium text-foreground">Native Embed Fallback</p>
+                  <p className="text-xs leading-relaxed text-muted-foreground">
+                    The embedded live browser could not be native-contained in this panel area. You
+                    can view in Reader mode or open in a separate window:
                   </p>
-                  {embedError && (
-                    <p className="truncate pt-1 font-mono text-[10px] text-text-tertiary">
-                      {embedError}
-                    </p>
-                  )}
+                  <p className="truncate pt-1 font-mono text-2xs text-muted-foreground">
+                    {embedError}
+                  </p>
                 </div>
                 <div className="flex flex-col gap-2 pt-1 w-full max-w-[280px]">
                   <button
                     onClick={toggleReader}
-                    className="flex items-center justify-center gap-2 rounded-md bg-text-primary px-3 py-2 text-xs font-medium text-bg-base transition-opacity hover:opacity-90 cursor-pointer"
+                    className="flex items-center justify-center gap-2 rounded-md bg-foreground px-3 py-2 text-xs font-medium text-background transition-opacity hover:opacity-90 cursor-pointer"
                   >
                     <BookOpen size={14} />
                     Switch to Reader mode
                   </button>
                   <button
                     onClick={openBrowserWindow}
-                    className="flex items-center justify-center gap-2 rounded-md border border-border-default bg-bg-secondary px-3 py-2 text-xs text-text-secondary transition-colors hover:bg-bg-hover hover:text-text-primary cursor-pointer"
+                    className="flex items-center justify-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-xs text-secondary-foreground transition-colors hover:bg-element-hover hover:text-foreground cursor-pointer"
                   >
                     <AppWindow size={14} />
                     Open in a new window
                   </button>
                   <button
                     onClick={openExternal}
-                    className="flex items-center justify-center gap-2 rounded-md border border-border-default bg-bg-secondary px-3 py-2 text-xs text-text-secondary transition-colors hover:bg-bg-hover hover:text-text-primary cursor-pointer"
+                    className="flex items-center justify-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-xs text-secondary-foreground transition-colors hover:bg-element-hover hover:text-foreground cursor-pointer"
                   >
                     <ExternalLink size={14} />
                     Open in default browser
@@ -574,16 +768,16 @@ export function BrowserPanel({ tabId, initialUrl, groupId }: BrowserPanelProps) 
           {createdRef.current && overlayOpen && (
             <div className="absolute inset-0 flex items-center justify-center p-6 pointer-events-auto">
               <div className="flex max-w-[380px] flex-col items-center gap-4 text-center">
-                <div className="flex h-12 w-12 items-center justify-center rounded-full border border-border-default bg-bg-secondary">
-                  <Globe size={22} className="text-text-tertiary" />
+                <div className="flex h-12 w-12 items-center justify-center rounded-full border border-border bg-card">
+                  <Globe size={22} className="text-muted-foreground" />
                 </div>
                 <div className="space-y-1.5">
-                  <p className="text-sm font-medium text-text-primary">Browser paused</p>
-                  <p className="text-xs leading-relaxed text-text-tertiary">
+                  <p className="text-sm font-medium text-foreground">Browser paused</p>
+                  <p className="text-xs leading-relaxed text-muted-foreground">
                     A menu or dialog is open on top. Keep browsing without interruption:
                   </p>
                   {(liveNav?.title || currentUrl()) && (
-                    <p className="truncate pt-1 font-mono text-[10px] text-text-secondary">
+                    <p className="truncate pt-1 font-mono text-2xs text-secondary-foreground">
                       {liveNav?.title || currentUrl()}
                     </p>
                   )}
@@ -591,14 +785,14 @@ export function BrowserPanel({ tabId, initialUrl, groupId }: BrowserPanelProps) 
                 <div className="flex flex-col gap-2 pt-1 w-full max-w-[280px]">
                   <button
                     onClick={openBrowserWindow}
-                    className="flex items-center justify-center gap-2 rounded-md bg-text-primary px-3 py-2 text-xs font-medium text-bg-base transition-opacity hover:opacity-90 cursor-pointer"
+                    className="flex items-center justify-center gap-2 rounded-md bg-foreground px-3 py-2 text-xs font-medium text-background transition-opacity hover:opacity-90 cursor-pointer"
                   >
                     <AppWindow size={14} />
                     Continue in a new window
                   </button>
                   <button
                     onClick={openExternal}
-                    className="flex items-center justify-center gap-2 rounded-md border border-border-default bg-bg-secondary px-3 py-2 text-xs text-text-secondary transition-colors hover:bg-bg-hover hover:text-text-primary cursor-pointer"
+                    className="flex items-center justify-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-xs text-secondary-foreground transition-colors hover:bg-element-hover hover:text-foreground cursor-pointer"
                   >
                     <ExternalLink size={14} />
                     Open in default browser
@@ -607,21 +801,29 @@ export function BrowserPanel({ tabId, initialUrl, groupId }: BrowserPanelProps) 
               </div>
             </div>
           )}
-          {!createdRef.current && !initialUrl && (
+          {/* The start page is suppressed under the browser mock: there is no
+              webview for a quick link to load, and `NativeOnlyNotice` occupies
+              the same box saying exactly that. */}
+          {!createdRef.current && !initialUrl && !isBrowserMock && (
             <div className="absolute inset-0 flex items-center justify-center">
               <div className="text-center space-y-3">
-                <Globe size={32} className="text-text-tertiary mx-auto" />
-                <p className="text-sm text-text-secondary">Enter a URL to browse</p>
+                <Globe size={32} className="text-muted-foreground mx-auto" />
+                <p className="text-sm text-secondary-foreground">Enter a URL to browse</p>
                 <div className="flex flex-wrap gap-2 justify-center max-w-[320px] pt-2">
-                  {["google.com", "youtube.com", "github.com", "news.ycombinator.com"].map((site) => (
-                    <button
-                      key={site}
-                      onClick={() => { setInputUrl(`https://${site}`); navigate(site); }}
-                      className="px-2.5 py-1 rounded border border-border-default bg-bg-secondary text-[10px] text-text-secondary hover:bg-bg-hover hover:text-text-primary transition-colors font-mono cursor-pointer"
-                    >
-                      {site}
-                    </button>
-                  ))}
+                  {["google.com", "youtube.com", "github.com", "news.ycombinator.com"].map(
+                    (site) => (
+                      <button
+                        key={site}
+                        onClick={() => {
+                          setInputUrl(`https://${site}`);
+                          navigate(site);
+                        }}
+                        className="px-2.5 py-1 rounded border border-border bg-card text-2xs text-secondary-foreground hover:bg-element-hover hover:text-foreground transition-colors font-mono cursor-pointer"
+                      >
+                        {site}
+                      </button>
+                    ),
+                  )}
                 </div>
               </div>
             </div>
@@ -632,87 +834,167 @@ export function BrowserPanel({ tabId, initialUrl, groupId }: BrowserPanelProps) 
       {/* ── Reader mode: sanitized content ── */}
       {!isLive && (
         <ContextMenu.Root>
-          <ContextMenu.Trigger asChild>
-            <div className="flex-1 overflow-auto hide-scrollbar" onContextMenu={(e: React.MouseEvent) => e.stopPropagation()}>
-              {loading && (
-                <div className="flex items-center justify-center py-16">
-                  <Loader2 size={20} className="animate-spin text-accent" />
-                </div>
-              )}
-
-              {error && (
-                <div className="px-6 py-8 text-center">
-                  <p className="text-[12px] text-error">{error}</p>
-                  <button onClick={() => fetchPage(inputUrl)} className="mt-2 text-[11px] text-accent underline cursor-pointer">Retry</button>
-                </div>
-              )}
-
-              {!loading && !error && page && (
-                <div className="select-text">
-                  <div className="px-4 py-3 border-b border-border-default">
-                    <h1 className="text-[15px] font-semibold text-text-primary leading-snug">{page.title}</h1>
-                    <span className="text-[10px] text-text-tertiary font-mono">{page.url}</span>
+          <ContextMenu.Trigger
+            render={
+              <div
+                className="flex-1 overflow-auto hide-scrollbar"
+                onContextMenu={(e) => e.stopPropagation()}
+              >
+                {loading && (
+                  <div className="flex items-center justify-center py-16">
+                    <Loader2 size={20} className="animate-spin text-primary" />
                   </div>
-                  <div
-                    ref={contentRef}
-                    className="reader-content px-4 py-4"
-                    onClick={handleContentClick}
-                    dangerouslySetInnerHTML={{ __html: page.html }}
-                  />
-                </div>
-              )}
-
-              {!loading && !error && !page && (
-                <div className="h-full flex items-center justify-center py-16">
-                  <div className="text-center space-y-3">
-                    <BookText size={32} className="text-text-tertiary mx-auto" />
-                    <p className="text-sm text-text-secondary">Reader mode — enter a URL for a clean, JS-free view</p>
-                    <div className="flex flex-wrap gap-2 justify-center max-w-[300px] pt-2">
-                      {["arxiv.org", "github.com", "news.ycombinator.com", "developer.mozilla.org"].map((site) => (
-                        <button
-                          key={site}
-                          onClick={() => fetchPage(`https://${site}`)}
-                          className="px-2.5 py-1 rounded border border-border-default bg-bg-secondary text-[10px] text-text-secondary hover:bg-bg-hover hover:text-text-primary transition-colors font-mono cursor-pointer"
-                        >
-                          {site}
-                        </button>
-                      ))}
+                )}
+                {error && (
+                  <div className="px-6 py-8 text-center">
+                    <p className="text-sm text-error">{error}</p>
+                    <button
+                      onClick={() => fetchPage(inputUrl)}
+                      className="mt-2 text-xs text-primary underline cursor-pointer"
+                    >
+                      Retry
+                    </button>
+                  </div>
+                )}
+                {!loading && !error && page && (
+                  <div className="select-text">
+                    <div className="px-4 py-3 border-b border-border">
+                      <h1 className="text-lg font-semibold text-foreground leading-snug">
+                        {page.title}
+                      </h1>
+                      <span className="text-2xs text-muted-foreground font-mono">{page.url}</span>
+                    </div>
+                    <div
+                      ref={contentRef}
+                      className="reader-content px-4 py-4"
+                      onClick={handleContentClick}
+                      dangerouslySetInnerHTML={{ __html: page.html }}
+                    />
+                  </div>
+                )}
+                {!loading && !error && !page && (
+                  <div className="h-full flex items-center justify-center py-16">
+                    <div className="text-center space-y-3">
+                      <BookText size={32} className="text-muted-foreground mx-auto" />
+                      <p className="text-sm text-secondary-foreground">
+                        Reader mode — enter a URL for a clean, JS-free view
+                      </p>
+                      <div className="flex flex-wrap gap-2 justify-center max-w-[300px] pt-2">
+                        {[
+                          "arxiv.org",
+                          "github.com",
+                          "news.ycombinator.com",
+                          "developer.mozilla.org",
+                        ].map((site) => (
+                          <button
+                            key={site}
+                            onClick={() => fetchPage(`https://${site}`)}
+                            className="px-2.5 py-1 rounded border border-border bg-card text-2xs text-secondary-foreground hover:bg-element-hover hover:text-foreground transition-colors font-mono cursor-pointer"
+                          >
+                            {site}
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   </div>
-                </div>
-              )}
-            </div>
-          </ContextMenu.Trigger>
+                )}
+              </div>
+            }
+          />
           <ContextMenu.Portal>
-            <ContextMenu.Content className="w-[180px] rounded-lg border border-[#1a1a1a] bg-[#0f0f0f] shadow-xl py-1" style={{ zIndex: 99999 }}>
-              <ContextMenu.Item onClick={copySelection} className="flex items-center gap-2 px-3 h-[28px] text-[11px] text-[#aaa] hover:bg-[#1a1a1a] hover:text-[#fff] cursor-default outline-none">
-                <Copy size={11} className="text-[#555]" /> Copy Selection
-              </ContextMenu.Item>
-              <ContextMenu.Item onClick={copyLink} className="flex items-center gap-2 px-3 h-[28px] text-[11px] text-[#aaa] hover:bg-[#1a1a1a] hover:text-[#fff] cursor-default outline-none">
-                <Globe size={11} className="text-[#555]" /> Copy Link
-              </ContextMenu.Item>
-              <ContextMenu.Separator className="h-px bg-[#1a1a1a] my-1" />
-              <ContextMenu.Item onClick={() => setSearchOpen(true)} className="flex items-center gap-2 px-3 h-[28px] text-[11px] text-[#aaa] hover:bg-[#1a1a1a] hover:text-[#fff] cursor-default outline-none">
-                <Search size={11} className="text-[#555]" /> Find in Page
-              </ContextMenu.Item>
-              <ContextMenu.Item onClick={openBrowserWindow} className="flex items-center gap-2 px-3 h-[28px] text-[11px] text-[#aaa] hover:bg-[#1a1a1a] hover:text-[#fff] cursor-default outline-none">
-                <AppWindow size={11} className="text-[#555]" /> Open in Browser Window
-              </ContextMenu.Item>
-              <ContextMenu.Item onClick={openExternal} className="flex items-center gap-2 px-3 h-[28px] text-[11px] text-[#aaa] hover:bg-[#1a1a1a] hover:text-[#fff] cursor-default outline-none">
-                <ExternalLink size={11} className="text-[#555]" /> Open in System Browser
-              </ContextMenu.Item>
-              {page && currentProject && (
-                <>
-                  <ContextMenu.Separator className="h-px bg-[#1a1a1a] my-1" />
-                  <ContextMenu.Item onClick={saveToKnowledge} className="flex items-center gap-2 px-3 h-[28px] text-[11px] text-[#aaa] hover:bg-[#1a1a1a] hover:text-[#fff] cursor-default outline-none">
-                    <BookOpen size={11} className="text-[#555]" /> Save to Knowledge
-                  </ContextMenu.Item>
-                </>
-              )}
-            </ContextMenu.Content>
+            {/* Base UI positions the Popup through a Positioner, and the Popup
+                is static inside it — the z-index has to sit on the Positioner
+                or it does nothing. */}
+            <ContextMenu.Positioner className="z-popover">
+              <ContextMenu.Popup className="w-[180px] rounded-lg border border-border bg-card shadow-md py-1">
+                <ContextMenu.Item
+                  onClick={copySelection}
+                  className="flex items-center gap-2 px-3 h-control-md text-xs text-secondary-foreground hover:bg-element-hover hover:text-foreground cursor-default outline-none"
+                >
+                  <Copy size={11} className="text-muted-foreground" /> Copy Selection
+                </ContextMenu.Item>
+                <ContextMenu.Item
+                  onClick={copyLink}
+                  className="flex items-center gap-2 px-3 h-control-md text-xs text-secondary-foreground hover:bg-element-hover hover:text-foreground cursor-default outline-none"
+                >
+                  <Globe size={11} className="text-muted-foreground" /> Copy Link
+                </ContextMenu.Item>
+                <ContextMenu.Separator className="h-px bg-border my-1" />
+                <ContextMenu.Item
+                  onClick={() => setSearchOpen(true)}
+                  className="flex items-center gap-2 px-3 h-control-md text-xs text-secondary-foreground hover:bg-element-hover hover:text-foreground cursor-default outline-none"
+                >
+                  <Search size={11} className="text-muted-foreground" /> Find in Page
+                </ContextMenu.Item>
+                <ContextMenu.Item
+                  onClick={openBrowserWindow}
+                  className="flex items-center gap-2 px-3 h-control-md text-xs text-secondary-foreground hover:bg-element-hover hover:text-foreground cursor-default outline-none"
+                >
+                  <AppWindow size={11} className="text-muted-foreground" /> Open in Browser Window
+                </ContextMenu.Item>
+                <ContextMenu.Item
+                  onClick={openExternal}
+                  className="flex items-center gap-2 px-3 h-control-md text-xs text-secondary-foreground hover:bg-element-hover hover:text-foreground cursor-default outline-none"
+                >
+                  <ExternalLink size={11} className="text-muted-foreground" /> Open in System
+                  Browser
+                </ContextMenu.Item>
+                {page && currentProject && (
+                  <>
+                    <ContextMenu.Separator className="h-px bg-border my-1" />
+                    <ContextMenu.Item
+                      onClick={saveToKnowledge}
+                      className="flex items-center gap-2 px-3 h-control-md text-xs text-secondary-foreground hover:bg-element-hover hover:text-foreground cursor-default outline-none"
+                    >
+                      <BookOpen size={11} className="text-muted-foreground" /> Save to Knowledge
+                    </ContextMenu.Item>
+                  </>
+                )}
+              </ContextMenu.Popup>
+            </ContextMenu.Positioner>
           </ContextMenu.Portal>
         </ContextMenu.Root>
       )}
+    </div>
+  );
+}
+
+/**
+ * The Browser tab's native-only placeholder (decision 39).
+ *
+ * Live mode is a real child `WebviewWindow` that the macOS window server parks
+ * over this div — there is no `invoke()` behind it, so `src/dev/mock-backend/`
+ * cannot fake it and never will. Without this, `bun run dev` drew the full
+ * chrome (tab strip, address bar, reader toggle) around an empty rectangle,
+ * which reads as a start page that has finished loading. A reviewer then
+ * reports "the Browser tab is blank" as a defect, or worse signs the surface
+ * off having never seen it.
+ *
+ * So it says what it is, in the place the page would be. Renders only under
+ * `bun run dev` in an ordinary browser: `isBrowserMock` is a build-time
+ * constant, so the whole component is eliminated from production, and inside
+ * `dev:app` the real webview covers this div anyway.
+ */
+function NativeOnlyNotice() {
+  if (!isBrowserMock) return null;
+  return (
+    <div className="absolute inset-0 flex items-center justify-center p-6">
+      <div className="flex max-w-[380px] flex-col items-center gap-4 text-center">
+        <div className="flex size-control-lg items-center justify-center rounded-full border border-border bg-card">
+          <AppWindow size={16} className="text-muted-foreground" />
+        </div>
+        <div className="space-y-1.5">
+          <p className="heading">Native-only surface</p>
+          <p className="body text-muted-foreground">
+            The live browser is a native webview the window server draws over this panel, not HTML.
+            Nothing in the mock backend can stand in for it.
+          </p>
+          <p className="caption pt-1">
+            Check it in <span className="code text-secondary-foreground">bun run dev:app</span>.
+            Reader mode is ordinary themed HTML and does work here.
+          </p>
+        </div>
+      </div>
     </div>
   );
 }

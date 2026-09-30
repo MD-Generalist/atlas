@@ -5,11 +5,8 @@
 
 import { save } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
-import {
-  getNodesBounds,
-  getViewportForBounds,
-  type ReactFlowInstance,
-} from "@xyflow/react";
+import { getNodesBounds, getViewportForBounds, type ReactFlowInstance } from "@xyflow/react";
+import { themeBase } from "@/features/theme/theme-values";
 
 export type ExportFormat = "png" | "jpeg" | "svg" | "pdf";
 export type ExportResult = "ok" | "empty" | "cancelled";
@@ -19,8 +16,7 @@ const MAX_DIM = 4096; // cap the longest side (px) to keep files/memory sane
 
 /** Canvas background (matches the app) — used for formats without alpha. */
 function canvasBg(): string {
-  const v = getComputedStyle(document.documentElement).getPropertyValue("--bg-base").trim();
-  return v || "#0a0a0a";
+  return themeBase("background");
 }
 
 /** Raw base64 payload from a `data:...;base64,<b64>` (or uri-encoded) data URL. */
@@ -36,7 +32,11 @@ function filterChrome(el: HTMLElement): boolean {
   return !cl.contains("react-flow__handle") && !cl.contains("react-flow__resize-control");
 }
 
-export async function exportCanvas(format: ExportFormat, rf: ReactFlowInstance): Promise<ExportResult> {
+export async function exportCanvas(
+  format: ExportFormat,
+  rf: ReactFlowInstance,
+  container: ParentNode,
+): Promise<ExportResult> {
   const nodes = rf.getNodes();
   if (nodes.length === 0) return "empty";
   // Load the heavy export libs (jspdf ~390KB + html-to-image) ONLY when an
@@ -45,7 +45,12 @@ export async function exportCanvas(format: ExportFormat, rf: ReactFlowInstance):
     import("html-to-image"),
     import("jspdf"),
   ]);
-  const viewportEl = document.querySelector<HTMLElement>(".react-flow__viewport");
+  // Scoped to THIS instance's own container — Canvas and Spaces tabs (and
+  // split columns, or several Canvas tabs) can each have a mounted
+  // `.react-flow__viewport` at once, and a bare `document.querySelector`
+  // would rasterize whichever one happens to come first in DOM order rather
+  // than the board the caller actually owns.
+  const viewportEl = container.querySelector<HTMLElement>(".react-flow__viewport");
   if (!viewportEl) return "empty";
 
   const bounds = getNodesBounds(nodes);
@@ -79,9 +84,7 @@ export async function exportCanvas(format: ExportFormat, rf: ReactFlowInstance):
     // toSvg returns `data:image/svg+xml;charset=utf-8,<uri-encoded>`.
     const comma = dataUrl.indexOf(",");
     const payload = dataUrl.slice(comma + 1);
-    const svg = dataUrl.includes(";base64,")
-      ? atob(payload)
-      : decodeURIComponent(payload);
+    const svg = dataUrl.includes(";base64,") ? atob(payload) : decodeURIComponent(payload);
     await invoke("write_file_content", { path, content: svg });
     return "ok";
   }

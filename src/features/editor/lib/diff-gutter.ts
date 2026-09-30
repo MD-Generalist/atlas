@@ -3,17 +3,11 @@
 // Fed by the native `git_diff_line_status` engine via the `setDiffStatus` effect.
 
 import { EditorView, gutter, GutterMarker } from "@codemirror/view";
-import {
-  StateField,
-  StateEffect,
-  RangeSet,
-  type Extension,
-  type Text,
-} from "@codemirror/state";
+import { StateField, StateEffect, RangeSet, type Extension, type Text } from "@codemirror/state";
 import type { DiffLineStatus } from "@/features/git/lib/git-diff-api";
 
 /** Push a fresh line-status snapshot into the gutter. */
-export const setDiffStatus = StateEffect.define<DiffLineStatus>();
+const setDiffStatus = StateEffect.define<DiffLineStatus>();
 
 class BarMarker extends GutterMarker {
   constructor(readonly cls: string) {
@@ -74,16 +68,18 @@ const diffGutterTheme = EditorView.baseTheme({
     boxSizing: "border-box",
   },
   ".cm-changebar-added": {
-    background: "var(--status-success, #22c55e)",
+    background: "var(--atlas-diff-added-text)",
   },
+  // There's no dedicated "changed" role in the diff theme keys (only
+  // added/removed/context) — this is a status colour by design.
   ".cm-changebar-changed": {
-    background: "var(--status-info, #3b82f6)",
+    background: "var(--atlas-status-info-foreground)",
   },
   // A deletion has no line of its own in the new file — mark the following
   // line's bar with a downward red wedge.
   ".cm-changebar-deleted": {
     background: "transparent",
-    borderTop: "2px solid var(--status-error, #ef4444)",
+    borderTop: "2px solid var(--atlas-diff-removed-text)",
   },
 });
 

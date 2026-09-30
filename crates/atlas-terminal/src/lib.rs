@@ -1,7 +1,8 @@
+pub mod command;
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
@@ -15,7 +16,15 @@ pub struct TerminalSession {
     /// PID of the spawned login shell. Used by `cwd` to resolve relative file
     /// paths clicked in the terminal against the shell's live directory.
     pid: Option<u32>,
+    /// Last size pushed to the PTY, so a resize storm (N terminals × 60 fps
+    /// during a drag) costs one ioctl per CHANGE, not per call.
+    size: Mutex<(u16, u16)>,
     _reader_handle: std::thread::JoinHandle<()>,
+}
+
+/// Whether `next` differs from `last` — the resize dedup predicate.
+pub(crate) fn needs_resize(last: (u16, u16), next: (u16, u16)) -> bool {
+    last != next
 }
 
 pub struct TerminalManager {
@@ -26,6 +35,12 @@ pub struct TerminalManager {
 pub struct TerminalOutput {
     pub id: String,
     pub data: Vec<u8>,
+}
+
+impl Default for TerminalManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl TerminalManager {
@@ -40,7 +55,12 @@ impl TerminalManager {
         cols: u16,
         rows: u16,
         cwd: Option<&str>,
-        sender: mpsc::UnboundedSender<TerminalOutput>,
+        // BOUNDED. When the consumer falls behind, `blocking_send` parks this
+        // session's reader thread, the kernel tty queue fills, and the child's
+        // write() stalls — real flow control instead of unbounded buffering
+        // (the same backpressure shape Ghostty's fixed ring of read buffers
+        // produces). Nothing is ever dropped.
+        sender: mpsc::Sender<TerminalOutput>,
     ) -> anyhow::Result<String> {
         let pty_system = native_pty_system();
         let pair = pty_system.openpty(PtySize {
@@ -52,7 +72,11 @@ impl TerminalManager {
 
         let shell = detect_shell();
         let mut cmd = CommandBuilder::new(&shell);
-        cmd.arg("-l"); // login shell — sources the user's profile so PATH etc. are correct
+        // Login shell — sources the user's profile so PATH etc. are correct.
+        // PowerShell has no `-l`: it loads the user's profile by default.
+        if !cfg!(windows) {
+            cmd.arg("-l");
+        }
         if let Some(dir) = cwd {
             cmd.cwd(dir);
         }
@@ -83,9 +107,8 @@ impl TerminalManager {
             }
         }
 
-        let child = pair.slave.spawn_command(cmd)?;
+        let mut child = pair.slave.spawn_command(cmd)?;
         let pid = child.process_id();
-        drop(child); // the pty keeps the process alive; we only needed the pid
         drop(pair.slave); // drop slave so reads on master detect EOF
 
         let writer = pair.master.take_writer()?;
@@ -97,24 +120,34 @@ impl TerminalManager {
         let session_id = id.clone();
 
         let reader_handle = std::thread::spawn(move || {
-            // 64 KiB read buffer (was 4 KiB) — fewer syscalls / channel sends
-            // on high-throughput output (builds, `cat` of large files).
-            let mut buf = vec![0u8; 65536];
+            // 64 KiB reads — fewer syscalls / channel sends on high-throughput
+            // output (builds, `cat` of large files). The buffer is allocated
+            // per read and MOVED into the message: the previous reuse-then-
+            // `to_vec()` shape copied every byte once here before the batcher
+            // copied it again. One allocation per read is the cheaper trade.
             loop {
+                let mut buf = vec![0u8; 65536];
                 match reader.read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => {
+                        buf.truncate(n);
                         let output = TerminalOutput {
                             id: session_id.clone(),
-                            data: buf[..n].to_vec(),
+                            data: buf,
                         };
-                        if sender.send(output).is_err() {
+                        if sender.blocking_send(output).is_err() {
                             break;
                         }
                     }
                     Err(_) => break,
                 }
             }
+            // Reap the shell. portable-pty's unix Child does not waitpid on
+            // Drop, so without this every exited shell stayed <defunct> until
+            // app quit. The reader unblocks exactly when the shell dies (EOF)
+            // or the session closes (channel gone → master drops → shell gets
+            // HUP), so wait() here returns promptly in both paths.
+            let _ = child.wait();
         });
 
         self.sessions.insert(
@@ -123,6 +156,7 @@ impl TerminalManager {
                 master,
                 writer: Arc::new(Mutex::new(writer)),
                 pid,
+                size: Mutex::new((cols, rows)),
                 _reader_handle: reader_handle,
             },
         );
@@ -134,7 +168,7 @@ impl TerminalManager {
         let session = self
             .sessions
             .get(id)
-            .ok_or_else(|| anyhow::anyhow!("Terminal session not found: {}", id))?;
+            .ok_or_else(|| anyhow::anyhow!("Terminal session not found: {id}"))?;
         let mut writer = session.writer.lock().unwrap();
         writer.write_all(data)?;
         writer.flush()?;
@@ -142,10 +176,25 @@ impl TerminalManager {
     }
 
     pub fn resize(&self, id: &str, cols: u16, rows: u16) -> anyhow::Result<()> {
+        // A 2×1 is what a fit against a hidden 0×0 box produces; it is never a
+        // size anyone wants their shell wrapped to.
+        if cols < 2 || rows < 1 {
+            anyhow::bail!("invalid terminal size {cols}x{rows}");
+        }
         let session = self
             .sessions
             .get(id)
-            .ok_or_else(|| anyhow::anyhow!("Terminal session not found: {}", id))?;
+            .ok_or_else(|| anyhow::anyhow!("Terminal session not found: {id}"))?;
+        {
+            let mut last = session
+                .size
+                .lock()
+                .map_err(|_| anyhow::anyhow!("terminal size mutex poisoned"))?;
+            if !needs_resize(*last, (cols, rows)) {
+                return Ok(());
+            }
+            *last = (cols, rows);
+        }
         let master = session
             .master
             .lock()
@@ -159,6 +208,43 @@ impl TerminalManager {
         Ok(())
     }
 
+    /// Kill the PTY's foreground job without killing the login shell. Returns
+    /// false when the shell already owns the foreground (the job exited, or the
+    /// terminal is idle), which also makes a late force-stop click race-safe.
+    pub fn kill_foreground(&self, id: &str) -> anyhow::Result<bool> {
+        let session = self
+            .sessions
+            .get(id)
+            .ok_or_else(|| anyhow::anyhow!("Terminal session not found: {id}"))?;
+
+        #[cfg(unix)]
+        {
+            let foreground = session
+                .master
+                .lock()
+                .map_err(|_| anyhow::anyhow!("terminal master mutex poisoned"))?
+                .process_group_leader();
+            let Some(pgid) = foreground_job_pgid(session.pid, foreground) else {
+                return Ok(false);
+            };
+            let result = unsafe { libc::kill(-pgid, libc::SIGKILL) };
+            if result == 0 {
+                return Ok(true);
+            }
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::ESRCH) {
+                return Ok(false);
+            }
+            Err(error.into())
+        }
+
+        #[cfg(not(unix))]
+        {
+            let _ = session;
+            anyhow::bail!("Force stopping foreground terminal jobs is unsupported on this platform")
+        }
+    }
+
     pub fn close(&mut self, id: &str) {
         self.sessions.remove(id);
     }
@@ -166,6 +252,75 @@ impl TerminalManager {
     /// PID of the session's login shell (for `cwd_of_pid`).
     pub fn pid(&self, id: &str) -> Option<u32> {
         self.sessions.get(id)?.pid
+    }
+
+    /// A handle for sampling this session's tty line discipline. See
+    /// [`TtyModeProbe`].
+    pub fn mode_probe(&self, id: &str) -> Option<TtyModeProbe> {
+        Some(TtyModeProbe {
+            master: Arc::downgrade(&self.sessions.get(id)?.master),
+        })
+    }
+}
+
+/// Samples whether the pty is in raw mode, so the UI can tell a full-screen /
+/// inline TUI apart from a program reading lines.
+///
+/// Reads the termios of the MASTER fd: on both macOS and Linux the master
+/// reports the slave's line discipline, so this sees an app's `tcsetattr` in
+/// the child without any cooperation from it.
+///
+/// Holds a `Weak` deliberately — the master must stay droppable by
+/// `TerminalManager::close` or the shell never gets its HUP, and a probe that
+/// outlived the session would otherwise ioctl a recycled fd.
+pub struct TtyModeProbe {
+    master: Weak<Mutex<Box<dyn MasterPty + Send>>>,
+}
+
+impl TtyModeProbe {
+    /// `Some(true)` when the tty is in raw mode (ICANON cleared); `None` once
+    /// the session is gone or the ioctl fails.
+    ///
+    /// Raw mode ALONE does not mean an interactive app is running: zsh's line
+    /// editor puts the tty in raw mode at every prompt, and a TUI that exits
+    /// without restoring leaves it raw. Callers must pair this with "a command
+    /// is currently running" — zsh restores cooked mode before it execs.
+    pub fn is_raw(&self) -> Option<bool> {
+        #[cfg(unix)]
+        {
+            let master = self.master.upgrade()?;
+            let guard = master.lock().ok()?;
+            let fd = guard.as_raw_fd()?;
+            let mut attrs: libc::termios = unsafe { std::mem::zeroed() };
+            if unsafe { libc::tcgetattr(fd, &mut attrs) } != 0 {
+                return None;
+            }
+            Some(attrs.c_lflag & libc::ICANON == 0)
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = &self.master;
+            None
+        }
+    }
+}
+
+#[cfg(unix)]
+fn foreground_job_pgid(shell_pid: Option<u32>, foreground_pgid: Option<i32>) -> Option<i32> {
+    let pgid = foreground_pgid.filter(|pid| *pid > 0)?;
+    (shell_pid != Some(pgid as u32)).then_some(pgid)
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::foreground_job_pgid;
+
+    #[test]
+    fn foreground_job_excludes_the_login_shell() {
+        assert_eq!(foreground_job_pgid(Some(42), Some(42)), None);
+        assert_eq!(foreground_job_pgid(Some(42), Some(84)), Some(84));
+        assert_eq!(foreground_job_pgid(Some(42), None), None);
+        assert_eq!(foreground_job_pgid(Some(42), Some(0)), None);
     }
 }
 
@@ -188,7 +343,7 @@ pub fn cwd_of_pid(pid: u32) -> Option<String> {
             .ok()?;
         let s = String::from_utf8_lossy(&out.stdout);
         s.lines()
-            .find_map(|l| l.strip_prefix('n').map(|p| p.to_string()))
+            .find_map(|l| l.strip_prefix('n').map(std::string::ToString::to_string))
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
@@ -198,7 +353,23 @@ pub fn cwd_of_pid(pid: u32) -> Option<String> {
 }
 
 fn detect_shell() -> String {
-    std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string())
+    // No $SHELL on Windows (a Git Bash parent can leak a POSIX path into it).
+    // Windows PowerShell ships with every supported release.
+    if cfg!(windows) {
+        return "powershell.exe".to_string();
+    }
+    std::env::var("SHELL")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| {
+            if cfg!(target_os = "macos") {
+                "/bin/zsh".to_string()
+            } else if std::path::Path::new("/bin/bash").exists() {
+                "/bin/bash".to_string()
+            } else {
+                "/bin/sh".to_string()
+            }
+        })
 }
 
 // ── zsh shell integration ──────────────────────────────────────────────────
@@ -264,6 +435,14 @@ ZDOTDIR="$ATLAS_USER_ZDOTDIR"
 /// interactive root shell (`sudo -s` / `-i` / `su`) WITH Atlas's shell
 /// integration so command blocks / prompt markers keep working as root.
 pub fn zsh_integration_dir() -> Option<std::path::PathBuf> {
+    let shell = detect_shell();
+    let is_zsh = std::path::Path::new(&shell)
+        .file_name()
+        .and_then(|f| f.to_str())
+        .is_some_and(|name| name == "zsh" || name.starts_with("zsh"));
+    if !is_zsh {
+        return None;
+    }
     ensure_zsh_integration_dir()
 }
 
@@ -281,4 +460,16 @@ fn ensure_zsh_integration_dir() -> Option<std::path::PathBuf> {
         std::fs::write(dir.join(name), body).ok()?;
     }
     Some(dir)
+}
+
+#[cfg(test)]
+mod resize_tests {
+    use super::needs_resize;
+
+    #[test]
+    fn resize_dedups() {
+        assert!(!needs_resize((120, 40), (120, 40)));
+        assert!(needs_resize((120, 40), (121, 40)));
+        assert!(needs_resize((120, 40), (120, 39)));
+    }
 }

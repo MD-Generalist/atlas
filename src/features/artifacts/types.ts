@@ -20,19 +20,42 @@ export interface SessionSummary {
   title: string | null;
   agent: string | null;
   model: string | null;
-  /** `acp`, `cersei` or `external_jsonl`. */
+  /** `acp`, `native` or `external_jsonl`. */
   source: string;
   startedAt: string;
+  /** When the row was last *written*. Liveness only — never group or sort on
+   *  it: an import or a token update bumps it and neither is work. */
   updatedAt: string;
-  durationSeconds: number;
+  /** When the Session last did work. The key for ordering and day grouping. */
+  lastActivityAt: string;
+  /** Agent time — turn spans when the agent reported them, otherwise the
+   *  gap-capped sum of message intervals. Not the wall-clock span. */
+  activeSeconds: number;
+  /** First activity to last, idle included. Usually much larger. */
+  wallSeconds: number;
   messageCount: number;
   toolCallCount: number;
   checkpointCount: number;
+  /** Every branch touched: the starting branch first, then Checkpoint branches. */
   branches: string[];
   insertions: number;
   deletions: number;
   filesTouched: number;
+  /** Input + output. `0` for an agent that reports no split — see `contextUsed`. */
   totalTokens: number;
+  /** The halves of `totalTokens`, kept apart because they are priced apart —
+   *  an Opus output token costs five times an input one. */
+  inputTokens: number;
+  outputTokens: number;
+  /** Cache writes and cache reads. Real spend, carried beside the split rather
+   *  than inside it — for a cache-heavy agent they dwarf both. */
+  cacheCreationTokens: number;
+  cacheReadTokens: number;
+  /** Context-window occupancy, for agents that report only that (every ACP
+   *  agent). Deliberately not folded into `totalTokens`: occupancy is not
+   *  consumption, and a compaction makes it go down. */
+  contextUsed: number | null;
+  contextSize: number | null;
   needsAttention: boolean;
   attentionReason: string | null;
 }
@@ -123,12 +146,80 @@ export const DEFAULT_FILTERS: TimelineFilters = {
 };
 
 /**
+ * One Checkpoint on the board — mirrors `atlas_checkpoint::CheckpointRow` plus
+ * the project tag `commands::capture::BoardCheckpoint` adds.
+ *
+ * Deliberately smaller than a `TimelineEntry`: this is a jump target, not a
+ * reading surface.
+ */
+export interface BoardCheckpoint {
+  sessionId: string;
+  /** The Session's title, so a row says which work produced the commit. */
+  sessionTitle: string | null;
+  commitSha: string;
+  /** Read from git at display time; `null` if the repo moved or the commit is gone. */
+  commitSubject: string | null;
+  branch: string | null;
+  linkState: LinkState;
+  insertions: number;
+  deletions: number;
+  files: number;
+  at: string;
+  projectPath: string;
+  projectName: string;
+}
+
+/**
  * A board row: a Session plus the project it came from.
  *
  * The board spans every project in the Organisation, so a row can no longer
- * assume the open Workspace — reading the Session back needs its own store.
+ * assume the open Project — reading the Session back needs its own store.
  */
 export interface BoardSession extends SessionSummary {
+  /** Empty for a Session from a Project this machine has no checkout of. */
   projectPath: string;
   projectName: string;
+  /**
+   * Is this Session on the server?
+   *
+   * Project-level, not row-level: "has every row drained" would cost an outbox
+   * scan per Session on a read that runs on every capture event, to answer a
+   * question nobody asked. The queue depth is `CaptureHealth.pendingRows`.
+   */
+  synced: boolean;
+  origin: SessionOrigin;
+  /** The server Project id, for cloud reads and the realtime socket. */
+  remoteProjectId: string | null;
+  /** `null` on a local row — a Session on this disk is this account's. */
+  authorId: string | null;
+}
+
+/**
+ * Where a board row was read from.
+ *
+ * `both` is the normal state of your own work once a Project is synced. It
+ * matters because such a row can be opened from disk — faster, and offline —
+ * while still carrying comments.
+ */
+export type SessionOrigin = "local" | "remote" | "both";
+
+/**
+ * One board read — mirrors `commands::capture::BoardPage`.
+ *
+ * `cloudPending` is the difference between "this Organisation has no Sessions"
+ * and "the remote half has not arrived yet". A synced Organisation has no local
+ * rows to show while its first server read is in flight, and an empty board at
+ * that moment must render as loading rather than as empty.
+ */
+export interface BoardPage {
+  sessions: BoardSession[];
+  cloudPending: boolean;
+  /**
+   * The remote half could not be read at all.
+   *
+   * The rows are this machine's, plus whatever an earlier refresh cached — a
+   * partial view that has to be labelled rather than presented as the whole
+   * board. Goes false again the moment any refresh succeeds.
+   */
+  cloudFailed: boolean;
 }

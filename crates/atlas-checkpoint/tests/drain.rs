@@ -19,9 +19,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use atlas_checkpoint::artifacts::AtlasArtifact;
-use atlas_checkpoint::model::WorkspaceMode;
+use atlas_checkpoint::model::ProjectMode;
 use atlas_checkpoint::{
-    bind, drain, Capture, DrainStatus, Role, SessionKey, Source, Store, SyncConfig, TurnContent,
+    bind, connect_workspace, drain, register_workspace, Capture, ConnectOutcome, ConnectRequest,
+    DrainStatus, Registration, Role, SessionKey, Source, Store, SyncConfig, TurnContent,
     SPILL_THRESHOLD_BYTES,
 };
 
@@ -38,7 +39,9 @@ const ORG: &str = "org-tryatlas";
 enum Reply {
     Accept,
     /// Accept some rows and reject others, by row-id substring.
-    Partial { reject: Vec<String> },
+    Partial {
+        reject: Vec<String>,
+    },
     Status(u16),
     /// Accept, but only once the token has been refreshed.
     ExpireOnce,
@@ -48,6 +51,8 @@ enum Reply {
     RejectContaining(String),
     /// 429 with a `Retry-After` header of this many seconds.
     RetryAfter(u64),
+    /// Accept, after this many milliseconds — a slow uplink.
+    SlowAccept(u64),
 }
 
 struct Stub {
@@ -57,6 +62,9 @@ struct Stub {
     ingest_calls: Arc<AtomicUsize>,
     blob_calls: Arc<AtomicUsize>,
     blob_tokens: Arc<Mutex<Vec<String>>>,
+    /// Raw bodies of every `POST /workspaces` and `POST /workspaces/connect`,
+    /// so a test can assert what the registry was actually sent.
+    registry_bodies: Arc<Mutex<Vec<String>>>,
 }
 
 impl Stub {
@@ -74,6 +82,7 @@ impl Stub {
         let ingest_calls = Arc::new(AtomicUsize::new(0));
         let blob_calls = Arc::new(AtomicUsize::new(0));
         let blob_tokens = Arc::new(Mutex::new(Vec::new()));
+        let registry_bodies = Arc::new(Mutex::new(Vec::new()));
 
         let stub = Self {
             base_url,
@@ -82,6 +91,7 @@ impl Stub {
             ingest_calls: ingest_calls.clone(),
             blob_calls: blob_calls.clone(),
             blob_tokens: blob_tokens.clone(),
+            registry_bodies: registry_bodies.clone(),
         };
 
         std::thread::spawn(move || {
@@ -98,6 +108,7 @@ impl Stub {
                     &ingest_calls,
                     &blob_calls,
                     &blob_tokens,
+                    &registry_bodies,
                     &mut seen_tokens,
                 );
             }
@@ -124,6 +135,15 @@ impl Stub {
     fn blob_tokens(&self) -> Vec<String> {
         self.blob_tokens.lock().unwrap().clone()
     }
+
+    fn registry_bodies(&self) -> Vec<serde_json::Value> {
+        self.registry_bodies
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|b| serde_json::from_str(b).expect("registry body is JSON"))
+            .collect()
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -137,6 +157,7 @@ fn handle(
     ingest_calls: &Arc<AtomicUsize>,
     blob_calls: &Arc<AtomicUsize>,
     blob_tokens: &Arc<Mutex<Vec<String>>>,
+    registry_bodies: &Arc<Mutex<Vec<String>>>,
     seen_tokens: &mut Vec<String>,
 ) {
     let mut reader = BufReader::new(stream.try_clone().unwrap());
@@ -165,10 +186,7 @@ fn handle(
         let _ = reader.read_exact(&mut body);
     }
 
-    let token = headers
-        .get("authorization")
-        .cloned()
-        .unwrap_or_default();
+    let token = headers.get("authorization").cloned().unwrap_or_default();
 
     // Blob upload.
     if request_line.starts_with("PUT /blobs/") {
@@ -191,19 +209,44 @@ fn handle(
     // Slug availability.
     if request_line.starts_with("GET /workspaces/slug-available") {
         let available = !request_line.contains("slug=taken");
+        respond(&mut stream, 200, &format!("{{\"available\":{available}}}"));
+        return;
+    }
+
+    // Connecting — the stub does no matching; it records the body and answers
+    // "nothing matched", which is enough to assert the wire shape.
+    if request_line.starts_with("POST /workspaces/connect") {
+        registry_bodies
+            .lock()
+            .unwrap()
+            .push(String::from_utf8_lossy(&body).into_owned());
         respond(
             &mut stream,
             200,
-            &format!("{{\"available\":{available}}}"),
+            "{\"status\":\"no_match\",\"candidates\":[]}",
         );
         return;
     }
 
-    // Workspace registration.
+    // Project registration.
     if request_line.starts_with("POST /workspaces ") {
-        if String::from_utf8_lossy(&body).contains("\"slug\":\"taken\"") {
+        let text = String::from_utf8_lossy(&body).into_owned();
+        registry_bodies.lock().unwrap().push(text.clone());
+        if text.contains("\"slug\":\"taken\"") {
             respond(&mut stream, 409, "{}");
+        } else if text.contains("null") {
+            // What the real registry does with a `null` optional: a schema
+            // refusal whose message names the field.
+            respond(
+                &mut stream,
+                422,
+                "{\"error\":{\"code\":\"bad_request\",\"message\":\"Expected string, received null\"}}",
+            );
         } else {
+            // `workspaceId` is the SERVER's key for the new id, and the one
+            // `register_workspace` reads (`sync.rs`). The Project/Workspace
+            // rename is UI vocabulary; it did not rename the wire, so a stub
+            // answering `projectId` here describes a server that doesn't exist.
             respond(&mut stream, 200, "{\"workspaceId\":\"ws-remote-1\"}");
         }
         return;
@@ -234,6 +277,11 @@ fn handle(
             received.lock().unwrap().extend(artifacts);
             respond(&mut stream, 202, "{}");
         }
+        Reply::SlowAccept(ms) => {
+            std::thread::sleep(Duration::from_millis(ms));
+            received.lock().unwrap().extend(artifacts);
+            respond(&mut stream, 202, "{}");
+        }
         Reply::Partial { reject } => {
             let results: Vec<serde_json::Value> = artifacts
                 .iter()
@@ -243,12 +291,11 @@ fn handle(
                     serde_json::json!({ "rowId": id, "accepted": accepted })
                 })
                 .collect();
-            received
-                .lock()
-                .unwrap()
-                .extend(artifacts.into_iter().filter(|a| {
-                    !reject.iter().any(|r| a.row_id().contains(r.as_str()))
-                }));
+            received.lock().unwrap().extend(
+                artifacts
+                    .into_iter()
+                    .filter(|a| !reject.iter().any(|r| a.row_id().contains(r.as_str()))),
+            );
             respond(
                 &mut stream,
                 202,
@@ -292,12 +339,12 @@ fn respond_with_header(stream: &mut TcpStream, status: u16, header: &str, body: 
 
 fn cloud_store(dir: &std::path::Path) -> Store {
     let store = Store::open(dir.join(".atlas")).expect("store opens");
-    bind(&store, WORKSPACE, dir, WorkspaceMode::Cloud).expect("binds");
+    bind(&store, WORKSPACE, dir, ProjectMode::Cloud).expect("binds");
     store
 }
 
 fn record(store: &mut Store, native_id: &str, body: &str) -> String {
-    let mut capture = Capture::new(store, WorkspaceMode::Cloud);
+    let mut capture = Capture::new(store, ProjectMode::Cloud);
     let session = capture
         .record_prompt(
             &SessionKey {
@@ -336,6 +383,7 @@ fn config<'a>(base_url: &str, token: &'a dyn Fn() -> Option<String>) -> SyncConf
         wire_workspace_id: WIRE_WORKSPACE.to_string(),
         token,
         timeout: Duration::from_secs(5),
+        deadline: None,
     }
 }
 
@@ -356,7 +404,11 @@ fn pending_rows_are_uploaded_and_marked_sent() {
     let outcome = drain(&store, &config(&stub.base_url, &token)).expect("drains");
 
     assert_eq!(outcome.status, DrainStatus::Drained);
-    assert!(outcome.sent >= 3, "session + prompt + response, got {}", outcome.sent);
+    assert!(
+        outcome.sent >= 3,
+        "session + prompt + response, got {}",
+        outcome.sent
+    );
     assert_eq!(outcome.still_pending, 0);
     assert!(!stub.artifacts().is_empty());
 }
@@ -381,7 +433,7 @@ fn no_author_field_is_ever_sent() {
 }
 
 #[test]
-fn the_wire_workspace_id_is_never_the_local_row_key() {
+fn the_wire_project_id_is_never_the_local_row_key() {
     // The local row key is the project path — machine-specific, privacy-bearing,
     // and useless to the server for converging two teammates onto one timeline.
     // Every artifact must carry the registered wire identity instead.
@@ -397,9 +449,124 @@ fn the_wire_workspace_id_is_never_the_local_row_key() {
     assert!(!artifacts.is_empty());
     for artifact in artifacts {
         let json = serde_json::to_string(&artifact).unwrap();
-        assert!(json.contains(WIRE_WORKSPACE), "{json}");
+        assert!(
+            json.contains(&format!("\"workspaceId\":\"{WIRE_WORKSPACE}\"")),
+            "{json}"
+        );
         assert!(!json.contains(&format!("\"{WORKSPACE}\"")), "{json}");
     }
+}
+
+// ── Project registration ────────────────────────────────────────────────────
+
+#[test]
+fn registering_a_project_returns_the_server_assigned_id() {
+    // The id the stub hands back under `workspaceId` is what the caller stores
+    // as the wire identity. A stub replying under any other key would make this
+    // fail with "no id in response", which is what production would do too.
+    let stub = Stub::start(vec![], 200);
+    let token = always_token();
+    let id = register_workspace(
+        &config(&stub.base_url, &token),
+        Registration {
+            slug: "atlas",
+            root_commit_sha: Some("abc123"),
+            git_url: Some("https://example.invalid/atlas.git"),
+            ..Registration::default()
+        },
+    )
+    .expect("registers");
+    assert_eq!(id, "ws-remote-1");
+}
+
+#[test]
+fn registering_without_a_name_omits_the_field_rather_than_sending_null() {
+    // The registry's schema takes `name` as optional-but-not-nullable, and the
+    // popover sends no name. `json!` would write `null` and earn a 422 — the
+    // "Promote to Cloud" failure of 2026-09-25. Absent must mean absent.
+    let stub = Stub::start(vec![], 200);
+    let token = always_token();
+    register_workspace(
+        &config(&stub.base_url, &token),
+        Registration {
+            slug: "atlas",
+            ..Registration::default()
+        },
+    )
+    .expect("registers without a name or fingerprints");
+
+    let bodies = stub.registry_bodies();
+    let body = bodies[0].as_object().expect("object body");
+    let mut keys: Vec<&str> = body.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["orgId", "slug", "visibility"], "{body:?}");
+    assert!(body.values().all(|v| !v.is_null()), "{body:?}");
+    assert_eq!(body["visibility"], "org");
+}
+
+#[test]
+fn a_schema_refusal_reports_the_server_message_not_the_store() {
+    // Force the stub's 422 with a literal null in the body. What the caller
+    // sees must name the server and its reason — "session store is not
+    // writable" was the old wording, and nothing about the store was wrong.
+    let stub = Stub::start(vec![], 200);
+    let token = always_token();
+    let err = register_workspace(
+        &config(&stub.base_url, &token),
+        Registration {
+            slug: "null",
+            ..Registration::default()
+        },
+    )
+    .expect_err("a 422 is an error");
+    let text = err.to_string();
+    assert!(text.contains("422"), "{text}");
+    assert!(text.contains("Expected string, received null"), "{text}");
+    assert!(!text.contains("session store"), "{text}");
+}
+
+#[test]
+fn connecting_on_fingerprints_alone_sends_no_null_keys() {
+    // The common connect: no picked id, no slug — match on what git says.
+    let stub = Stub::start(vec![], 200);
+    let token = always_token();
+    let outcome = connect_workspace(
+        &config(&stub.base_url, &token),
+        ConnectRequest {
+            root_commit_sha: Some("abc123"),
+            git_url: Some("git@github.com:tryatlas/atlas.git"),
+            ..ConnectRequest::default()
+        },
+    )
+    .expect("connect answers");
+    assert_eq!(outcome, ConnectOutcome::NoMatch);
+
+    let bodies = stub.registry_bodies();
+    let body = bodies[0].as_object().expect("object body");
+    let mut keys: Vec<&str> = body.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        ["create", "gitUrl", "orgId", "rootCommitSha"],
+        "{body:?}"
+    );
+    assert!(body.values().all(|v| !v.is_null()), "{body:?}");
+    assert_eq!(body["create"], false);
+}
+
+#[test]
+fn registering_a_taken_slug_is_refused_plainly() {
+    let stub = Stub::start(vec![], 200);
+    let token = always_token();
+    let err = register_workspace(
+        &config(&stub.base_url, &token),
+        Registration {
+            slug: "taken",
+            ..Registration::default()
+        },
+    )
+    .expect_err("a 409 is an error");
+    assert!(err.to_string().contains("already taken"), "{err}");
 }
 
 #[test]
@@ -448,7 +615,9 @@ fn when_the_server_recovers_pending_rows_drain() {
 
     let token = always_token();
     assert_eq!(
-        drain(&store, &config("http://127.0.0.1:1", &token)).unwrap().status,
+        drain(&store, &config("http://127.0.0.1:1", &token))
+            .unwrap()
+            .status,
         DrainStatus::Offline
     );
 
@@ -469,7 +638,11 @@ fn a_server_error_leaves_rows_pending_rather_than_failing_them() {
     let token = always_token();
     let outcome = drain(&store, &config(&stub.base_url, &token)).unwrap();
 
-    assert_eq!(outcome.status, DrainStatus::Offline, "5xx is the server's problem");
+    assert_eq!(
+        outcome.status,
+        DrainStatus::Offline,
+        "5xx is the server's problem"
+    );
     assert_eq!(outcome.failed, 0);
     assert!(outcome.still_pending > 0);
 }
@@ -498,7 +671,7 @@ fn a_token_expiring_mid_drain_refreshes_and_resumes() {
 
 #[test]
 fn a_permanent_authorization_failure_stops_retrying_and_says_so() {
-    // Removed from the Organisation, or the Workspace was deleted. Presenting
+    // Removed from the Organisation, or the Project was deleted. Presenting
     // that as a transient failure would be an endless spinner.
     let dir = tempfile::tempdir().unwrap();
     let mut store = cloud_store(dir.path());
@@ -551,14 +724,22 @@ fn a_rejected_row_is_marked_failed_and_the_rest_still_drain() {
     record(&mut store, "s1", "hello");
 
     // Reject the Session row; messages still go.
-    let stub = Stub::start(vec![Reply::Partial { reject: vec!["as-".into()] }], 200);
+    let stub = Stub::start(
+        vec![Reply::Partial {
+            reject: vec!["as-".into()],
+        }],
+        200,
+    );
     let token = always_token();
     let outcome = drain(&store, &config(&stub.base_url, &token)).unwrap();
 
     assert_eq!(outcome.failed, 1, "the rejected row is marked failed");
     assert!(outcome.sent > 0, "the rest kept draining");
     assert!(
-        store.row_count_in_state(WORKSPACE, atlas_checkpoint::SyncState::Failed).unwrap() > 0
+        store
+            .row_count_in_state(WORKSPACE, atlas_checkpoint::SyncState::Failed)
+            .unwrap()
+            > 0
     );
 }
 
@@ -613,7 +794,10 @@ fn a_row_is_never_sent_when_its_blob_upload_failed() {
             "a row with a spilled payload was sent despite the blob failing"
         );
     }
-    assert!(outcome.still_pending > 0, "it stays pending for the next pass");
+    assert!(
+        outcome.still_pending > 0,
+        "it stays pending for the next pass"
+    );
 }
 
 // ── Batching ────────────────────────────────────────────────────────────────
@@ -627,7 +811,13 @@ fn batches_respect_the_count_ceiling() {
     }
 
     let batch = store
-        .pending_artifacts(WORKSPACE, WIRE_WORKSPACE, ORG, atlas_checkpoint::sync::MAX_BATCH_COUNT, usize::MAX)
+        .pending_artifacts(
+            WORKSPACE,
+            WIRE_WORKSPACE,
+            ORG,
+            atlas_checkpoint::sync::MAX_BATCH_COUNT,
+            usize::MAX,
+        )
         .unwrap();
     assert!(batch.len() <= atlas_checkpoint::sync::MAX_BATCH_COUNT);
 }
@@ -642,9 +832,17 @@ fn batches_respect_the_byte_ceiling_independently_of_the_count() {
         record(&mut store, &format!("s{i}"), &"x".repeat(40_000));
     }
 
-    let batch = store.pending_artifacts(WORKSPACE, WIRE_WORKSPACE, ORG, 100, 64 * 1024).unwrap();
-    let bytes: usize = batch.iter().map(|a| a.approx_bytes()).sum();
-    assert!(batch.len() < 100, "the byte ceiling bit before the count did");
+    let batch = store
+        .pending_artifacts(WORKSPACE, WIRE_WORKSPACE, ORG, 100, 64 * 1024)
+        .unwrap();
+    let bytes: usize = batch
+        .iter()
+        .map(atlas_checkpoint::artifacts::AtlasArtifact::approx_bytes)
+        .sum();
+    assert!(
+        batch.len() < 100,
+        "the byte ceiling bit before the count did"
+    );
     assert!(bytes < 512 * 1024, "batch was {bytes} bytes");
 }
 
@@ -659,7 +857,11 @@ fn a_batch_level_rejection_bisects_to_the_poison_row_and_the_rest_drain() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = cloud_store(dir.path());
     record(&mut store, "s1", "a perfectly fine answer");
-    record(&mut store, "s2", "poison marker that fails any batch carrying it");
+    record(
+        &mut store,
+        "s2",
+        "poison marker that fails any batch carrying it",
+    );
     record(&mut store, "s3", "another fine answer");
 
     let stub = Stub::start(
@@ -671,9 +873,14 @@ fn a_batch_level_rejection_bisects_to_the_poison_row_and_the_rest_drain() {
 
     assert_eq!(outcome.failed, 1, "exactly the poison row was convicted");
     assert_eq!(outcome.sent, 8, "3 sessions + 6 messages, minus the poison");
-    assert_eq!(outcome.still_pending, 0, "nothing left stalled behind the poison");
     assert_eq!(
-        store.row_count_in_state(WORKSPACE, atlas_checkpoint::SyncState::Failed).unwrap(),
+        outcome.still_pending, 0,
+        "nothing left stalled behind the poison"
+    );
+    assert_eq!(
+        store
+            .row_count_in_state(WORKSPACE, atlas_checkpoint::SyncState::Failed)
+            .unwrap(),
         1
     );
     assert!(
@@ -697,7 +904,11 @@ fn convicted_rows_can_be_re_pended_and_then_drain() {
 
     assert_eq!(first.failed, 3, "every row was convicted one by one");
     assert_eq!(first.still_pending, 0);
-    assert_eq!(first.status, DrainStatus::Drained, "nothing pending remains");
+    assert_eq!(
+        first.status,
+        DrainStatus::Drained,
+        "nothing pending remains"
+    );
     assert!(
         rejecting.ingest_calls() <= 8,
         "conviction is bounded, took {} passes",
@@ -711,7 +922,9 @@ fn convicted_rows_can_be_re_pended_and_then_drain() {
     assert_eq!(second.status, DrainStatus::Drained);
     assert_eq!(second.sent, 3, "the re-pended rows drained");
     assert_eq!(
-        store.row_count_in_state(WORKSPACE, atlas_checkpoint::SyncState::Failed).unwrap(),
+        store
+            .row_count_in_state(WORKSPACE, atlas_checkpoint::SyncState::Failed)
+            .unwrap(),
         0
     );
 }
@@ -759,9 +972,16 @@ fn a_blob_upload_403_surfaces_not_authorized_and_rows_stay_pending() {
     assert_eq!(outcome.status, DrainStatus::NotAuthorized);
     assert_eq!(outcome.sent, 0, "nothing was sent");
     assert_eq!(outcome.failed, 0, "a 403 is not the rows' fault");
-    assert!(outcome.still_pending > 0, "rows stay pending, honestly reported");
+    assert!(
+        outcome.still_pending > 0,
+        "rows stay pending, honestly reported"
+    );
     assert!(stub.artifacts().is_empty());
-    assert_eq!(stub.blob_calls(), 1, "the drain stopped instead of retrying");
+    assert_eq!(
+        stub.blob_calls(),
+        1,
+        "the drain stopped instead of retrying"
+    );
 }
 
 // ── Permanently unsendable rows ─────────────────────────────────────────────
@@ -784,9 +1004,15 @@ fn a_missing_local_blob_fails_its_row_and_everything_else_drains() {
     assert_eq!(outcome.failed, 1, "the blob-less row failed");
     assert!(outcome.sent > 0, "everything else drained");
     assert_eq!(outcome.still_pending, 0);
-    assert_eq!(outcome.status, DrainStatus::Drained, "an honest Drained: nothing pending remains");
     assert_eq!(
-        store.row_count_in_state(WORKSPACE, atlas_checkpoint::SyncState::Failed).unwrap(),
+        outcome.status,
+        DrainStatus::Drained,
+        "an honest Drained: nothing pending remains"
+    );
+    assert_eq!(
+        store
+            .row_count_in_state(WORKSPACE, atlas_checkpoint::SyncState::Failed)
+            .unwrap(),
         1
     );
     for artifact in stub.artifacts() {
@@ -822,7 +1048,10 @@ fn a_persistent_401_refreshes_exactly_once_then_stops() {
         2,
         "one original attempt plus exactly one refreshed retry"
     );
-    assert!(outcome.still_pending > 0, "rows stay pending for a later, fixed credential");
+    assert!(
+        outcome.still_pending > 0,
+        "rows stay pending for a later, fixed credential"
+    );
 }
 
 // ── Batch construction edge ─────────────────────────────────────────────────
@@ -837,11 +1066,17 @@ fn a_single_artifact_over_the_byte_ceiling_still_ships_alone() {
 
     let mut passes = 0;
     loop {
-        let batch = store.pending_artifacts(WORKSPACE, WIRE_WORKSPACE, ORG, 100, 1).unwrap();
+        let batch = store
+            .pending_artifacts(WORKSPACE, WIRE_WORKSPACE, ORG, 100, 1)
+            .unwrap();
         if batch.is_empty() {
             break;
         }
-        assert_eq!(batch.len(), 1, "every artifact dwarfs the ceiling, so each ships alone");
+        assert_eq!(
+            batch.len(),
+            1,
+            "every artifact dwarfs the ceiling, so each ships alone"
+        );
         store.mark_sent(batch[0].row_id()).unwrap();
         passes += 1;
         assert!(passes <= 10, "the queue drains rather than deadlocking");
@@ -870,14 +1105,14 @@ fn a_429_carries_the_servers_retry_after_hint_into_the_outcome() {
 // ── Local mode never drains ─────────────────────────────────────────────────
 
 #[test]
-fn a_local_workspace_accumulates_rows_that_never_drain() {
+fn a_local_project_accumulates_rows_that_never_drain() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path().join(".atlas")).unwrap();
-    bind(&store, WORKSPACE, dir.path(), WorkspaceMode::Local).unwrap();
+    bind(&store, WORKSPACE, dir.path(), ProjectMode::Local).unwrap();
 
     let mut store = store;
     {
-        let mut capture = Capture::new(&mut store, WorkspaceMode::Local);
+        let mut capture = Capture::new(&mut store, ProjectMode::Local);
         capture
             .record_prompt(
                 &SessionKey {
@@ -903,4 +1138,104 @@ fn a_local_workspace_accumulates_rows_that_never_drain() {
     assert_eq!(outcome.sent, 0);
     assert_eq!(outcome.still_pending, 0);
     assert!(stub.artifacts().is_empty(), "nothing left the machine");
+}
+
+// ── Sync off the recording path ──────────────────────────────────────────────
+
+/// A pass with a budget sends at least one batch, then yields with the rest
+/// still pending — so one Project's backlog cannot hold the uplink until it is
+/// empty. The next pass (no budget) finishes the queue.
+#[test]
+fn a_budgeted_pass_yields_after_a_batch_and_the_next_pass_finishes() {
+    let stub = Stub::start(vec![Reply::Accept], 200);
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = cloud_store(dir.path());
+    for i in 0..60 {
+        record(&mut store, &format!("s{i}"), "a short answer");
+    }
+    let token = always_token();
+
+    let mut budgeted = config(&stub.base_url, &token);
+    budgeted.deadline = Some(std::time::Instant::now());
+    let first = drain(&store, &budgeted).unwrap();
+    assert_eq!(first.status, DrainStatus::Yielded);
+    assert!(
+        first.sent > 0 && first.sent <= atlas_checkpoint::sync::MAX_BATCH_COUNT,
+        "one batch: {first:?}"
+    );
+    assert!(first.still_pending > 0, "{first:?}");
+    assert_eq!(stub.ingest_calls(), 1);
+
+    let rest = drain(&store, &config(&stub.base_url, &token)).unwrap();
+    assert_eq!(rest.status, DrainStatus::Drained);
+    assert_eq!(rest.still_pending, 0);
+    assert_eq!(first.sent + rest.sent, stub.artifacts().len());
+}
+
+/// A drain on a sibling connection never holds the Store the recorder writes
+/// through: while it waits on a slow uplink, a turn records at once, and the
+/// drain still marks what it sent. The sibling writes under the same writer
+/// lock, which stays held while either connection is open.
+#[test]
+fn a_drain_on_a_sibling_never_holds_up_recording() {
+    let stub = Stub::start(vec![Reply::SlowAccept(1_500)], 200);
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = cloud_store(dir.path());
+    record(&mut store, "before", "queued before the drain");
+
+    let sibling = store.sibling().expect("a sibling opens");
+    assert!(
+        sibling.is_writer(),
+        "the sibling writes under this process's lock"
+    );
+    let base_url = stub.base_url.clone();
+    let draining = std::thread::spawn(move || {
+        let token = always_token();
+        drain(&sibling, &config(&base_url, &token)).unwrap()
+    });
+    // Let the drain reach the network.
+    while stub.ingest_calls() == 0 {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    let started = std::time::Instant::now();
+    record(
+        &mut store,
+        "during",
+        "recorded while the drain waits on the uplink",
+    );
+    let took = started.elapsed();
+    assert!(
+        took < Duration::from_millis(1_000),
+        "recording waited {took:?} on the drain"
+    );
+
+    let outcome = draining.join().unwrap();
+    assert_eq!(outcome.status, DrainStatus::Drained);
+    assert!(outcome.sent > 0);
+    // What was recorded while it ran is not lost: the drain's next batch
+    // picked it up, through its own connection.
+    assert_eq!(outcome.still_pending, 0, "{outcome:?}");
+    assert_eq!(outcome.sent, stub.artifacts().len());
+
+    // The writer lock is still this process's while the original is open.
+    let second = Store::open(dir.path().join(".atlas")).unwrap();
+    assert!(!second.is_writer(), "a second open still loses the lock");
+}
+
+/// The sibling keeps the writer lock alive on its own: dropping the store it
+/// came from does not hand the Project to another opener while a sync pass is
+/// still writing.
+#[test]
+fn a_sibling_holds_the_writer_lock_after_its_origin_is_dropped() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = cloud_store(dir.path());
+    let sibling = store.sibling().unwrap();
+    drop(store);
+    assert!(!Store::open(dir.path().join(".atlas")).unwrap().is_writer());
+    drop(sibling);
+    assert!(
+        Store::open(dir.path().join(".atlas")).unwrap().is_writer(),
+        "released with the last connection"
+    );
 }

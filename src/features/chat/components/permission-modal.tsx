@@ -1,12 +1,7 @@
-import { useEffect, useRef, useState } from "react";
-import * as Dialog from "@radix-ui/react-dialog";
-import {
-  CheckCircle2,
-  XCircle,
-  AlertTriangle,
-  ClipboardList,
-  CircleHelp,
-} from "lucide-react";
+import { memo, useEffect, useRef, useState } from "react";
+import { Dialog } from "@base-ui/react/dialog";
+import { DialogOverlay } from "@/ui/dialog";
+import { CheckCircle2, XCircle, AlertTriangle, ClipboardList, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { useChatStore } from "../stores/chat-store";
 import { agents } from "../lib/agents-api";
@@ -14,9 +9,20 @@ import { cn } from "@/lib/utils";
 import { Kbd } from "@/ui/kbd";
 import { Markdown } from "@/lib/markdown";
 import { extractPlanMarkdown } from "../lib/plans";
-import { extractQuestions } from "../lib/questions";
+import { exitPlanOffersBypass } from "../lib/exit-plan-modes";
+import { composeAnswers, extractQuestions } from "../lib/questions";
+import { ApprovalCard, type Answer } from "./approval-card";
 import type { PermissionOptionRef, PendingPermission } from "@/types/acp";
-import { AGENT_LABEL, type AgentType } from "@/types/agent";
+import { type AgentType } from "@/types/agent";
+import { agentMeta } from "@/features/agents/lib/agent-meta";
+import {
+  isOutwardCall,
+  keyMayPick,
+  outwardApprovalOf,
+  outwardPreparingOf,
+  type OutwardApproval,
+  type OutwardPreparing,
+} from "@/features/org-actions/lib/outward-approval";
 
 function isAllow(kind: string) {
   return kind === "allow_once" || kind === "allow_always";
@@ -29,9 +35,11 @@ function isReject(kind: string) {
 // codex-acp emits "No, and tell Codex what to do differently"). Rewrite any
 // OTHER agent's brand to the agent actually bound to this session so the card
 // never names the wrong agent. Ordered longest-first to avoid partial matches.
-const AGENT_BRANDS = ["Claude Code", "Codex", "Claude"];
+const AGENT_BRANDS = ["Claude Code", "Codex", "Claude", "OpenCode", "Cursor"];
 function relabelAgentBrand(label: string, agentType: AgentType): string {
-  const display = (AGENT_LABEL as Record<string, string>)[agentType] ?? "the agent";
+  // `agentMeta`, not a raw AGENT_LABEL read: that table only covers first-party
+  // agents, so every external one rendered as the anonymous "the agent".
+  const display = agentMeta(agentType).label;
   let out = label;
   for (const brand of AGENT_BRANDS) {
     if (brand === display) continue;
@@ -55,7 +63,12 @@ interface PermissionModalProps {
  * Cancelled requests (ESC / click outside) resolve as `cancelled` on the wire
  * so the agent backs off correctly.
  */
-export function PermissionModal({ tabId, onSendMessage }: PermissionModalProps) {
+// memo: ChatPanel re-renders per streaming rAF flush; tabId + the stable
+// onSendMessage wrapper never change identity, so the permission card's own
+// narrow store subscriptions decide when it actually re-renders.
+export const PermissionModal = memo(PermissionModalImpl);
+
+function PermissionModalImpl({ tabId, onSendMessage }: PermissionModalProps) {
   // Narrow subscription: only this tab's acpSessionId and the head of its
   // permission queue, so the card stays idle until a request actually arrives.
   const acpSessionId = useChatStore((s) => s.sessions[tabId]?.acpSessionId);
@@ -65,8 +78,8 @@ export function PermissionModal({ tabId, onSendMessage }: PermissionModalProps) 
   const queueLength = useChatStore((s) =>
     acpSessionId ? (s.pendingPermissions[acpSessionId]?.length ?? 0) : 0,
   );
-  const agentType = useChatStore((s) => s.sessions[tabId]?.agentType ?? "claude-code");
-  const popPermission = useChatStore.use.actions().popPermission;
+  const agentType = useChatStore((s) => s.sessions[tabId]?.agentType ?? "atlas-agent");
+  const { popPermission, applyExitPlanSelection } = useChatStore.use.actions();
 
   const [draft, setDraft] = useState("");
   const textRef = useRef<HTMLTextAreaElement>(null);
@@ -77,7 +90,11 @@ export function PermissionModal({ tabId, onSendMessage }: PermissionModalProps) 
     setDraft("");
   }, [reqId]);
 
-  const primaryId = current?.options.find((o) => isAllow(o.kind))?.optionId;
+  // The option Enter picks, and the one drawn as primary. None on an outward
+  // action's card: its Allow is a click (`keyMayPick`).
+  const primaryId = current?.options.find(
+    (o) => isAllow(o.kind) && keyMayPick(current.toolCall, o.kind),
+  )?.optionId;
 
   // Keyboard: digits 1–9 select, Enter = primary, Esc = cancel — except while
   // the free-text field is focused (there Enter submits text, Esc still cancels).
@@ -86,6 +103,13 @@ export function PermissionModal({ tabId, onSendMessage }: PermissionModalProps) 
     const send = (decision: Parameters<typeof agents.respondPermission>[3]) => {
       agents
         .respondPermission(current.agentId, current.acpSessionId, current.requestId, decision)
+        .then(() => {
+          // A plan approval picks a mode the adapter applies silently — see
+          // `exit-plan-modes.ts`. Mirror it, or the pill lies from here on.
+          if (decision.kind === "selected" && extractPlanMarkdown(current.toolCall)) {
+            applyExitPlanSelection(tabId, decision.option_id);
+          }
+        })
         .catch((e) => toast.error(`Permission send failed: ${e}`))
         .finally(() => popPermission(current.acpSessionId, current.requestId));
     };
@@ -101,30 +125,49 @@ export function PermissionModal({ tabId, onSendMessage }: PermissionModalProps) 
       // resolve a possibly-mismatched option here.
       if (extractQuestions(current.toolCall)) return;
       if (inText) return; // let the field handle digits / Enter
+      // A key the card takes is the card's alone: it must not also reach the
+      // composer, where Enter on an empty field is Stop.
+      const consume = () => {
+        e.preventDefault();
+        e.stopPropagation();
+      };
       if (e.key === "Enter") {
         if (primaryId) {
-          e.preventDefault();
+          consume();
           send({ kind: "selected", option_id: primaryId });
+        } else if (isOutwardCall(current.toolCall)) {
+          // An outward action's Allow is a click. Its Enter does nothing —
+          // it neither posts nor stops the turn under the card.
+          consume();
         }
         return;
       }
       const n = parseInt(e.key, 10);
       if (!Number.isNaN(n) && n >= 1 && n <= current.options.length) {
-        e.preventDefault();
-        send({ kind: "selected", option_id: current.options[n - 1].optionId });
+        const picked = current.options[n - 1];
+        consume();
+        if (!keyMayPick(current.toolCall, picked.kind)) return;
+        send({ kind: "selected", option_id: picked.optionId });
       }
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [current, primaryId, popPermission]);
+  }, [current, primaryId, popPermission, applyExitPlanSelection, tabId]);
 
   if (!current) return null;
 
-  const resolve = (optId: string) => {
+  /** Answer with an option; for a plan approval also adopt the mode it
+   *  selects (`override` = the mode Atlas's own "approve and bypass" action
+   *  applies on top of the plain approval). */
+  const resolve = (optId: string, override?: "bypassPermissions") => {
+    const isPlan = !!extractPlanMarkdown(current.toolCall);
     agents
       .respondPermission(current.agentId, current.acpSessionId, current.requestId, {
         kind: "selected",
         option_id: optId,
+      })
+      .then(() => {
+        if (isPlan) applyExitPlanSelection(tabId, optId, override);
       })
       .catch((e) => toast.error(`Permission send failed: ${e}`))
       .finally(() => popPermission(current.acpSessionId, current.requestId));
@@ -148,9 +191,35 @@ export function PermissionModal({ tabId, onSendMessage }: PermissionModalProps) 
     onSendMessage?.(text);
   };
 
+  // Answers → the permission wire. A single single-select answer that names a
+  // real ACP option resolves it properly, so the tool call completes with an
+  // answer. Anything else (several questions, multiSelect, typed text, or the
+  // adapter only offering generic allow/reject) cancels the request and sends
+  // the composed answers as a message — the agent reads them from there.
+  const submitQuestionAnswers = (answers: Answer[]) => {
+    const specs = questions ?? [];
+    if (specs.length === 1 && !specs[0].multiSelect) {
+      const a = answers[0];
+      if (a && !a.custom.trim() && a.selected.length === 1) {
+        const want = a.selected[0].trim().toLowerCase();
+        const match = current.options.find((o) => o.name.trim().toLowerCase() === want);
+        if (match) {
+          resolve(match.optionId);
+          return;
+        }
+      }
+    }
+    const text = composeAnswers(specs, answers);
+    if (!text) return;
+    cancel();
+    onSendMessage?.(text);
+  };
+
   const title = current.toolCall.title ?? current.toolCall.kind ?? "Tool call";
   const planMarkdown = extractPlanMarkdown(current.toolCall);
   const questions = extractQuestions(current.toolCall);
+  const outward = outwardApprovalOf(current.toolCall);
+  const preparing = outward ? null : outwardPreparingOf(current.toolCall, current.options);
   const queueNote = queueLength > 1 ? `${queueLength - 1} more pending after this` : null;
 
   // Numbered option list — shared by both layouts.
@@ -171,32 +240,46 @@ export function PermissionModal({ tabId, onSendMessage }: PermissionModalProps) 
 
   // Plan review keeps the richer two-panel modal (with number-key support from
   // the keyboard effect above).
+  //
+  // The Claude adapter offers ONE elevated approval, and on a model that
+  // supports auto mode that is "use auto mode" — which still prompts for risky
+  // tools — with no bypass choice at all. Bypass is still in the session's
+  // advertised modes, only the prompt omits it, so Atlas adds the action back:
+  // approve plainly, then push `bypassPermissions`.
+  const bypassOptionId =
+    agentType === "claude-code" &&
+    planMarkdown &&
+    !exitPlanOffersBypass(current.options.map((o) => o.optionId))
+      ? (current.options.find((o) => o.optionId === "exit-plan-default")?.optionId ??
+        current.options.find((o) => isAllow(o.kind))?.optionId ??
+        null)
+      : null;
   if (planMarkdown) {
     return (
       <Dialog.Root open onOpenChange={(open) => !open && cancel()}>
         <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm" />
-          <Dialog.Content
+          <DialogOverlay className="backdrop-blur-sm" />
+          <Dialog.Popup
             className={cn(
               // Anchor near the top (not vertically centered) with a viewport
               // cap, so a long plan never pushes the modal — and its Cancel
               // footer — below the window. The plan panel scrolls internally.
-              "fixed left-1/2 top-[5vh] z-50 -translate-x-1/2",
+              "fixed left-1/2 top-[5vh] z-modal -translate-x-1/2",
               "flex max-h-[90vh] w-[880px] max-w-[94vw] flex-col overflow-hidden",
-              "rounded-md border border-border-default bg-bg-elevated",
-              "shadow-[var(--shadow-overlay)] animate-scale-in text-text-primary",
+              "rounded-md border border-border bg-card",
+              "shadow-md animate-scale-in text-foreground",
             )}
           >
-            <div className="flex items-start gap-3 border-b border-border-default px-4 py-3">
-              <ClipboardList className="mt-0.5 size-4 text-accent" />
+            <div className="flex items-start gap-3 border-b border-border px-4 py-3">
+              <ClipboardList className="mt-0.5 size-4 text-primary" />
               <div className="flex-1">
                 <Dialog.Title className="text-sm font-medium">Review plan</Dialog.Title>
-                <Dialog.Description className="mt-0.5 text-xs text-text-secondary">
+                <Dialog.Description className="mt-0.5 text-xs text-secondary-foreground">
                   The agent proposed a plan before continuing. Review it, then approve or reject.
                 </Dialog.Description>
               </div>
               {queueNote && (
-                <span className="shrink-0 rounded-sm bg-bg-base px-2 py-0.5 text-[11px] text-text-secondary">
+                <span className="shrink-0 rounded-sm bg-background px-2 py-0.5 text-xs text-secondary-foreground">
                   {queueNote}
                 </span>
               )}
@@ -207,127 +290,60 @@ export function PermissionModal({ tabId, onSendMessage }: PermissionModalProps) 
                   <Markdown>{planMarkdown}</Markdown>
                 </div>
               </section>
-              <aside className="flex w-[320px] shrink-0 flex-col border-l border-border-default">
-                <div className="min-h-0 min-w-0 flex-1 overflow-auto px-4 py-3">{optionList}</div>
-                <div className="flex items-center justify-end gap-2 border-t border-border-default px-4 py-2.5">
+              <aside className="flex w-[320px] shrink-0 flex-col border-l border-border">
+                <div className="min-h-0 min-w-0 flex-1 overflow-auto px-4 py-3">
+                  {optionList}
+                  {bypassOptionId && (
+                    <button
+                      type="button"
+                      onClick={() => resolve(bypassOptionId, "bypassPermissions")}
+                      className={cn(
+                        "mt-2 flex w-full items-center gap-2 rounded-md border border-border px-2.5 py-2 text-left",
+                        "text-sm text-foreground transition-colors hover:bg-background",
+                      )}
+                    >
+                      <AlertTriangle className="size-3.5 shrink-0 text-[var(--atlas-status-error-foreground)]" />
+                      <span className="flex-1">
+                        Yes, and bypass permissions
+                        <span className="block text-xs text-secondary-foreground">
+                          Approve the plan and stop asking for the rest of this session.
+                        </span>
+                      </span>
+                    </button>
+                  )}
+                </div>
+                <div className="flex items-center justify-end gap-2 border-t border-border px-4 py-2.5">
                   <button
                     type="button"
                     onClick={cancel}
-                    className="inline-flex items-center gap-1.5 rounded-sm px-2.5 py-1 text-xs text-text-secondary hover:bg-bg-base hover:text-text-primary transition-colors"
+                    className="inline-flex items-center gap-1.5 rounded-sm px-2.5 py-1 text-xs text-secondary-foreground hover:bg-background hover:text-foreground transition-colors"
                   >
                     Cancel <Kbd>esc</Kbd>
                   </button>
                 </div>
               </aside>
             </div>
-          </Dialog.Content>
+          </Dialog.Popup>
         </Dialog.Portal>
       </Dialog.Root>
     );
   }
 
-  // AskUserQuestion — render the rich question(s) + answer choices inline.
-  // Each answer maps to the matching ACP option when the adapter exposed the
-  // choices as permission options; otherwise clicking it answers in words via
-  // the free-text path (cancel + send). Esc still backs out.
+  // AskUserQuestion — the stepper card (one question per step, radio /
+  // checkbox options, free text, progress dots). All questions are answered,
+  // not just the first. Submit either resolves a matching ACP option (single
+  // single-select answer) or cancels the request and sends the composed
+  // answers as a user message — see the card's own header for the contract.
+  // Esc still backs out via this modal's keyboard handler.
   if (questions) {
-    const primaryQ = questions[0];
-    const acpByName = new Map(
-      current.options.map((o) => [o.name.trim().toLowerCase(), o] as const),
-    );
-    const answer = (o: { label: string }) => {
-      const match = acpByName.get(o.label.trim().toLowerCase());
-      if (match) resolve(match.optionId);
-      else {
-        cancel();
-        onSendMessage?.(o.label);
-      }
-    };
-    // ACP options with no corresponding answer choice (e.g. an explicit
-    // reject/cancel) — surfaced below so the user can still decline.
-    const specLabels = new Set(
-      questions.flatMap((q) => q.options.map((o) => o.label.trim().toLowerCase())),
-    );
-    const extraOptions = current.options.filter(
-      (o) => !specLabels.has(o.name.trim().toLowerCase()),
-    );
-
     return (
       <div className="px-4 pt-2">
-        <div className="mx-auto w-full max-w-[720px] overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--bg-elevated)] shadow-[0_8px_24px_rgba(0,0,0,0.35)]">
-          <div className="flex items-start gap-2 px-3 pt-3">
-            <CircleHelp className="mt-0.5 size-3.5 shrink-0 text-accent" />
-            <div className="flex-1 min-w-0">
-              {primaryQ.header && (
-                <div className="text-[11px] uppercase tracking-wide text-text-secondary">
-                  {primaryQ.header}
-                </div>
-              )}
-              <div className="text-[13px] font-medium leading-snug text-text-primary">
-                {primaryQ.question || "The agent has a question"}
-              </div>
-              {primaryQ.multiSelect && (
-                <div className="mt-0.5 text-[11px] text-text-tertiary">
-                  Multiple choices apply — pick the closest, or answer in your
-                  own words below.
-                </div>
-              )}
-              {queueNote && (
-                <div className="mt-0.5 text-[11px] text-text-secondary">{queueNote}</div>
-              )}
-            </div>
-          </div>
-
-          {/* Additional questions (rare) shown as context. */}
-          {questions.length > 1 && (
-            <div className="mx-3 mt-2 space-y-1 rounded-md border border-border-default bg-bg-base px-3 py-2">
-              {questions.slice(1).map((q, i) => (
-                <div key={i} className="text-[11px] text-text-secondary">
-                  {q.header && <span className="text-text-tertiary">{q.header}: </span>}
-                  {q.question}
-                </div>
-              ))}
-            </div>
-          )}
-
-          <div className="flex flex-col gap-1 px-3 py-2.5">
-            {primaryQ.options.map((o, i) => (
-              <QuestionOption
-                key={`${o.label}-${i}`}
-                index={i + 1}
-                label={o.label}
-                description={o.description}
-                onSelect={() => answer(o)}
-              />
-            ))}
-            {extraOptions.map((opt) => (
-              <PermissionOption
-                key={opt.optionId}
-                index={0}
-                option={opt}
-                agentType={agentType}
-                onSelect={() => resolve(opt.optionId)}
-              />
-            ))}
-          </div>
-
-          <div className="border-t border-border-default px-3 py-2.5">
-            <textarea
-              ref={textRef}
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  submitText();
-                }
-              }}
-              rows={1}
-              placeholder="Answer in your own words…"
-              className="w-full resize-none rounded-md border border-border-default bg-bg-base px-2.5 py-1.5 text-[12px] text-text-primary outline-none placeholder:text-text-tertiary focus:border-[var(--border-focus)]"
-            />
-          </div>
-        </div>
+        <ApprovalCard
+          key={current.requestId}
+          questions={questions}
+          queueNote={queueNote}
+          onSubmit={submitQuestionAnswers}
+        />
       </div>
     );
   }
@@ -335,24 +351,39 @@ export function PermissionModal({ tabId, onSendMessage }: PermissionModalProps) 
   // Standard case — inline card above the composer.
   return (
     <div className="px-4 pt-2">
-      <div className="mx-auto w-full max-w-[720px] overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--bg-elevated)] shadow-[0_8px_24px_rgba(0,0,0,0.35)]">
+      <div
+        // A card resting in the composer stack, not a menu: `shadow-md` is the
+        // menu elevation (0 16px 48px at 90%) and read as a black slab over the
+        // transcript. This sits between `shadow-sm` and that, with no step to name.
+        // ratchet-allow: an in-flow raised card, softer than the menu elevation
+        className="mx-auto w-full max-w-[720px] overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--card)] shadow-[0_8px_24px_rgba(0,0,0,0.35)]"
+      >
         <div className="flex items-start gap-2 px-3 pt-3">
           <div className="flex-1 min-w-0">
-            <div className="text-[13px] font-medium leading-snug text-text-primary">
-              The agent wants to run{" "}
-              <span className="font-mono text-text-primary">{title}</span>?
-            </div>
+            {preparing ? (
+              <OutwardPreparingHeading preparing={preparing} />
+            ) : outward ? (
+              <OutwardActionHeading approval={outward} />
+            ) : (
+              <div className="text-base font-medium leading-snug text-foreground">
+                The agent wants to run <span className="font-mono text-foreground">{title}</span>?
+              </div>
+            )}
             {queueNote && (
-              <div className="mt-0.5 text-[11px] text-text-secondary">{queueNote}</div>
+              <div className="mt-0.5 text-xs text-secondary-foreground">{queueNote}</div>
             )}
           </div>
         </div>
 
-        <ToolCallPreview tc={current.toolCall} />
+        {preparing ? null : outward ? (
+          <OutwardActionBody approval={outward} />
+        ) : (
+          <ToolCallPreview tc={current.toolCall} />
+        )}
 
         <div className="px-3 py-2.5">{optionList}</div>
 
-        <div className="border-t border-border-default px-3 py-2.5">
+        <div className="border-t border-border px-3 py-2.5">
           <textarea
             ref={textRef}
             value={draft}
@@ -365,7 +396,7 @@ export function PermissionModal({ tabId, onSendMessage }: PermissionModalProps) 
             }}
             rows={1}
             placeholder="Tell the agent what to do instead…"
-            className="w-full resize-none rounded-md border border-border-default bg-bg-base px-2.5 py-1.5 text-[12px] text-text-primary outline-none placeholder:text-text-tertiary focus:border-[var(--border-focus)]"
+            className="w-full resize-none rounded-md border border-border bg-background px-2.5 py-1.5 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-[var(--atlas-border-strong)]"
           />
         </div>
       </div>
@@ -392,25 +423,27 @@ function PermissionOption({
   const label = relabelAgentBrand(option.name, agentType);
 
   const tone = isPrimary
-    ? "border-transparent bg-[var(--accent-primary)] text-[var(--bg-base)] hover:bg-[var(--accent-primary-hover)]"
+    ? "border-transparent bg-[var(--primary)] text-[var(--background)] hover:bg-[var(--atlas-primary-hover)]"
     : reject
-      ? "border-border-default bg-bg-base text-[var(--status-error)] hover:bg-[var(--status-error-muted)]"
-      : "border-border-default bg-bg-base text-text-primary hover:bg-bg-hover";
+      ? "border-border bg-background text-[var(--atlas-status-error-foreground)] hover:bg-[var(--atlas-status-error-background)]"
+      : "border-border bg-background text-foreground hover:bg-element-hover";
 
   return (
     <button
       type="button"
       onClick={onSelect}
       className={cn(
-        "flex w-full min-w-0 items-center gap-2.5 rounded-md border px-2.5 py-2 text-left text-[12px] transition-colors outline-none",
+        "flex w-full min-w-0 items-center gap-2.5 rounded-md border px-2.5 py-2 text-left text-sm transition-colors outline-none",
         tone,
       )}
     >
       {index > 0 && (
         <span
           className={cn(
-            "flex h-4 w-4 shrink-0 items-center justify-center rounded text-[10px] font-semibold",
-            isPrimary ? "bg-[var(--bg-base)]/15 text-[var(--bg-base)]" : "bg-bg-elevated text-text-secondary",
+            "flex h-4 w-4 shrink-0 items-center justify-center rounded text-2xs font-semibold",
+            isPrimary
+              ? "bg-[var(--background)]/15 text-[var(--background)]"
+              : "bg-card text-secondary-foreground",
           )}
         >
           {index}
@@ -419,48 +452,59 @@ function PermissionOption({
       <Icon className="size-3.5 shrink-0" />
       <span className="min-w-0 flex-1 font-medium break-words">{label}</span>
       {isPrimary && (
-        <Kbd className="border-[var(--bg-base)]/20 bg-[var(--bg-base)]/10 text-[var(--bg-base)]">↵</Kbd>
+        <Kbd className="border-[var(--background)]/20 bg-[var(--background)]/10 text-[var(--background)]">
+          ↵
+        </Kbd>
       )}
     </button>
   );
 }
 
 /**
- * An AskUserQuestion answer choice — label + optional description. Distinct from
- * PermissionOption (which is allow/reject-shaped): every answer is a neutral,
- * equally-weighted pick, numbered for quick scanning.
+ * An outward action's headline (ADR-0014): the act and whom it reaches, then
+ * the recipient in full — in place of "The agent wants to run …?", which
+ * reads wrongly for a message.
  */
-function QuestionOption({
-  index,
-  label,
-  description,
-  onSelect,
-}: {
-  index: number;
-  label: string;
-  description?: string;
-  onSelect: () => void;
-}) {
+export function OutwardActionHeading({ approval }: { approval: OutwardApproval }) {
   return (
-    <button
-      type="button"
-      onClick={onSelect}
-      className={cn(
-        "flex w-full min-w-0 items-start gap-2.5 rounded-md border border-border-default bg-bg-base px-2.5 py-2 text-left text-[12px] transition-colors outline-none hover:bg-bg-hover",
-      )}
-    >
-      <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded bg-bg-elevated text-[10px] font-semibold text-text-secondary">
-        {index}
-      </span>
-      <span className="min-w-0 flex-1">
-        <span className="block font-medium break-words text-text-primary">{label}</span>
-        {description && (
-          <span className="mt-0.5 block text-[11px] font-normal leading-snug text-text-secondary break-words">
-            {description}
-          </span>
-        )}
-      </span>
-    </button>
+    <>
+      <div className="text-base font-medium leading-snug text-foreground">{approval.title}</div>
+      <div className="mt-0.5 text-xs text-secondary-foreground">{approval.recipient}</div>
+    </>
+  );
+}
+
+/**
+ * An outward action's card while the host is still describing it (ADR-0014):
+ * a loading heading and what is being looked up. The only option below is
+ * Decline; the described card replaces this one when it is ready.
+ */
+export function OutwardPreparingHeading({ preparing }: { preparing: OutwardPreparing }) {
+  return (
+    <div role="status" aria-live="polite" data-testid="outward-preparing">
+      <div className="flex items-center gap-2 text-base font-medium leading-snug text-foreground">
+        <Loader2 className="size-4 shrink-0 animate-spin text-secondary-foreground" aria-hidden />
+        <span>{preparing.title}</span>
+      </div>
+      <div className="mt-0.5 text-xs text-secondary-foreground">{preparing.note}</div>
+    </div>
+  );
+}
+
+/**
+ * The exact words an outward action will post, in the tool-call preview's
+ * box: the whole body, never truncated, scrolling inside the card when long.
+ */
+export function OutwardActionBody({ approval }: { approval: OutwardApproval }) {
+  return (
+    <div className="mx-3 mt-2 rounded-md border border-border bg-background px-3 py-2">
+      <div
+        data-testid="outward-body"
+        className="max-h-64 overflow-auto whitespace-pre-wrap text-sm leading-snug text-foreground"
+      >
+        {approval.body}
+      </div>
+    </div>
   );
 }
 
@@ -470,8 +514,8 @@ function ToolCallPreview({ tc }: { tc: PendingPermission["toolCall"] }) {
   const formatted = inputValue !== undefined ? safeStringify(inputValue, 2) : null;
   if (!formatted) return null;
   return (
-    <div className="mx-3 mt-2 rounded-md border border-border-default bg-bg-base px-3 py-2">
-      <pre className="max-h-32 overflow-auto whitespace-pre-wrap font-mono text-[11px] leading-snug text-text-secondary">
+    <div className="mx-3 mt-2 rounded-md border border-border bg-background px-3 py-2">
+      <pre className="max-h-32 overflow-auto whitespace-pre-wrap font-mono text-xs leading-snug text-secondary-foreground">
         {formatted}
       </pre>
     </div>
