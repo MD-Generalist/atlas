@@ -767,7 +767,7 @@ function AboutSettings() {
           <AtlasIcon size={40} className="rounded-xl" />
           <div>
             <p className="text-sm font-semibold text-foreground">Atlas</p>
-            <p className="text-2xs text-muted-foreground">v0.3.4 — The second brain IDE</p>
+            <p className="text-2xs text-muted-foreground">v0.4.0 — The second brain IDE</p>
           </div>
         </div>
         <p className="text-xs text-secondary-foreground leading-relaxed pt-2">
