@@ -4,8 +4,12 @@ import { Loader2, Play } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Markdown } from "@/lib/markdown";
 import {
+  codeFence,
+  imageOutputSrc,
   joinSource,
   notebookLanguage,
+  parseNotebook,
+  pickOutputMime,
   stripAnsi,
   type NotebookCell,
   type NotebookFile,
@@ -36,19 +40,7 @@ export function NotebookViewer({ filePath }: NotebookViewerProps) {
     setState({ status: "loading" });
     invoke<string>("read_file_content", { path: filePath })
       .then((text) => {
-        if (cancelled) return;
-        try {
-          const notebook = JSON.parse(text) as NotebookFile;
-          if (!Array.isArray(notebook.cells)) {
-            throw new Error('missing a top-level "cells" array');
-          }
-          setState({ status: "ready", notebook });
-        } catch (err) {
-          setState({
-            status: "error",
-            message: err instanceof Error ? err.message : String(err),
-          });
-        }
+        if (!cancelled) setState({ status: "ready", notebook: parseNotebook(text) });
       })
       .catch((err) => {
         if (!cancelled) {
@@ -64,18 +56,18 @@ export function NotebookViewer({ filePath }: NotebookViewerProps) {
   }, [filePath]);
 
   return (
-    <div className="h-full w-full flex flex-col bg-[var(--bg-base)]">
-      <div className="flex items-center px-3 h-[32px] border-b border-[var(--border-default)] shrink-0 text-[11px] font-mono text-[var(--text-tertiary)] truncate">
+    <div className="h-full w-full flex flex-col bg-[var(--background)]">
+      <div className="flex items-center px-3 h-[32px] border-b border-[var(--border)] shrink-0 text-xs font-mono text-[var(--muted-foreground)] truncate">
         {filePath}
       </div>
       <div className="flex-1 min-h-0 overflow-y-auto">
         {state.status === "loading" ? (
-          <div className="h-full flex items-center justify-center text-[var(--text-tertiary)]">
+          <div className="h-full flex items-center justify-center text-[var(--muted-foreground)]">
             <Loader2 size={16} className="animate-spin" />
           </div>
         ) : state.status === "error" ? (
-          <div className="p-6 text-[12px] text-[var(--danger,#e5484d)]">
-            Couldn't parse this notebook: {state.message}
+          <div className="p-6 text-sm text-destructive">
+            Couldn't open this notebook: {state.message}
           </div>
         ) : (
           <NotebookBody notebook={state.notebook} />
@@ -90,14 +82,12 @@ function NotebookBody({ notebook }: { notebook: NotebookFile }) {
 
   if (notebook.cells.length === 0) {
     return (
-      <div className="text-[12px] text-[var(--text-tertiary)] text-center py-12">
-        Empty notebook
-      </div>
+      <div className="text-sm text-[var(--muted-foreground)] text-center py-12">Empty notebook</div>
     );
   }
 
   return (
-    <div className="max-w-[900px] mx-auto px-4 py-4 space-y-3">
+    <div className="max-w-4xl mx-auto px-4 py-4 space-y-3">
       {notebook.cells.map((cell, i) => (
         <NotebookCellView key={i} cell={cell} language={language} />
       ))}
@@ -105,13 +95,7 @@ function NotebookBody({ notebook }: { notebook: NotebookFile }) {
   );
 }
 
-function NotebookCellView({
-  cell,
-  language,
-}: {
-  cell: NotebookCell;
-  language: string;
-}) {
+function NotebookCellView({ cell, language }: { cell: NotebookCell; language: string }) {
   const source = joinSource(cell.source);
 
   if (cell.cell_type === "markdown") {
@@ -124,7 +108,7 @@ function NotebookCellView({
 
   if (cell.cell_type === "raw") {
     return (
-      <pre className="rounded-md border border-[var(--border-default)] bg-[var(--bg-secondary)] p-3 text-[12px] font-mono whitespace-pre-wrap overflow-x-auto text-[var(--text-secondary)]">
+      <pre className="rounded-md border border-[var(--border)] bg-[var(--card)] p-3 code whitespace-pre-wrap overflow-x-auto text-[var(--secondary-foreground)]">
         {source}
       </pre>
     );
@@ -134,17 +118,11 @@ function NotebookCellView({
   const count = cell.execution_count;
   return (
     <div className="flex gap-2">
-      <div className="w-10 shrink-0 pt-1.5 text-right text-[11px] font-mono text-[var(--text-tertiary)] select-none">
-        {count != null ? (
-          `[${count}]`
-        ) : (
-          <Play size={10} className="inline opacity-40" />
-        )}
+      <div className="w-10 shrink-0 pt-1.5 text-right text-xs font-mono text-[var(--muted-foreground)] select-none">
+        {count != null ? `[${count}]` : <Play size={10} className="inline opacity-40" />}
       </div>
       <div className="flex-1 min-w-0 space-y-1.5">
-        {source.trim() && (
-          <Markdown>{"```" + language + "\n" + source + "\n```"}</Markdown>
-        )}
+        {source.trim() && <Markdown>{codeFence(source, language)}</Markdown>}
         {cell.outputs?.map((out, i) => (
           <NotebookOutputView key={i} output={out} />
         ))}
@@ -153,18 +131,15 @@ function NotebookCellView({
   );
 }
 
+const OUTPUT_PRE = "rounded-md border p-2.5 text-xs font-mono whitespace-pre-wrap overflow-x-auto";
+const OUTPUT_PLAIN = "border-[var(--border)] bg-[var(--card)] text-[var(--secondary-foreground)]";
+const OUTPUT_ERROR = "border-destructive/30 bg-destructive/5 text-destructive";
+
 function NotebookOutputView({ output }: { output: NotebookOutput }) {
   if (output.output_type === "stream") {
     return (
-      <pre
-        className={cn(
-          "rounded-md border p-2.5 text-[11px] font-mono whitespace-pre-wrap overflow-x-auto",
-          output.name === "stderr"
-            ? "border-[var(--danger,#e5484d)]/30 bg-[rgba(229,72,77,0.06)] text-[var(--danger,#e5484d)]"
-            : "border-[var(--border-default)] bg-[var(--bg-secondary)] text-[var(--text-secondary)]",
-        )}
-      >
-        {joinSource(output.text)}
+      <pre className={cn(OUTPUT_PRE, output.name === "stderr" ? OUTPUT_ERROR : OUTPUT_PLAIN)}>
+        {stripAnsi(joinSource(output.text))}
       </pre>
     );
   }
@@ -172,43 +147,38 @@ function NotebookOutputView({ output }: { output: NotebookOutput }) {
   if (output.output_type === "error") {
     const trace = (output.traceback ?? []).map(stripAnsi).join("\n");
     return (
-      <pre className="rounded-md border border-[var(--danger,#e5484d)]/30 bg-[rgba(229,72,77,0.06)] p-2.5 text-[11px] font-mono whitespace-pre-wrap overflow-x-auto text-[var(--danger,#e5484d)]">
+      <pre className={cn(OUTPUT_PRE, OUTPUT_ERROR)}>
         {trace || `${output.ename}: ${output.evalue}`}
       </pre>
     );
   }
 
-  // execute_result / display_data — pick the richest MIME type we can safely
-  // render. Raw text/html is intentionally NOT rendered: nbformat outputs are
-  // static data embedded in the file (not re-executed on open), so dumping
-  // them into the DOM via dangerouslySetInnerHTML without a sanitizer would
-  // let a malicious notebook run script/event-handler payloads just by being
-  // viewed.
+  // execute_result / display_data. `pickOutputMime` never returns text/html
+  // or anything script-bearing: these outputs are static data from the file,
+  // and injecting them into the DOM would let a malicious notebook run code
+  // just by being viewed.
   const data = output.data ?? {};
-  const imageMime = Object.keys(data).find((m) => m.startsWith("image/"));
-  if (imageMime) {
-    const raw = joinSource(data[imageMime]).replace(/\n/g, "");
+  const mime = pickOutputMime(data);
+  if (mime?.startsWith("image/")) {
     return (
       <img
-        src={`data:${imageMime};base64,${raw}`}
+        src={imageOutputSrc(mime, data[mime])}
         alt="Cell output"
-        className="max-w-full rounded-md border border-[var(--border-default)]"
+        className="max-w-full rounded-md border border-[var(--border)]"
       />
     );
   }
-  if (data["text/plain"]) {
-    return (
-      <pre className="rounded-md border border-[var(--border-default)] bg-[var(--bg-secondary)] p-2.5 text-[11px] font-mono whitespace-pre-wrap overflow-x-auto text-[var(--text-secondary)]">
-        {joinSource(data["text/plain"])}
-      </pre>
-    );
+  if (mime === "text/markdown") {
+    return <Markdown>{joinSource(data[mime])}</Markdown>;
+  }
+  if (mime === "text/plain") {
+    return <pre className={cn(OUTPUT_PRE, OUTPUT_PLAIN)}>{stripAnsi(joinSource(data[mime]))}</pre>;
   }
   const anyMime = Object.keys(data)[0];
   if (anyMime) {
     return (
-      <div className="rounded-md border border-[var(--border-default)] bg-[var(--bg-secondary)] p-2.5 text-[11px] text-[var(--text-tertiary)]">
-        Output type <span className="font-mono">{anyMime}</span> isn't rendered
-        in Atlas yet.
+      <div className="rounded-md border border-[var(--border)] bg-[var(--card)] p-2.5 text-xs text-[var(--muted-foreground)]">
+        Output type <span className="font-mono">{anyMime}</span> isn't rendered in Atlas yet.
       </div>
     );
   }
