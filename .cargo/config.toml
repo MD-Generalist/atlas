@@ -43,3 +43,18 @@ MACOSX_DEPLOYMENT_TARGET = "11.0"
 # the prebuilt NASM objects it ships instead. aws-lc-sys ignores it on every
 # other target, and the Tauri CLI never sets it, so it doesn't un-align caches.
 AWS_LC_SYS_PREBUILT_NASM = "1"
+# Windows MSVC only: cl reads source files in the system ANSI codepage, not
+# UTF-8. On a Chinese/Japanese Windows (cp936 / cp932) a lead byte inside a
+# UTF-8 comment pairs with the byte after it and can swallow the newline, so
+# the next line of code disappears into the comment. `numkong` (via `usearch`
+# -> `atlas-memory`) has non-ASCII comments throughout its headers, and on
+# cp936 `cast/serial.h` failed with a cascade of "C2059: syntax error: 'if'";
+# `/utf-8` makes the same command exit 0. Invisible on an English install.
+# cc concatenates CFLAGS, TARGET_CFLAGS and CFLAGS_<target>, so these add to a
+# contributor's own flags rather than shadowing them, and cc only reads (and
+# reruns on) the variable for the triple being built, so other targets' caches
+# are untouched. Both MSVC triples, since Windows releases are headed for ARM.
+CFLAGS_x86_64_pc_windows_msvc = "/utf-8"
+CXXFLAGS_x86_64_pc_windows_msvc = "/utf-8"
+CFLAGS_aarch64_pc_windows_msvc = "/utf-8"
+CXXFLAGS_aarch64_pc_windows_msvc = "/utf-8"
