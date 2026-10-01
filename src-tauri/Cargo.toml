@@ -244,6 +244,13 @@ windows = { version = "0.61", features = [
   "UI_Notifications",
 ] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# Native notifications over the freedesktop D-Bus interface
+# (`crate::notifier::freedesktop`). 5.14 is the zbus `notify-rust` already
+# resolves (the lockfile also holds a 4.x for other crates), default features
+# (async-io), so no new resolution.
+zbus = "5"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 # Native NSWindow access for the titlebar double-click "zoom" (AppKit
 # performZoom:), which Tauri's cross-platform maximize API doesn't cover.

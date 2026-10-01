@@ -9,14 +9,17 @@
 //!  - `macos`    `UNUserNotificationCenter`; only when running from an app bundle.
 //!  - `toast`    Windows `ToastNotificationManager`; only when installed (it
 //!    needs the bundle identifier as AppUserModelID).
+//!  - `freedesktop` Linux `org.freedesktop.Notifications` over D-Bus; capabilities
+//!    come from the running server. Used when a server is on the session bus.
 //!  - `fallback` the `tauri-plugin-notification` plugin: show only. Used when not
-//!    bundled (dev runs) and on Linux until its backend lands.
+//!    bundled (dev runs) and when no backend above applies.
 //!
-//! Adding a backend (Linux D-Bus) is a new file implementing
-//! `NotifierBackend` plus a `Capabilities` value, and one arm in
-//! `select_backend`.
+//! Adding a backend is a new file implementing `NotifierBackend` plus a
+//! `Capabilities` value, and one arm in `select_backend`.
 
 mod fallback;
+#[cfg(target_os = "linux")]
+mod freedesktop;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(windows)]
@@ -32,7 +35,10 @@ use tauri::{AppHandle, Emitter};
 pub const RESPONSE_EVENT: &str = "atlas:notification-response";
 
 // Read only by backends that honour the field (the fallback shows title/body/sound).
-#[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "macos", windows, target_os = "linux")),
+    allow(dead_code)
+)]
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Urgency {
@@ -43,7 +49,10 @@ pub enum Urgency {
 }
 
 // Read only by backends that honour the field (the fallback shows title/body/sound).
-#[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "macos", windows, target_os = "linux")),
+    allow(dead_code)
+)]
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NotificationAction {
@@ -57,7 +66,10 @@ pub struct NotificationAction {
 }
 
 // Read only by backends that honour the field (the fallback shows title/body/sound).
-#[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "macos", windows, target_os = "linux")),
+    allow(dead_code)
+)]
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Notification {
@@ -217,7 +229,22 @@ fn select_backend(app: &AppHandle, sink: ResponseSink) -> Box<dyn NotifierBacken
     if let Some(backend) = toast::ToastBackend::new(app, sink) {
         return Box::new(backend);
     }
-    #[cfg(not(any(target_os = "macos", windows)))]
+    #[cfg(target_os = "linux")]
+    {
+        use tauri::Manager;
+        let handle = app.clone();
+        // Best-effort raise on click; there is no API to apply an activation token.
+        let raise: freedesktop::ActivateHook = Arc::new(move || {
+            if let Some(window) = handle.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        });
+        if let Some(backend) = freedesktop::FreedesktopBackend::new(sink, raise) {
+            return Box::new(backend);
+        }
+    }
+    #[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
     let _ = sink;
     Box::new(fallback::FallbackBackend::new(app))
 }
