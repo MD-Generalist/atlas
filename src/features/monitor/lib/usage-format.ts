@@ -5,8 +5,17 @@ export function fmtTokens(n: number): string {
   return String(n);
 }
 
+// A cost is USD whatever the reader's locale is, so it is formatted as USD
+// rather than as a bare number behind a hand-written `$`. Formatting the digits
+// in the system locale and prefixing `$` printed `$15,00` on a `tr-TR` machine —
+// a dollar sign over a decimal comma — and put the sign after the symbol
+// (`$-15.00`). `Intl` places both correctly and pins the digits, so the cost a
+// reader sees is the same everywhere and matches the Usage pill's own coverage.
+const USD = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
+
+/** A USD amount: `fmtCost(15)` → "$15.00". */
 export function fmtCost(n: number): string {
-  return `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return USD.format(n);
 }
 
 export function fmtDate(ms: number | null): string {
