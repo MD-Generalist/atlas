@@ -152,6 +152,7 @@ function toNotifyEvent(env: AgentDelta, session: ChatSession): AgentNotifyEvent 
         requestId: String(env.request_id),
         toolCall: env.tool_call,
         toolTitle,
+        options: env.options,
       };
     }
     case "elicitation_requested":

@@ -23,6 +23,8 @@ import {
   type NotificationTier,
   type ToastVariant,
 } from "./catalog";
+import type { SystemNotificationAction } from "./notifier-api";
+import type { PermissionBannerInfo, PermissionRef } from "./permission-actions-rules";
 
 /** A classified event — what a source (terminal, agent, …) hands the pipeline. */
 export interface NotificationEvent {
@@ -35,6 +37,8 @@ export interface NotificationEvent {
   target: NotificationTarget;
   /** Stable per occurrence; delivery announces each key once. */
   dedupeKey: string;
+  /** A permission request: what the banner's Allow once / Deny need. */
+  permission?: PermissionBannerInfo;
 }
 
 export interface NotificationEnv {
@@ -74,7 +78,16 @@ export interface NotificationDecision {
   channels: Record<NotificationChannel, boolean>;
   toast: { variant: ToastVariant; durationMs: number };
   /** OS banner content; `sound` is set only when the sound channel fires. */
-  native: { title: string; subtitle?: string; body: string; sound?: string };
+  native: {
+    title: string;
+    subtitle?: string;
+    body: string;
+    sound?: string;
+    /** Banner action buttons (before capability fitting) and the request
+     *  they answer. Permission requests only. */
+    actions?: SystemNotificationAction[];
+    permission?: PermissionRef;
+  };
 }
 
 /** "Looking at it" — inside this window a visible, focused target is quiet. */

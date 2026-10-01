@@ -22,6 +22,11 @@ import {
   type NotificationEvent,
 } from "./decide";
 import { prefsFromSettings } from "./prefs";
+import {
+  bannerAnswerable,
+  parsePermissionOptions,
+  permissionBannerActions,
+} from "./permission-actions-rules";
 import type { AppSettings } from "@/features/settings/lib/app-settings";
 
 export type AgentCtx = Omit<Extract<NotificationTarget, { type: "session" }>, "type"> & {
@@ -42,6 +47,8 @@ export type AgentNotifyEvent =
       /** The raw ACP `tool_call` of the request; see `describePermission`. */
       toolCall?: unknown;
       toolTitle?: string;
+      /** The ACP options the agent offered (`kind` decides the banner actions). */
+      options?: unknown;
     }
   | {
       type: "question_asked";
@@ -132,10 +139,24 @@ const oneLine = (s: string) => {
   return t.length > DETAIL_MAX ? `${t.slice(0, DETAIL_MAX - 1).trimEnd()}…` : t;
 };
 
+/** A permission's one-line description and whether it shows the whole thing. */
+export interface PermissionDescription {
+  text: string;
+  /** False when `text` is not the complete command/target: cut at the cap, a
+   *  multi-line command flattened to one line (newlines run commands apart, so
+   *  the flat form is not the same command), or no command/target found at all
+   *  (only the call's title). A banner must not offer Allow on such a request —
+   *  the user would approve what they cannot see. */
+  complete: boolean;
+}
+
 /** "Run npm test" / "Edit src/auth.ts" — the tool and its command or target,
  *  on one line. Reads the ACP tool call generically (kind + raw input); no
  *  per-agent shapes. Falls back to the call's title, then "a tool". */
-export function describePermission(toolCall: unknown, fallbackTitle?: string): string {
+export function describePermissionDetail(
+  toolCall: unknown,
+  fallbackTitle?: string,
+): PermissionDescription {
   const tc = (toolCall && typeof toolCall === "object" ? toolCall : {}) as Record<string, unknown>;
   const title = typeof tc.title === "string" ? tc.title : (fallbackTitle ?? "");
   const kind = typeof tc.kind === "string" ? tc.kind : "";
@@ -152,9 +173,16 @@ export function describePermission(toolCall: unknown, fallbackTitle?: string): s
   const verb = VERB_BY_TOOL_KIND[kind];
   // For shell calls the ACP title IS the command.
   if (!target && kind === "execute") target = title;
-  if (verb && target) return oneLine(`${verb} ${target}`);
-  if (title) return oneLine(title);
-  return kind ? oneLine(kind) : "a tool";
+  if (verb && target) {
+    const text = oneLine(`${verb} ${target}`);
+    return { text, complete: !text.endsWith("…") && !/[\r\n]/.test(target.trim()) };
+  }
+  if (title) return { text: oneLine(title), complete: false };
+  return { text: kind ? oneLine(kind) : "a tool", complete: false };
+}
+
+export function describePermission(toolCall: unknown, fallbackTitle?: string): string {
+  return describePermissionDetail(toolCall, fallbackTitle).text;
 }
 
 const QUESTION_MAX = 120;
@@ -241,13 +269,22 @@ export function classifyAgentEvent(
   const base = { title, subtitle, target };
 
   switch (e.type) {
-    case "permission_requested":
+    case "permission_requested": {
+      const detail = describePermissionDetail(e.toolCall, e.toolTitle);
       return {
         ...base,
         kind: "permission",
-        body: `Needs approval — ${describePermission(e.toolCall, e.toolTitle)}`,
+        body: `Needs approval — ${detail.text}`,
         dedupeKey: permissionDedupeKey(sid, e.requestId),
+        permission: {
+          sessionId: sid,
+          requestId: e.requestId,
+          options: parsePermissionOptions(e.options),
+          complete: detail.complete,
+          answerable: bannerAnswerable(e.toolCall),
+        },
       };
+    }
     case "question_asked":
       return {
         ...base,
@@ -316,5 +353,20 @@ export function decideAgentNotification(
 ): NotificationDecision | null {
   if (!settings.notificationsEnabled) return null;
   const event = classifyAgentEvent(e, ctx, env.projectActive, settings.notifyAgentMinDurationMs);
-  return event ? decideNotification(event, env, prefsFromSettings(settings)) : null;
+  if (!event) return null;
+  const decision = decideNotification(event, env, prefsFromSettings(settings));
+  if (decision && event.permission) {
+    const { options, complete, answerable, sessionId, requestId } = event.permission;
+    const actions = permissionBannerActions({
+      options,
+      complete,
+      answerable,
+      enabled: settings.notifyPermissionActions,
+    });
+    if (actions.length > 0) {
+      decision.native.actions = actions;
+      decision.native.permission = { sessionId, requestId };
+    }
+  }
+  return decision;
 }

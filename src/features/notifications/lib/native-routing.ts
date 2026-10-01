@@ -8,10 +8,31 @@
  * terminal pane, in any project.
  */
 import type { NotificationTarget } from "./catalog";
+import type { PermissionRef } from "./permission-actions-rules";
 import type { SystemNotificationResponse } from "./notifier-api";
 
-export function encodeBannerPayload(target: NotificationTarget): string {
-  return JSON.stringify({ v: 1, target });
+export function encodeBannerPayload(
+  target: NotificationTarget,
+  permission?: PermissionRef,
+): string {
+  return JSON.stringify({ v: 1, target, ...(permission ? { permission } : {}) });
+}
+
+/** The permission request an action button on a banner answers, or null. */
+export function permissionForResponse(r: SystemNotificationResponse): PermissionRef | null {
+  if (r.actionId === null || !r.payload) return null;
+  try {
+    const parsed: unknown = JSON.parse(r.payload);
+    if (typeof parsed !== "object" || parsed === null) return null;
+    const p = (parsed as { permission?: unknown }).permission;
+    if (typeof p !== "object" || p === null) return null;
+    const { sessionId, requestId } = p as Record<string, unknown>;
+    return typeof sessionId === "string" && sessionId && typeof requestId === "string" && requestId
+      ? { sessionId, requestId }
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 function isTarget(t: unknown): t is NotificationTarget {

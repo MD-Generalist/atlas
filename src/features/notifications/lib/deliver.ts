@@ -35,6 +35,7 @@ import {
 } from "./catalog";
 import type { NotificationDecision } from "./decide";
 import { encodeBannerPayload, targetForResponse } from "./native-routing";
+import { answerPermissionFromBanner } from "./permission-actions";
 
 const announced = new Set<string>();
 const ANNOUNCED_CAP = 500;
@@ -64,9 +65,13 @@ export { notificationToastId };
 
 // A click on an OS banner opens its exact source (thread tab or terminal pane),
 // across projects. Registered at module load so a click that launched the app
-// is routed as soon as the notifier flushes it. Action buttons are routed by the
-// features that offer them.
+// is routed as soon as the notifier flushes it. Permission action buttons
+// answer the request in place; other actions have no owner yet and are ignored.
 setNativeResponseHandler((response) => {
+  if (response.actionId !== null) {
+    answerPermissionFromBanner(response);
+    return;
+  }
   const target = targetForResponse(response);
   if (target) openNotificationTarget(target);
 });
@@ -97,7 +102,9 @@ async function showBanner(d: NotificationDecision, agentType: string | undefined
     imagePath,
     sound: d.native.sound,
     urgency: d.tier === "needs-you" ? "high" : "normal",
-    payload: encodeBannerPayload(d.target),
+    // Cut to the backend's capabilities by `showNativeNotification`.
+    actions: d.native.actions,
+    payload: encodeBannerPayload(d.target, d.native.permission),
   });
 }
 
