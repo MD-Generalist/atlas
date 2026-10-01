@@ -26,6 +26,7 @@ import { useNotificationsStore } from "../stores/notifications-store";
 import { useAuthStore } from "@/features/auth/stores/auth-store";
 import { promptSignIn } from "@/features/chat/lib/agent-signin";
 import { commsActions } from "@/features/comms/stores/comms-store";
+import { openConfigFile } from "@/features/settings/lib/atlas-config-api";
 import { openGitPanel } from "@/features/git/lib/open-git-panel";
 import { openSettingsSection } from "@/features/settings/lib/open-settings";
 import { openUpdatePrompt, restartToUpdate } from "@/features/updater/lib/restart-to-update";
@@ -69,6 +70,9 @@ export function openNotificationTarget(t: NotificationTarget): void {
       return;
     case "git-panel":
       void openGitPanel(t.projectId);
+      return;
+    case "config-file":
+      void openConfigFile().catch((err) => console.warn("open config.toml failed:", err));
       return;
   }
 }

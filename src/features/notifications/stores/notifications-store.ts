@@ -9,6 +9,7 @@ import { persist } from "zustand/middleware";
 import { createSelectors } from "@/lib/create-selectors";
 import {
   isNotificationKind,
+  isNotificationSettingsSection,
   type NotificationKind,
   type NotificationSource,
   type NotificationTarget,
@@ -134,7 +135,8 @@ function isAppTarget(t: unknown): t is NonNullable<AppNotification["target"]> {
     (r.type === "agent-sign-in" && typeof r.agentType === "string" && !!r.agentType) ||
     (r.type === "chat-conversation" && typeof r.convId === "string" && !!r.convId) ||
     r.type === "app-update" ||
-    (r.type === "settings" && r.section === "models") ||
+    (r.type === "settings" && isNotificationSettingsSection(r.section)) ||
+    r.type === "config-file" ||
     (r.type === "git-panel" && typeof r.projectId === "string" && !!r.projectId)
   );
 }

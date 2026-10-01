@@ -37,6 +37,11 @@ function SourceIcon({ kind, size }: { kind: NotificationKind; size: number }) {
   if (kind === "git-op-done")
     return <GitBranch {...common} className="text-secondary-foreground" />;
   if (kind === "git-op-failed") return <GitBranch {...common} className={error} />;
+  const warn = "text-[var(--atlas-status-warning-foreground)]";
+  if (kind === "git-autofetch-failing" || kind === "git-behind")
+    return <GitBranch {...common} className={warn} />;
+  if (kind === "config-error") return <AlertTriangle {...common} className={warn} />;
+  if (kind === "agent-update-failed") return <Download {...common} className={warn} />;
   const source = catalogEntry(kind).source;
   if (source === "chat") return <MessageSquare {...common} className="text-primary" />;
   if (kind === "terminal-failed")

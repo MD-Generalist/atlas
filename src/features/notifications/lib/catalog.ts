@@ -53,6 +53,12 @@ export interface CatalogEntry {
   setting: BooleanSettingKey | null;
 }
 
+/** The Settings sections a notification can open. */
+export const NOTIFICATION_SETTINGS_SECTIONS = ["models", "agents"] as const;
+export type NotificationSettingsSection = (typeof NOTIFICATION_SETTINGS_SECTIONS)[number];
+export const isNotificationSettingsSection = (s: unknown): s is NotificationSettingsSection =>
+  (NOTIFICATION_SETTINGS_SECTIONS as readonly unknown[]).includes(s);
+
 /** What a notification is about — where "Open" jumps, and the owner used to
  *  filter by organisation. */
 export type NotificationTarget =
@@ -81,8 +87,10 @@ export type NotificationTarget =
   | { type: "chat-conversation"; convId: string; orgId?: string }
   /** An update is staged — opens the "Restart to update" prompt. */
   | { type: "app-update" }
-  /** A Settings section (the model download's home). */
-  | { type: "settings"; section: "models" }
+  /** A Settings section (the model download's and agent update's homes). */
+  | { type: "settings"; section: NotificationSettingsSection }
+  /** `config.toml` itself — opens it in the OS editor. */
+  | { type: "config-file" }
   /** One project's git panel (a push / pull / fetch ran there). */
   | { type: "git-panel"; projectId: string; projectName?: string };
 
@@ -114,6 +122,8 @@ export const targetGroupKey = (t: NotificationTarget): string => {
       return `settings:${t.section}`;
     case "git-panel":
       return `git:${t.projectId}`;
+    case "config-file":
+      return "config-file";
   }
 };
 
@@ -364,6 +374,52 @@ export const NOTIFICATION_CATALOG = {
     channels: ALL_CHANNELS,
     whenLooking: "record",
     sound: { native: "Ping" },
+    toast: { variant: "error", durationMs: ATTENTION_TOAST_MS },
+    groupKey: targetGroupKey,
+    setting: null,
+  },
+  // App warnings (ATL-386): something degraded that the user can fix. Quiet —
+  // no sound, and the OS banner is off in the default warning-tier switches.
+  "git-autofetch-failing": {
+    label: "Auto-fetch keeps failing",
+    tier: "warning",
+    source: "app",
+    channels: ALL_CHANNELS,
+    whenLooking: "record",
+    sound: null,
+    toast: { variant: "default", durationMs: ATTENTION_TOAST_MS },
+    groupKey: targetGroupKey,
+    setting: null,
+  },
+  "git-behind": {
+    label: "Branch fell behind its remote",
+    tier: "warning",
+    source: "app",
+    channels: ALL_CHANNELS,
+    whenLooking: "record",
+    sound: null,
+    toast: { variant: "default", durationMs: ATTENTION_TOAST_MS },
+    groupKey: targetGroupKey,
+    setting: null,
+  },
+  "config-error": {
+    label: "config.toml has an error",
+    tier: "warning",
+    source: "app",
+    channels: ALL_CHANNELS,
+    whenLooking: "record",
+    sound: null,
+    toast: { variant: "error", durationMs: ATTENTION_TOAST_MS },
+    groupKey: targetGroupKey,
+    setting: null,
+  },
+  "agent-update-failed": {
+    label: "Agent update failed",
+    tier: "warning",
+    source: "app",
+    channels: ALL_CHANNELS,
+    whenLooking: "record",
+    sound: null,
     toast: { variant: "error", durationMs: ATTENTION_TOAST_MS },
     groupKey: targetGroupKey,
     setting: null,

@@ -32,6 +32,8 @@ describe("banner payload round trip", () => {
       { type: "chat-conversation", convId: "c1", orgId: "o" },
       { type: "app-update" },
       { type: "settings", section: "models" },
+      { type: "settings", section: "agents" },
+      { type: "config-file" },
       { type: "git-panel", projectId: "p1", projectName: "Atlas" },
     ] satisfies NotificationTarget[]) {
       expect(targetForResponse(click(encodeBannerPayload(target)))).toEqual(target);

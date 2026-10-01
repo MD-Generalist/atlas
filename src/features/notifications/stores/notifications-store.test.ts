@@ -124,6 +124,8 @@ describe("persistence", () => {
       item("upd", { type: "app-update" }),
       item("models", { type: "settings", section: "models" }),
       item("badsettings", { type: "settings", section: "nope" }),
+      item("agents", { type: "settings", section: "agents" }),
+      item("cfg", { type: "config-file" }),
       item("git", { type: "git-panel", projectId: "p1" }),
       item("badgit", { type: "git-panel" }),
     ];
@@ -138,6 +140,8 @@ describe("persistence", () => {
     expect(byId.upd.target).toEqual({ type: "app-update" });
     expect(byId.models.target).toEqual({ type: "settings", section: "models" });
     expect(byId.badsettings.target).toBeUndefined();
+    expect(byId.agents.target).toEqual({ type: "settings", section: "agents" });
+    expect(byId.cfg.target).toEqual({ type: "config-file" });
     expect(byId.git.target).toEqual({ type: "git-panel", projectId: "p1" });
     expect(byId.badgit.target).toBeUndefined();
   });

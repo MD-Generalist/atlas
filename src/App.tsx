@@ -82,6 +82,10 @@ import { initSourceOpenedClearing } from "@/features/notifications/lib/source-op
 import { notifyChatEnvelope } from "@/features/notifications/lib/chat-notifier";
 import { noteAtlasSignedIn, notifyAtlasSignedOut } from "@/features/notifications/lib/app-notifier";
 import {
+  notifyAgentUpdateFailed,
+  startAppWarnings,
+} from "@/features/notifications/lib/app-warning-notifier";
+import {
   notifyModelDownload,
   notifyUpdateReady,
 } from "@/features/notifications/lib/outcome-notifier";
@@ -153,6 +157,9 @@ export function App() {
     const off = listenModelDone(notifyModelDownload);
     return () => void off.then((f) => f());
   }, []);
+
+  // App warnings (auto-fetch failing, behind remote, config.toml errors).
+  useEffect(() => startAppWarnings(), []);
 
   // Keybinding profiles: load once, then pick up hand edits to
   // keybindings.json whenever the window regains focus.
@@ -995,10 +1002,12 @@ export function App() {
             id: `agent-update:${env.plugin_id}:${env.version}`,
           });
         } else {
-          toast.warning(
-            `${name} v${env.version} couldn't install in the background. It will retry the next time you use it.`,
-            { description: env.error ?? undefined },
-          );
+          notifyAgentUpdateFailed({
+            pluginId: env.plugin_id,
+            name,
+            version: env.version,
+            error: env.error ?? null,
+          });
         }
         return;
       }
