@@ -1,0 +1,121 @@
+/**
+ * The notification decision — pure. Given an event already classified into a
+ * catalog kind (title, body, target), the environment it happened in and the
+ * user's prefs for that kind, return which channels fire and with what
+ * content, or `null` for silence. `deliverNotification` performs the result.
+ *
+ * Channel rules (per-kind behaviour comes from the catalog):
+ *  - center: always, unless the kind drops while the user is looking;
+ *  - toast: only when the target is off screen;
+ *  - native (OS banner): only when the window is unfocused and prefs allow;
+ *  - badge: whenever the center records while the window is unfocused;
+ *  - sound: with the OS banner, or — for `needs-you` kinds — in-app when the
+ *    target is off screen.
+ * "Looking" = target on screen, window focused, input within the last 30 s.
+ */
+import {
+  catalogEntry,
+  type NotificationChannel,
+  type NotificationKind,
+  type NotificationTarget,
+  type NotificationTier,
+  type ToastVariant,
+} from "./catalog";
+
+/** A classified event — what a source (terminal, agent, …) hands the pipeline. */
+export interface NotificationEvent {
+  kind: NotificationKind;
+  title: string;
+  body: string;
+  target: NotificationTarget;
+  /** Stable per occurrence; delivery announces each key once. */
+  dedupeKey: string;
+}
+
+export interface NotificationEnv {
+  windowFocused: boolean;
+  /** ms since the last discrete input (key / pointer). */
+  sinceInputMs: number;
+  /** The event's target (terminal pane, chat tab) is on screen. */
+  targetVisible: boolean;
+  /** The target's project is the active one. */
+  projectActive: boolean;
+}
+
+/** Per-kind user prefs. A kind with no entry uses `DEFAULT_KIND_PREFS`. */
+export interface KindPrefs {
+  enabled: boolean;
+  /** Allow the OS banner. */
+  native: boolean;
+  /** Allow sound (banner sound or in-app chime). */
+  sound: boolean;
+}
+
+export type NotificationPrefs = Partial<Record<NotificationKind, KindPrefs>>;
+
+export const DEFAULT_KIND_PREFS: KindPrefs = { enabled: true, native: true, sound: false };
+
+export interface NotificationDecision {
+  kind: NotificationKind;
+  tier: NotificationTier;
+  title: string;
+  body: string;
+  target: NotificationTarget;
+  dedupeKey: string;
+  groupKey: string;
+  channels: Record<NotificationChannel, boolean>;
+  toast: { variant: ToastVariant; durationMs: number };
+  /** OS banner content; `sound` is set only when the sound channel fires. */
+  native: { title: string; body: string; sound?: string };
+}
+
+/** "Looking at it" — inside this window a visible, focused target is quiet. */
+export const LOOKING_WINDOW_MS = 30_000;
+
+const TARGET_LABEL: Record<NotificationTarget["type"], string> = {
+  terminal: "Terminal",
+  session: "Agent",
+};
+
+export function decideNotification(
+  event: NotificationEvent,
+  env: NotificationEnv,
+  prefs: NotificationPrefs,
+): NotificationDecision | null {
+  const entry = catalogEntry(event.kind);
+  const p = prefs[event.kind] ?? DEFAULT_KIND_PREFS;
+  if (!p.enabled) return null;
+  const looking = env.targetVisible && env.windowFocused && env.sinceInputMs < LOOKING_WINDOW_MS;
+  if (looking && entry.whenLooking === "drop") return null;
+
+  const center = entry.channels.center;
+  const native = entry.channels.native && p.native && !env.windowFocused;
+  const sound =
+    entry.channels.sound &&
+    entry.sound !== null &&
+    p.sound &&
+    (native || (entry.tier === "needs-you" && !env.targetVisible));
+
+  return {
+    kind: event.kind,
+    tier: entry.tier,
+    title: event.title,
+    body: event.body,
+    target: event.target,
+    dedupeKey: event.dedupeKey,
+    groupKey: entry.groupKey(event.target),
+    channels: {
+      center,
+      toast: entry.channels.toast && !env.targetVisible,
+      native,
+      badge: entry.channels.badge && center && !env.windowFocused,
+      sound,
+    },
+    toast: entry.toast,
+    native: {
+      title: `Atlas: ${event.target.projectName ?? TARGET_LABEL[event.target.type]}`,
+      body: `${event.title} — ${event.body}`,
+      sound: sound && native ? entry.sound?.native : undefined,
+    },
+  };
+}

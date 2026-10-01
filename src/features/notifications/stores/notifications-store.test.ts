@@ -1,7 +1,11 @@
+// @vitest-environment happy-dom
 import { beforeEach, describe, expect, it } from "vitest";
 import { hasUnread, isErrorKind, useNotificationsStore, visibleItems } from "./notifications-store";
 
-beforeEach(() => useNotificationsStore.setState({ items: [], panelOpen: false }));
+beforeEach(() => {
+  localStorage.clear();
+  useNotificationsStore.setState({ items: [], panelOpen: false });
+});
 
 const add = (
   orgId: string | undefined,
@@ -43,5 +47,39 @@ describe("org-scoped notifications", () => {
     const items = useNotificationsStore.getState().items;
     expect(items.find((i) => i.orgId === "org-a")?.read).toBe(true);
     expect(items.find((i) => i.orgId === "org-b")?.read).toBe(false);
+  });
+});
+
+describe("persistence", () => {
+  const KEY = "atlas-notifications";
+  const stored = () => JSON.parse(localStorage.getItem(KEY) ?? "{}").state;
+
+  it("persists items but not the panel's open state", () => {
+    add("org-a");
+    useNotificationsStore.getState().actions.open("org-a");
+    expect(stored().items).toHaveLength(1);
+    expect(stored().panelOpen).toBeUndefined();
+  });
+
+  it("restores items on rehydrate, capped at 200, dropping unknown kinds", async () => {
+    const item = (i: number, kind = "terminal-done") => ({
+      id: `n${i}`,
+      kind,
+      title: "t",
+      body: "b",
+      timestamp: new Date(0).toISOString(),
+      source: "terminal",
+      orgId: "org-a",
+      read: false,
+    });
+    const items = [item(-1, "chat-done"), ...Array.from({ length: 250 }, (_, i) => item(i))];
+    // After any setState — a write would overwrite the fixture.
+    localStorage.setItem(KEY, JSON.stringify({ state: { items }, version: 1 }));
+    await useNotificationsStore.persist.rehydrate();
+    const restored = useNotificationsStore.getState().items;
+    expect(restored).toHaveLength(200);
+    expect(restored[0].id).toBe("n0");
+    expect(useNotificationsStore.getState().panelOpen).toBe(false);
+    expect(visibleItems(restored, "org-b")).toHaveLength(0);
   });
 });
