@@ -8,7 +8,7 @@ import {
   type AgentNotificationPrefs,
   type AgentNotifyEvent,
 } from "./agent-notifier-rules";
-import { describePermission, failureBody } from "./agent-notifier-rules";
+import { describePermission, describeQuestion, failureBody } from "./agent-notifier-rules";
 import { AWAY_IDLE_MS, computeAway, type NotificationEnv } from "./decide";
 
 const ctx: AgentCtx = {
@@ -308,5 +308,58 @@ describe("permission copy", () => {
       subtitle: "atlas",
       body: "Needs approval — Run rm -rf dist",
     });
+  });
+});
+
+describe("question copy", () => {
+  const ask = (message: string): AgentNotifyEvent => ({
+    type: "question_asked",
+    requestId: "q1",
+    message,
+  });
+
+  it("is the needs-you tier: banner with a sound when away, toast off screen", () => {
+    const d = decideAgentNotification(ask("Which database?"), ctx, away, prefs);
+    expect(d?.kind).toBe("agent-question");
+    expect(d?.channels.center).toBe(true);
+    expect(d?.channels.toast).toBe(true);
+    expect(d?.channels.native).toBe(true);
+    expect(d?.native?.body).toBe("Which database?");
+    expect(d?.native?.sound).toBeTruthy();
+    const off = decideAgentNotification(
+      ask("Which database?"),
+      ctx,
+      { ...looking, targetVisible: false },
+      prefs,
+    );
+    expect(off?.channels.toast).toBe(true);
+  });
+
+  it("shows the question under the agent and thread title", () => {
+    const d = decideAgentNotification(
+      ask("Which database?"),
+      { ...ctx },
+      { ...away, projectActive: false },
+      prefs,
+    );
+    expect(d?.title).toBe("Claude Code · Fix the build");
+    expect(d?.subtitle).toBe("atlas");
+    expect(d?.body).toBe("Which database?");
+  });
+
+  it("collapses to one line and caps long questions", () => {
+    expect(describeQuestion("Which\n\n  database   do you want?")).toBe(
+      "Which database do you want?",
+    );
+    const out = describeQuestion(`${"word ".repeat(60)}`);
+    expect(out.length).toBeLessThanOrEqual(120);
+    expect(out.endsWith("…")).toBe(true);
+    expect(describeQuestion("  ")).toBe("Has a question for you");
+  });
+
+  it("is silenced by the master switch and the banner pref", () => {
+    expect(decideAgentNotification(ask("q?"), ctx, away, { ...prefs, enabled: false })).toBeNull();
+    const d = decideAgentNotification(ask("q?"), ctx, away, { ...prefs, native: false });
+    expect(d?.channels.native).toBe(false);
   });
 });

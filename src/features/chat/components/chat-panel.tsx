@@ -1,4 +1,5 @@
 import { lazy, Suspense, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { clearAgentQuestion } from "@/features/notifications/lib/agent-notifier";
 import { copyText } from "@/lib/clipboard";
 import { matchesAction } from "@/features/keybindings/lib/use-scoped-hotkeys";
 import { useChatStore } from "../stores/chat-store";
@@ -1446,7 +1447,10 @@ export const ChatPanel = memo(function ChatPanel({ tabId }: ChatPanelProps) {
             <SessionElicitation
               key={pendingElicitation.requestId}
               pending={pendingElicitation}
-              onClose={() => clearElicitation(tabId)}
+              onClose={() => {
+                clearAgentQuestion(tabId, pendingElicitation.requestId);
+                clearElicitation(tabId);
+              }}
             />
           )}
           {/* Bottom fade lives in the transcript; the centered floating

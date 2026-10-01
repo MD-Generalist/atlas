@@ -116,6 +116,18 @@ export const NOTIFICATION_CATALOG = {
     groupKey: byTarget,
     setting: null,
   },
+  // The agent asked the user a question mid-turn (ADR-0013) — blocked on the
+  // user exactly like a permission request, so it behaves like one.
+  "agent-question": {
+    tier: "needs-you",
+    source: "agent",
+    channels: ALL_CHANNELS,
+    whenLooking: "record",
+    sound: { native: "Ping" },
+    toast: { variant: "default", durationMs: ATTENTION_TOAST_MS },
+    groupKey: byTarget,
+    setting: null,
+  },
   // A finish is quiet: the banner carries no sound (permission and failures do).
   "agent-done": {
     tier: "outcome",

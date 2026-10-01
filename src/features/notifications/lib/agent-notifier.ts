@@ -3,7 +3,7 @@
  * notification pipeline.
  *
  * ENTRY POINT — `notifyAgentEvent(delta)`. App.tsx's session-delta listener
- * forwards `permission_request`, `turn_finished`, `turn_failed` and
+ * forwards `permission_request`, `elicitation_requested`, `turn_finished`, `turn_failed` and
  * `agent_disconnected` here and does nothing else notification-related.
  *
  * Flow: delta → `AgentNotifyEvent` → `decideAgentNotification` (pure, in
@@ -31,6 +31,7 @@ import { useAgentNotifyPrefsStore } from "../stores/agent-notify-prefs-store";
 import {
   decideAgentNotification,
   isSupersededTurn,
+  questionDedupeKey,
   type AgentCtx,
   type AgentNotifyEvent,
 } from "./agent-notifier-rules";
@@ -38,6 +39,9 @@ import { turnStats } from "./agent-turn-stats";
 import { createBannerCoalescer } from "./banner-coalescer";
 import { computeAway, type NotificationEnv } from "./decide";
 import { deliverNotification } from "./deliver";
+import { toast } from "sonner";
+import { setDockBadge } from "@/lib/dock-badge";
+import { useNotificationsStore } from "../stores/notifications-store";
 
 /** Banners of finishes within this window of the first merge into one. */
 export const FINISH_BANNER_WINDOW_MS = 3_000;
@@ -85,6 +89,8 @@ function toNotifyEvent(env: AgentDelta, session: ChatSession): AgentNotifyEvent 
         toolTitle,
       };
     }
+    case "elicitation_requested":
+      return { type: "question_asked", requestId: env.request_id, message: env.message };
     case "turn_finished": {
       const stats = turnStats(session.messages, Date.now());
       return {
@@ -121,6 +127,7 @@ export function notifyAgentEvent(env: AgentDelta): void {
   try {
     if (
       env.kind !== "permission_request" &&
+      env.kind !== "elicitation_requested" &&
       env.kind !== "turn_finished" &&
       env.kind !== "turn_failed" &&
       env.kind !== "agent_disconnected"
@@ -179,5 +186,20 @@ export function notifyAgentEvent(env: AgentDelta): void {
     deliverNotification(decision);
   } catch (err) {
     console.warn("agent notifier failed:", err);
+  }
+}
+
+/** The user answered or dismissed the agent's question: drop its persistent
+ *  toast, mark its center item read and refresh the dock badge. */
+export function clearAgentQuestion(tabId: string, requestId: string): void {
+  try {
+    const session = useChatStore.getState().sessions[tabId];
+    const sid = session?.acpSessionId ?? tabId;
+    toast.dismiss(`bg-session-${questionDedupeKey(sid, requestId)}`);
+    const store = useNotificationsStore.getState();
+    store.actions.markSessionKindRead(sid, "agent-question");
+    setDockBadge(useNotificationsStore.getState().items.filter((i) => !i.read).length);
+  } catch (err) {
+    console.warn("agent question clear failed:", err);
   }
 }

@@ -1080,6 +1080,13 @@ export function App() {
           schedule();
           notifyAgentEvent(env);
           return;
+        case "elicitation_requested":
+          // The agent is blocked on the user's answer — same as a permission
+          // request, tell them (center, toast, banner) as well as render it.
+          bufferDelta(env);
+          schedule();
+          notifyAgentEvent(env);
+          return;
         default:
           bufferDelta(env);
           schedule();

@@ -1,6 +1,6 @@
 /**
  * The agent notifier's rules — pure, no store or Tauri imports. It classifies
- * an agent event (a turn ending, a permission request, the agent process
+ * an agent event (a turn ending, a permission request or question, the agent process
  * dying) into a notification-catalog kind (`classifyAgentEvent`) and maps the
  * agent prefs onto per-kind prefs; the shared `decideNotification` picks the
  * channels. `agent-notifier.ts` supplies the environment and delivers.
@@ -30,7 +30,7 @@ export interface AgentNotificationPrefs {
   /** Allow sound (banner sound or in-app chime). */
   sound: boolean;
   /** A turn that finished faster than this stays quiet. 0 = off. Failures,
-   *  permission requests and disconnects ignore it. */
+   *  permission requests, questions and disconnects ignore it. */
   minDurationMs: number;
 }
 
@@ -61,6 +61,12 @@ export type AgentNotifyEvent =
       toolTitle?: string;
     }
   | {
+      type: "question_asked";
+      requestId: string;
+      /** The question, as the agent worded it. May be empty (url mode). */
+      message: string;
+    }
+  | {
       type: "turn_finished";
       stopReason: string;
       nonce: string | number;
@@ -85,6 +91,7 @@ export function agentKindPrefs(p: AgentNotificationPrefs): NotificationPrefs {
   const kind = { enabled: p.enabled, native: p.native, sound: p.sound };
   return {
     permission: kind,
+    "agent-question": kind,
     "agent-done": kind,
     "agent-failed": kind,
     "agent-disconnected": kind,
@@ -157,6 +164,22 @@ export function describePermission(toolCall: unknown, fallbackTitle?: string): s
   return kind ? oneLine(kind) : "a tool";
 }
 
+const QUESTION_MAX = 120;
+
+/** The agent's question on one line, capped at a word boundary where it can. */
+export function describeQuestion(message: string): string {
+  const t = message.replace(/\s+/g, " ").trim();
+  if (!t) return "Has a question for you";
+  if (t.length <= QUESTION_MAX) return t;
+  const cut = t.slice(0, QUESTION_MAX - 1);
+  const space = cut.lastIndexOf(" ");
+  return `${(space > QUESTION_MAX / 2 ? cut.slice(0, space) : cut).trimEnd()}…`;
+}
+
+/** The dedupe key a question's notification (and its toast) carries. */
+export const questionDedupeKey = (sessionKey: string, requestId: string) =>
+  `${sessionKey}:${requestId}:question`;
+
 /** Agent event → catalog event, or null when it is not notification-worthy
  *  at all (independent of environment and channel prefs). */
 export function classifyAgentEvent(
@@ -187,6 +210,13 @@ export function classifyAgentEvent(
         kind: "permission",
         body: `Needs approval — ${describePermission(e.toolCall, e.toolTitle)}`,
         dedupeKey: `${sid}:${e.requestId}:permission`,
+      };
+    case "question_asked":
+      return {
+        ...base,
+        kind: "agent-question",
+        body: describeQuestion(e.message),
+        dedupeKey: questionDedupeKey(sid, e.requestId),
       };
     case "turn_finished": {
       // A cancelled turn is a click the user just made.

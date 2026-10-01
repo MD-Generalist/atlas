@@ -70,6 +70,8 @@ interface NotificationsState {
     dismiss: (id: string) => void;
     clearAll: () => void;
     markAllRead: () => void;
+    /** Mark one session's items of a kind read (its question was answered). */
+    markSessionKindRead: (sessionId: string, kind: NotificationKind) => void;
     /** Opening marks the VISIBLE items read — pass the active org so a look at
      *  org A's panel does not clear org B's unread state. */
     open: (orgId?: string | null) => void;
@@ -121,6 +123,12 @@ export const useNotificationsStore = createSelectors(
           clearAll: () => set({ items: [] }),
           markAllRead: () =>
             set((s) => ({ items: s.items.map((i) => (i.read ? i : { ...i, read: true })) })),
+          markSessionKindRead: (sessionId, kind) =>
+            set((s) => ({
+              items: s.items.map((i) =>
+                !i.read && i.kind === kind && i.sessionId === sessionId ? { ...i, read: true } : i,
+              ),
+            })),
           open: (orgId) =>
             set((s) => ({ panelOpen: true, items: markVisibleRead(s.items, orgId) })),
           close: () => set({ panelOpen: false }),
