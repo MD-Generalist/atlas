@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { NOTIFICATION_CATALOG } from "./catalog";
 import {
+  AWAY_IDLE_MS,
   DEFAULT_KIND_PREFS,
+  computeAway,
   LOOKING_WINDOW_MS,
   decideNotification,
   type NotificationEnv,
@@ -22,12 +24,14 @@ const away: NotificationEnv = {
   sinceInputMs: 999_999,
   targetVisible: false,
   projectActive: true,
+  away: true,
 };
 const looking: NotificationEnv = {
   windowFocused: true,
   sinceInputMs: 1_000,
   targetVisible: true,
   projectActive: true,
+  away: false,
 };
 /** In the app, looking somewhere else. */
 const elsewhere: NotificationEnv = { ...looking, targetVisible: false };
@@ -120,5 +124,25 @@ describe("decideNotification", () => {
       target: { type: "terminal" as const, tabId: "t", terminalId: "p" },
     };
     expect(decideNotification(e, away, {})?.native.title).toBe("Atlas: Terminal");
+  });
+
+  it("raises the OS banner only when away, including focused-but-idle", () => {
+    const idleFocused = { ...elsewhere, away: computeAway(true, AWAY_IDLE_MS) };
+    const d = decideNotification(event("terminal-done"), idleFocused, withSound);
+    expect(d?.channels.native).toBe(true);
+    expect(d?.channels.badge).toBe(false); // the window is in front
+    expect(decideNotification(event("terminal-done"), elsewhere, withSound)?.channels.native).toBe(
+      false,
+    );
+  });
+});
+
+describe("computeAway", () => {
+  it("is away when unfocused, whatever the input age", () => {
+    expect(computeAway(false, 0)).toBe(true);
+  });
+  it("is away when focused but idle for 2 minutes", () => {
+    expect(computeAway(true, AWAY_IDLE_MS - 1)).toBe(false);
+    expect(computeAway(true, AWAY_IDLE_MS)).toBe(true);
   });
 });

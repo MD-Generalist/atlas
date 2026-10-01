@@ -43,6 +43,7 @@ import { isLinux, isWindows } from "@/lib/platform";
 import { useSettingsNav, type SettingsSection } from "../stores/settings-nav-store";
 import { openConfigFile } from "../lib/atlas-config-api";
 import { useSettingsStore } from "@/features/settings/stores/settings-store";
+import { useAgentNotifyPrefsStore } from "@/features/notifications/stores/agent-notify-prefs-store";
 import { useAgentRegistryStore } from "@/features/agents/stores/agent-registry-store";
 
 const SECTIONS: Array<{
@@ -232,6 +233,8 @@ function GeneralSettings() {
   const settings = useSettingsStore.use.settings();
   const configError = useSettingsStore.use.configError();
   const { updateSettings, clearConfigError, resetConfig } = useSettingsStore.use.actions();
+  const agentNotify = useAgentNotifyPrefsStore.use.prefs();
+  const { update: updateAgentNotify } = useAgentNotifyPrefsStore.use.actions();
   const [cli, setCli] = useState<CliStatus | null>(null);
   const [installing, setInstalling] = useState(false);
   const [resettingConfig, setResettingConfig] = useState(false);
@@ -444,6 +447,54 @@ function GeneralSettings() {
           disabled={!settings.terminalNotifications}
           onChange={(next) => updateSettings({ terminalNotifySound: next })}
         />
+      </SettingRow>
+
+      <SectionTitle
+        title="Agent notifications"
+        subtitle="Be told when an agent finishes, fails, disconnects or needs permission"
+      />
+      <SettingRow
+        label="Agent notifications"
+        description="An agent finishing, failing or disconnecting, or asking for permission, raises an item in the notification center, a toast when its chat is off screen, and a system notification when you are away (Atlas in the background, or no input for 2 minutes)."
+      >
+        <Toggle
+          checked={agentNotify.enabled}
+          onChange={(next) => updateAgentNotify({ enabled: next })}
+        />
+      </SettingRow>
+      <SettingRow
+        label="System notifications"
+        description="Also raise a system notification when you are away."
+      >
+        <Toggle
+          checked={agentNotify.native}
+          disabled={!agentNotify.enabled}
+          onChange={(next) => updateAgentNotify({ native: next })}
+        />
+      </SettingRow>
+      <SettingRow label="Sound" description="Play a sound with permission requests and failures.">
+        <Toggle
+          checked={agentNotify.sound}
+          disabled={!agentNotify.enabled}
+          onChange={(next) => updateAgentNotify({ sound: next })}
+        />
+      </SettingRow>
+      <SettingRow
+        label="Notify on finish after"
+        description="A turn that finishes faster than this stays quiet. Failures and permission requests always notify."
+      >
+        <select
+          value={String(agentNotify.minDurationMs)}
+          disabled={!agentNotify.enabled}
+          onChange={(e) => updateAgentNotify({ minDurationMs: Number(e.target.value) })}
+          className="h-7 rounded-md border border-[var(--border)] bg-[var(--card)] px-2 text-xs text-[var(--foreground)] outline-none disabled:opacity-40"
+        >
+          <option value="0">Always</option>
+          <option value="10000">10 seconds</option>
+          <option value="30000">30 seconds</option>
+          <option value="60000">1 minute</option>
+          <option value="300000">5 minutes</option>
+        </select>
       </SettingRow>
 
       <SectionTitle title="Behaviour" subtitle="Files, logs and the editor" />

@@ -13,8 +13,6 @@
  *  - its `groupKey` (what collapses together — one terminal, one session);
  *  - the `setting` that governs it, so Settings and the catalog cannot drift.
  *
- * A kind listed here is not necessarily routed through the pipeline yet:
- * agent kinds are still raised directly by App.tsx (ATL-373 moves them).
  * Pure — no store, Tauri or DOM imports.
  */
 import type { AppSettings } from "@/features/settings/lib/app-settings";
@@ -106,8 +104,8 @@ export const NOTIFICATION_CATALOG = {
     groupKey: byTarget,
     setting: "terminalNotifyOnFailure",
   },
-  // Agent kinds: still raised by App.tsx directly; listed so the center and
-  // the catalog agree on what exists. ATL-373 routes them through the pipeline.
+  // Agent kinds — raised by `agent-notifier.ts`; governed by the agent
+  // notification prefs (`agent-notify-prefs-store`), not an AppSettings key.
   permission: {
     tier: "needs-you",
     source: "agent",
@@ -118,12 +116,13 @@ export const NOTIFICATION_CATALOG = {
     groupKey: byTarget,
     setting: null,
   },
+  // A finish is quiet: the banner carries no sound (permission and failures do).
   "agent-done": {
     tier: "outcome",
     source: "agent",
     channels: ALL_CHANNELS,
     whenLooking: "drop",
-    sound: { native: "Ping" },
+    sound: null,
     toast: { variant: "success", durationMs: DONE_TOAST_MS },
     groupKey: byTarget,
     setting: null,
@@ -135,6 +134,17 @@ export const NOTIFICATION_CATALOG = {
     whenLooking: "record",
     sound: { native: "Ping" },
     toast: { variant: "error", durationMs: DONE_TOAST_MS },
+    groupKey: byTarget,
+    setting: null,
+  },
+  // The agent process died; the session shows Restart. Plain copy for now.
+  "agent-disconnected": {
+    tier: "warning",
+    source: "agent",
+    channels: ALL_CHANNELS,
+    whenLooking: "record",
+    sound: { native: "Ping" },
+    toast: { variant: "error", durationMs: ATTENTION_TOAST_MS },
     groupKey: byTarget,
     setting: null,
   },

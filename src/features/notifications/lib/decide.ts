@@ -7,11 +7,12 @@
  * Channel rules (per-kind behaviour comes from the catalog):
  *  - center: always, unless the kind drops while the user is looking;
  *  - toast: only when the target is off screen;
- *  - native (OS banner): only when the window is unfocused and prefs allow;
+ *  - native (OS banner): only when the user is away and prefs allow;
  *  - badge: whenever the center records while the window is unfocused;
  *  - sound: with the OS banner, or — for `needs-you` kinds — in-app when the
  *    target is off screen.
  * "Looking" = target on screen, window focused, input within the last 30 s.
+ * "Away" = window unfocused, or focused with no discrete input for ≥ 2 min.
  */
 import {
   catalogEntry,
@@ -40,6 +41,8 @@ export interface NotificationEnv {
   targetVisible: boolean;
   /** The target's project is the active one. */
   projectActive: boolean;
+  /** The user is not at the machine — `computeAway`. Gates the OS banner. */
+  away: boolean;
 }
 
 /** Per-kind user prefs. A kind with no entry uses `DEFAULT_KIND_PREFS`. */
@@ -72,6 +75,15 @@ export interface NotificationDecision {
 /** "Looking at it" — inside this window a visible, focused target is quiet. */
 export const LOOKING_WINDOW_MS = 30_000;
 
+/** Focused with no input for this long counts as away (stepped off, window
+ *  left in front). */
+export const AWAY_IDLE_MS = 120_000;
+
+/** The one "away" rule, for every source. */
+export function computeAway(windowFocused: boolean, sinceInputMs: number): boolean {
+  return !windowFocused || sinceInputMs >= AWAY_IDLE_MS;
+}
+
 const TARGET_LABEL: Record<NotificationTarget["type"], string> = {
   terminal: "Terminal",
   session: "Agent",
@@ -89,7 +101,7 @@ export function decideNotification(
   if (looking && entry.whenLooking === "drop") return null;
 
   const center = entry.channels.center;
-  const native = entry.channels.native && p.native && !env.windowFocused;
+  const native = entry.channels.native && p.native && env.away;
   const sound =
     entry.channels.sound &&
     entry.sound !== null &&

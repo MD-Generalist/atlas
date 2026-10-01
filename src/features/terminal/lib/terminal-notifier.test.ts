@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { decideTerminalNotification, type TerminalCtx } from "./terminal-notifier-rules";
-import type { NotificationEnv } from "@/features/notifications/lib/decide";
+import {
+  AWAY_IDLE_MS,
+  computeAway,
+  type NotificationEnv,
+} from "@/features/notifications/lib/decide";
 import type { TerminalNotificationPrefs } from "@/features/settings/lib/app-settings";
 import type { TerminalEvent } from "./block-parser";
 
@@ -24,12 +28,14 @@ const away: NotificationEnv = {
   windowFocused: false,
   sinceInputMs: 999_999,
   projectActive: true,
+  away: true,
 };
 const looking: NotificationEnv = {
   targetVisible: true,
   windowFocused: true,
   sinceInputMs: 1_000,
   projectActive: true,
+  away: false,
 };
 
 const finished = (over: Partial<Extract<TerminalEvent, { type: "commandFinished" }>> = {}) =>
@@ -135,6 +141,17 @@ describe("decideTerminalNotification", () => {
     );
     expect(d?.channels.sound).toBe(true);
     expect(d?.channels.native).toBe(false);
+  });
+
+  it("raises the OS banner when focused but idle for 2 minutes (away)", () => {
+    const idle: NotificationEnv = {
+      ...looking,
+      targetVisible: false,
+      sinceInputMs: AWAY_IDLE_MS,
+      away: computeAway(true, AWAY_IDLE_MS),
+    };
+    const d = decideTerminalNotification(finished(), ctx, idle, prefs);
+    expect(d?.channels.native).toBe(true);
   });
 
   it("an OS banner carries the system sound instead of the in-app chime", () => {

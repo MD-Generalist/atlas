@@ -16,7 +16,8 @@
  *    finishes or the user types into it;
  *  - a command that took the alternate screen (vim, htop) is a session, not a
  *    long command — never "done".
- * Suppression: nothing is shown when the terminal is on screen, the window is
+ * OS banners fire only when the user is away (window unfocused, or focused
+ * and idle for 2 minutes). Suppression: nothing is shown when the terminal is on screen, the window is
  * focused and the user has interacted within the last 30 s — they are looking
  * at it. Failures and attention still land in the center as a record.
  *
@@ -26,7 +27,7 @@
  */
 import { create } from "zustand";
 import { deliverNotification } from "@/features/notifications/lib/deliver";
-import type { NotificationEnv } from "@/features/notifications/lib/decide";
+import { computeAway, type NotificationEnv } from "@/features/notifications/lib/decide";
 import { useLayoutStore } from "@/features/layout/stores/layout-store";
 import { useProjectStore } from "@/features/projects/stores/project-store";
 import { projectIdForTab } from "@/features/chat/lib/tab-project";
@@ -143,11 +144,14 @@ function handleEvent(e: TerminalEvent, base: { terminalId: string; tabId: string
     projectName: project?.name,
     orgId: project?.orgId,
   };
+  const windowFocused = isWindowFocused();
+  const sinceInputMs = Date.now() - lastInteraction();
   const env: NotificationEnv = {
     targetVisible: isTerminalVisible(base.tabId, base.terminalId, projectId),
-    windowFocused: isWindowFocused(),
-    sinceInputMs: Date.now() - lastInteraction(),
+    windowFocused,
+    sinceInputMs,
     projectActive: !projectId || projectId === ws.activeProjectId,
+    away: computeAway(windowFocused, sinceInputMs),
   };
   const decision = decideTerminalNotification(e, ctx, env, prefs);
   if (decision) deliverNotification(decision);

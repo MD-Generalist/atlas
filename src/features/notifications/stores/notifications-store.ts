@@ -1,6 +1,6 @@
 // In-app notification center — the record behind the titlebar bell and the
 // right-side overlay panel. Fed by the notification pipeline
-// (`lib/deliver.ts`) and, until ATL-373, directly by App.tsx for agent kinds.
+// (`lib/deliver.ts`) — terminal and agent sources alike.
 // Items persist across restarts (localStorage, capped at MAX_ITEMS); the
 // panel's open state does not.
 
@@ -52,7 +52,11 @@ export function hasUnread(
   return items.some((i) => !i.read && (!orgId || !i.orgId || i.orgId === orgId) && pred(i));
 }
 
-const ERROR_KINDS: ReadonlySet<NotificationKind> = new Set(["agent-failed", "terminal-failed"]);
+const ERROR_KINDS: ReadonlySet<NotificationKind> = new Set([
+  "agent-failed",
+  "agent-disconnected",
+  "terminal-failed",
+]);
 export const isErrorKind = (i: AppNotification) => ERROR_KINDS.has(i.kind);
 
 const uid = () =>

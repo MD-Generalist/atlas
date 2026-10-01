@@ -55,7 +55,6 @@ import { useRecentChatsStore } from "@/features/projects/stores/recent-chats-sto
 import { stripInjectedContext } from "@/features/chat/lib/atlas-context";
 import { openNewAgentChat } from "@/features/chat/lib/open-agent-session";
 import { requestCloseTab } from "@/features/chat/lib/close-tab";
-import { jumpToSession } from "@/features/chat/lib/tab-project";
 import { pruneContextUsageCache } from "@/features/chat/lib/context-usage-cache";
 import { isScrollHot } from "@/lib/scroll-hot";
 import { isWindows, isLinux } from "@/lib/platform";
@@ -72,11 +71,12 @@ import { AgentElicitationHost } from "@/features/chat/components/agent-elicitati
 import { UiActionBridge } from "@/features/ui-actions/components/ui-action-bridge";
 import { OrgActionLogBridge } from "@/features/org-actions/components/org-action-log-bridge";
 import { initWindowFocusTracking, isWindowFocused } from "@/lib/window-focus";
-import { primeNativeNotificationPermission, sendNativeNotification } from "@/lib/native-notify";
+import { initDockBadgeClearing } from "@/lib/dock-badge";
+import { primeNativeNotificationPermission } from "@/lib/native-notify";
+import { isStaleAgentTurn, notifyAgentEvent } from "@/features/notifications/lib/agent-notifier";
 import { logEvent } from "@/features/log/lib/log";
 import { warmMarkdownWorker, primeMarkdownRenderer } from "@/lib/markdown-cache";
 import { primeMarkdown } from "@/lib/markdown";
-import { useNotificationsStore } from "@/features/notifications/stores/notifications-store";
 import { NotificationPanel } from "@/features/notifications/components/notification-panel";
 import { FeedbackPanel } from "@/features/feedback/components/feedback-panel";
 import { UpdateAvailableModal } from "@/features/updater/components/update-available-modal";
@@ -686,6 +686,7 @@ export function App() {
     // Native window focus + the "cold wake" signal live in `src/lib/window-focus.ts`
     // now — the terminal notifier needs the same answer this file did.
     const stopFocusTracking = initWindowFocusTracking();
+    const stopBadgeClearing = initDockBadgeClearing();
 
     // ── Idle-while-focused cold wake ─────────────────────────────────────────
     // The focus/visibility edges above never fire when Atlas stays the focused,
@@ -727,32 +728,6 @@ export function App() {
     // Establish notification permission EAGERLY at startup (see native-notify.ts
     // for why lazy asking lost the first real background notification).
     void primeNativeNotificationPermission();
-    // Name the SESSION's project, not the active project — a finish in
-    // project B while A is focused used to read "Atlas — A".
-    const sessionProjectName = (acpSessionId: string): string => {
-      const sess = Object.values(useChatStore.getState().sessions).find(
-        (s) => s.acpSessionId === acpSessionId,
-      );
-      const byPath = useProjectStore
-        .getState()
-        .projects.find((w) => w.path === sess?.workingDirectory)?.name;
-      return byPath ?? useAppStore.getState().currentProject?.name ?? "Atlas";
-    };
-    const notifyAgentDone = (acpSessionId: string) =>
-      sendNativeNotification({
-        title: `Atlas: ${sessionProjectName(acpSessionId)}`,
-        body: "Agent task finished.",
-      });
-
-    // Sibling of notifyAgentDone — fires when the agent issues a
-    // permission_request and the window isn't focused (the gate lives in
-    // `sendNativeNotification`).
-    const notifyPermissionRequested = (toolTitle: string, acpSessionId: string) =>
-      sendNativeNotification({
-        title: `Atlas: ${sessionProjectName(acpSessionId)} needs permission`,
-        body: `Approve "${toolTitle}" to continue.`,
-      });
-
     /** Longest a batch may be held for an active scroll gesture. Bounded so a
      *  continuous fling can never starve the stream — worst case the reader
      *  sees updates land ~2-3× per second instead of per frame while flicking. */
@@ -853,18 +828,6 @@ export function App() {
     const flushOnWake = () => flush();
     window.addEventListener("atlas:window-active", flushOnWake);
 
-    // A turn_finished / turn_failed for a turn already superseded by a newer
-    // send (parallel / queued / wake timing) must not fire a "done"
-    // notification or a memory reindex — mirror the chat-store's stale-turn
-    // guard here so side effects don't run for a turn the store will ignore.
-    const isStaleAgentTurn = (sessionId: string, turnSeq?: number): boolean => {
-      if (!turnSeq) return false;
-      for (const sess of Object.values(useChatStore.getState().sessions)) {
-        if (sess.acpSessionId === sessionId) return turnSeq < (sess.currentTurnSeq ?? 0);
-      }
-      return false;
-    };
-
     const bufferDelta = (env: AgentDelta) => {
       // Coalesce same-id `tool_call_upserted` events: replace the
       // entry at the position the tool first appeared so the latest
@@ -916,52 +879,6 @@ export function App() {
       }
       outputChunkPos.set(key, pendingDeltas.length);
       pendingDeltas.push(env);
-    };
-
-    // Resolve the chat tab + title for an ACP session, for in-app notifications.
-    const agentSessionInfo = (acpSessionId: string) => {
-      const sessions = useChatStore.getState().sessions;
-      for (const [tabId, s] of Object.entries(sessions)) {
-        if (s.acpSessionId === acpSessionId) return { tabId, title: s.title };
-      }
-      return {
-        tabId: undefined as string | undefined,
-        title: undefined as string | undefined,
-      };
-    };
-    const notify = () => useNotificationsStore.getState().actions;
-
-    // In-app toast for events from a session the user ISN'T looking at (another
-    // tab or another project) — the OS notification only fires when the whole
-    // window is unfocused, so without this a background project's permission
-    // prompt was invisible until the user happened to switch. Click jumps to
-    // the owning project + tab.
-    const toastBackgroundSession = (
-      tabId: string | undefined,
-      acpSessionId: string,
-      title: string,
-      body: string,
-      kind: "attention" | "done" | "failed",
-    ) => {
-      if (!tabId) return;
-      if (useLayoutStore.getState().activeTabId === tabId) return;
-      const wsName = (() => {
-        const path = useChatStore.getState().sessions[tabId]?.workingDirectory;
-        if (!path) return null;
-        const ws = useProjectStore.getState();
-        const w = ws.projects.find((x) => x.path === path);
-        return w && w.id !== ws.activeProjectId ? w.name : null;
-      })();
-      const fn = kind === "failed" ? toast.error : kind === "done" ? toast.success : toast;
-      fn(wsName ? `${title} — ${wsName}` : title, {
-        id: `bg-session-${kind}-${acpSessionId}`,
-        description: body,
-        duration: kind === "attention" ? 15000 : 5000,
-        action: {
-          label: "Open",
-          onClick: () => void jumpToSession(tabId),
-        },
-      });
     };
 
     // After a native-agent turn that may have changed files, refresh the
@@ -1093,33 +1010,7 @@ export function App() {
             toolCall: env.tool_call as PendingPermission["toolCall"],
             options: env.options as PendingPermission["options"],
           });
-          // OS notification so the user sees the request even with
-          // Atlas in the background. Matches the PermissionModal's own
-          // title-extraction logic.
-          const tc = env.tool_call as Record<string, unknown> | undefined;
-          const toolTitle =
-            (typeof tc?.title === "string" && tc.title) ||
-            (typeof tc?.kind === "string" && tc.kind) ||
-            "tool call";
-          void notifyPermissionRequested(toolTitle, env.session_id);
-          {
-            const info = agentSessionInfo(env.session_id);
-            notify().add({
-              kind: "permission",
-              source: "agent",
-              title: "Permission needed",
-              body: `${info.title ? `${info.title} — ` : ""}approve "${toolTitle}" to continue.`,
-              sessionId: env.session_id,
-              tabId: info.tabId,
-            });
-            toastBackgroundSession(
-              info.tabId,
-              env.session_id,
-              info.title || "Agent needs permission",
-              `Approve "${toolTitle}" to continue.`,
-              "attention",
-            );
-          }
+          notifyAgentEvent(env);
           return;
         }
         case "permission_resolved":
@@ -1131,6 +1022,7 @@ export function App() {
           // discard. `flush` cancels both pending drains itself.
           // Forced: teardown correctness outranks the scroll-hold.
           flush(true);
+          notifyAgentEvent(env);
           actions.clearPermissionsForAgent(env.agent_id);
           // Tabs still waiting to be bound on this agent have no session id
           // for the reducer to route by; fail them by plugin instead. Read
@@ -1161,7 +1053,7 @@ export function App() {
           bufferDelta(env);
           schedule();
           // Superseded by a newer send → the store ignores the idle flip; skip
-          // the "done" notification, memory reindex, and log too.
+          // the memory reindex and log too (the notifier checks this itself).
           if (isStaleAgentTurn(env.session_id, env.turn_seq)) return;
           // Keep the native agent's project memory fresh (debounced, cheap).
           if (env.stop_reason !== "cancelled") autoIndexAfterTurn(env.session_id);
@@ -1176,51 +1068,14 @@ export function App() {
               stopReason: env.stop_reason,
             },
           });
-          // Fire OS notification if the window isn't focused. Skip
-          // user-cancelled turns — that's a click the user just made,
-          // they don't need to be told about it.
-          if (env.stop_reason !== "cancelled") {
-            void notifyAgentDone(env.session_id);
-            const info = agentSessionInfo(env.session_id);
-            notify().add({
-              kind: "agent-done",
-              source: "agent",
-              title: info.title || "Agent",
-              body: "Task finished.",
-              sessionId: env.session_id,
-              tabId: info.tabId,
-            });
-            toastBackgroundSession(
-              info.tabId,
-              env.session_id,
-              info.title || "Agent",
-              "Task finished.",
-              "done",
-            );
-          }
+          // The pipeline skips cancelled and stale turns itself.
+          notifyAgentEvent(env);
           return;
-        case "turn_failed": {
+        case "turn_failed":
           bufferDelta(env);
           schedule();
-          if (isStaleAgentTurn(env.session_id, env.turn_seq)) return;
-          const info = agentSessionInfo(env.session_id);
-          notify().add({
-            kind: "agent-failed",
-            source: "agent",
-            title: info.title || "Agent failed",
-            body: (env as { error?: string }).error || "The agent run failed.",
-            sessionId: env.session_id,
-            tabId: info.tabId,
-          });
-          toastBackgroundSession(
-            info.tabId,
-            env.session_id,
-            info.title || "Agent failed",
-            (env as { error?: string }).error || "The agent run failed.",
-            "failed",
-          );
+          notifyAgentEvent(env);
           return;
-        }
         default:
           bufferDelta(env);
           schedule();
@@ -1245,6 +1100,7 @@ export function App() {
       if (backstopId !== null) clearTimeout(backstopId);
       window.removeEventListener("atlas:window-active", flushOnWake);
       stopFocusTracking();
+      stopBadgeClearing();
       window.removeEventListener("pointerdown", onUserActivity);
       window.removeEventListener("keydown", onUserActivity);
       window.removeEventListener("wheel", onUserActivity);

@@ -172,7 +172,7 @@ function NotificationCard({ n }: { n: AppNotification }) {
 function NotificationIcon({ n }: { n: AppNotification }) {
   if (n.kind === "permission")
     return <Shield size={15} className="text-primary" strokeWidth={1.5} />;
-  if (n.kind === "agent-failed" || n.kind === "terminal-failed")
+  if (n.kind === "agent-failed" || n.kind === "agent-disconnected" || n.kind === "terminal-failed")
     return (
       <AlertTriangle
         size={15}
