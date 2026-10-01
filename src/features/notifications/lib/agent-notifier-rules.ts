@@ -206,6 +206,10 @@ export function describeQuestion(message: string): string {
   return `${(space > QUESTION_MAX / 2 ? cut.slice(0, space) : cut).trimEnd()}…`;
 }
 
+/** The dedupe key a permission request's notification (and its toast) carries. */
+export const permissionDedupeKey = (sessionKey: string, requestId: string) =>
+  `${sessionKey}:${requestId}:permission`;
+
 /** The dedupe key a question's notification (and its toast) carries. */
 export const questionDedupeKey = (sessionKey: string, requestId: string) =>
   `${sessionKey}:${requestId}:question`;
@@ -279,7 +283,7 @@ export function classifyAgentEvent(
         ...base,
         kind: "permission",
         body: `Needs approval — ${describePermission(e.toolCall, e.toolTitle)}`,
-        dedupeKey: `${sid}:${e.requestId}:permission`,
+        dedupeKey: permissionDedupeKey(sid, e.requestId),
       };
     case "question_asked":
       return {

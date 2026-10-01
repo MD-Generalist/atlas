@@ -32,6 +32,7 @@ import { useAgentNotifyPrefsStore } from "../stores/agent-notify-prefs-store";
 import {
   decideAgentNotification,
   isSupersededTurn,
+  permissionDedupeKey,
   questionDedupeKey,
   retryDedupeKey,
   type AgentCtx,
@@ -62,8 +63,8 @@ import { createBannerCoalescer } from "./banner-coalescer";
 import { computeAway, type NotificationDecision, type NotificationEnv } from "./decide";
 import { deliverNotification, notificationToastId, openNotificationTarget } from "./deliver";
 import { toast } from "sonner";
-import { setDockBadge } from "@/lib/dock-badge";
-import { useNotificationsStore } from "../stores/notifications-store";
+import { clearResolved } from "./resolve";
+import type { NotificationKind } from "./catalog";
 
 /** Banners of finishes within this window of the first merge into one. */
 export const FINISH_BANNER_WINDOW_MS = 3_000;
@@ -116,19 +117,13 @@ export function resolveAgentSignIn(agentType: string): void {
   try {
     const st = signInEpisodes.get(agentType);
     if (!st?.open) return;
-    toast.dismiss(
-      notificationToastId(
-        { type: "agent-sign-in", agentType },
-        signInDedupeKey(agentType, st.episode),
-      ),
-    );
     signInEpisodes.set(agentType, resolveSignInEpisode(st));
-    const store = useNotificationsStore.getState();
-    store.actions.markKindRead(
-      "agent-sign-in",
-      (i) => i.target?.type === "agent-sign-in" && i.target.agentType === agentType,
-    );
-    setDockBadge(useNotificationsStore.getState().items.filter((i) => !i.read).length);
+    clearResolved({
+      kind: "agent-sign-in",
+      target: { type: "agent-sign-in", agentType },
+      dedupeKey: signInDedupeKey(agentType, st.episode),
+      markRead: [{ kind: "agent-sign-in", agentType }],
+    });
   } catch (err) {
     console.warn("agent sign-in clear failed:", err);
   }
@@ -290,6 +285,9 @@ export function notifyAgentEvent(env: AgentDelta): void {
     // No open session: nothing to jump to.
     if (!found) return;
     const event = toNotifyEvent(env, found.session);
+    if (env.kind === "turn_finished" || env.kind === "turn_failed") {
+      clearSessionAttention(env.session_id);
+    }
     if (!event) return;
 
     const { ctx, projectId } = buildCtx(found.tabId, found.session, env.session_id);
@@ -300,6 +298,7 @@ export function notifyAgentEvent(env: AgentDelta): void {
       useAgentNotifyPrefsStore.getState().prefs,
     );
     if (!decision) return;
+    noteOutstanding(env.session_id, decision);
 
     // Retry attempts after the first update the live toast in place — a plain
     // re-delivery would be deduped, and a new key would stack a second toast.
@@ -350,16 +349,65 @@ function updateRetryToast(d: NotificationDecision): void {
   });
 }
 
-/** The user answered or dismissed the agent's question: drop its persistent
- *  toast, mark its center item read and refresh the dock badge. */
+// Needs-you notifications still waiting on an answer, per session — what a turn
+// ending (or the tab closing) clears when nothing answered them directly.
+interface Outstanding {
+  kind: NotificationKind;
+  dedupeKey: string;
+}
+const outstanding = new Map<string, Map<string, Outstanding>>();
+
+function noteOutstanding(sid: string, d: NotificationDecision): void {
+  if (d.kind !== "permission" && d.kind !== "agent-question") return;
+  const m = outstanding.get(sid) ?? new Map<string, Outstanding>();
+  m.set(d.dedupeKey, { kind: d.kind, dedupeKey: d.dedupeKey });
+  outstanding.set(sid, m);
+}
+
+/** Take a session's request down — toast, banner, center item — and forget it.
+ *  Only marks the center read when no sibling request of that kind is still
+ *  waiting (a second pending permission must stay unread). */
+function resolveOutstanding(sid: string, kind: NotificationKind, dedupeKey: string): void {
+  const m = outstanding.get(sid);
+  m?.delete(dedupeKey);
+  const othersWaiting = [...(m?.values() ?? [])].some((o) => o.kind === kind);
+  if (m?.size === 0) outstanding.delete(sid);
+  clearResolved({
+    kind,
+    target: { type: "session", tabId: "", sessionId: sid },
+    dedupeKey,
+    markRead: othersWaiting ? [] : [{ kind, sessionId: sid }],
+  });
+}
+
+/** A permission request was resolved — answered in-app, by another path, or
+ *  cancelled. Idempotent; never throws. */
+export function resolveAgentPermission(sessionId: string, requestId: string): void {
+  try {
+    resolveOutstanding(sessionId, "permission", permissionDedupeKey(sessionId, requestId));
+  } catch (err) {
+    console.warn("agent permission clear failed:", err);
+  }
+}
+
+/** The turn is over (or the thread closed): nothing it was waiting on is
+ *  answerable any more. */
+export function clearSessionAttention(sessionId: string): void {
+  try {
+    for (const o of outstanding.get(sessionId)?.values() ?? []) {
+      resolveOutstanding(sessionId, o.kind, o.dedupeKey);
+    }
+  } catch (err) {
+    console.warn("agent attention clear failed:", err);
+  }
+}
+
+/** The user answered or dismissed the agent's question. */
 export function clearAgentQuestion(tabId: string, requestId: string): void {
   try {
     const session = useChatStore.getState().sessions[tabId];
     const sid = session?.acpSessionId ?? tabId;
-    toast.dismiss(`bg-session-${questionDedupeKey(sid, requestId)}`);
-    const store = useNotificationsStore.getState();
-    store.actions.markSessionKindRead(sid, "agent-question");
-    setDockBadge(useNotificationsStore.getState().items.filter((i) => !i.read).length);
+    resolveOutstanding(sid, "agent-question", questionDedupeKey(sid, requestId));
   } catch (err) {
     console.warn("agent question clear failed:", err);
   }

@@ -18,7 +18,13 @@ import { useNotificationsStore } from "../stores/notifications-store";
 import { useAuthStore } from "@/features/auth/stores/auth-store";
 import { promptSignIn } from "@/features/chat/lib/agent-signin";
 import { commsActions } from "@/features/comms/stores/comms-store";
-import { catalogEntry, isTabTarget, type NotificationTarget } from "./catalog";
+import {
+  catalogEntry,
+  isTabTarget,
+  notificationTag,
+  notificationToastId,
+  type NotificationTarget,
+} from "./catalog";
 import type { NotificationDecision } from "./decide";
 import { encodeBannerPayload, targetForResponse } from "./native-routing";
 
@@ -46,9 +52,7 @@ export function openNotificationTarget(t: NotificationTarget): void {
   }
 }
 
-/** The toast id a decision's toast carries, so a source can dismiss it later. */
-export const notificationToastId = (target: NotificationTarget, dedupeKey: string) =>
-  `bg-${target.type}-${dedupeKey}`;
+export { notificationToastId };
 
 // A click on an OS banner opens its exact source (thread tab or terminal pane),
 // across projects. Registered at module load so a click that launched the app
@@ -103,7 +107,7 @@ export function deliverNotification(d: NotificationDecision): boolean {
   if (d.channels.native) {
     void showNativeNotification({
       // Re-delivering a dedupe key replaces its banner; one group per thread/terminal.
-      tag: `${d.kind}:${d.dedupeKey}`,
+      tag: notificationTag(d.kind, d.dedupeKey),
       group: d.groupKey,
       title: d.native.title,
       subtitle: d.native.subtitle,

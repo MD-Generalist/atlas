@@ -82,7 +82,8 @@ const ALL_CHANNELS = { center: true, toast: true, native: true, badge: true, sou
 const DONE_TOAST_MS = 5_000;
 const ATTENTION_TOAST_MS = 15_000;
 
-const byTarget = (t: NotificationTarget) => {
+/** The OS-banner group a target's notifications collapse into. */
+export const targetGroupKey = (t: NotificationTarget): string => {
   switch (t.type) {
     case "terminal":
       return `terminal:${t.terminalId}`;
@@ -97,6 +98,14 @@ const byTarget = (t: NotificationTarget) => {
   }
 };
 
+/** The toast id a notification's toast carries, so a source can dismiss it later. */
+export const notificationToastId = (target: NotificationTarget, dedupeKey: string) =>
+  `bg-${target.type}-${dedupeKey}`;
+
+/** The OS-banner tag of a notification — re-delivering a key replaces its banner. */
+export const notificationTag = (kind: NotificationKind, dedupeKey: string) =>
+  `${kind}:${dedupeKey}`;
+
 export const NOTIFICATION_CATALOG = {
   "terminal-attention": {
     tier: "needs-you",
@@ -105,7 +114,7 @@ export const NOTIFICATION_CATALOG = {
     whenLooking: "record",
     sound: { native: "Ping" },
     toast: { variant: "default", durationMs: ATTENTION_TOAST_MS },
-    groupKey: byTarget,
+    groupKey: targetGroupKey,
     setting: "terminalNotifyOnAttention",
   },
   "terminal-done": {
@@ -115,7 +124,7 @@ export const NOTIFICATION_CATALOG = {
     whenLooking: "drop",
     sound: { native: "Ping" },
     toast: { variant: "success", durationMs: DONE_TOAST_MS },
-    groupKey: byTarget,
+    groupKey: targetGroupKey,
     setting: "terminalNotifications",
   },
   "terminal-failed": {
@@ -125,7 +134,7 @@ export const NOTIFICATION_CATALOG = {
     whenLooking: "record",
     sound: { native: "Ping" },
     toast: { variant: "error", durationMs: DONE_TOAST_MS },
-    groupKey: byTarget,
+    groupKey: targetGroupKey,
     setting: "terminalNotifyOnFailure",
   },
   // Agent kinds — raised by `agent-notifier.ts`; governed by the agent
@@ -137,7 +146,7 @@ export const NOTIFICATION_CATALOG = {
     whenLooking: "record",
     sound: { native: "Ping" },
     toast: { variant: "default", durationMs: ATTENTION_TOAST_MS },
-    groupKey: byTarget,
+    groupKey: targetGroupKey,
     setting: null,
   },
   // The agent asked the user a question mid-turn (ADR-0013) — blocked on the
@@ -149,7 +158,7 @@ export const NOTIFICATION_CATALOG = {
     whenLooking: "record",
     sound: { native: "Ping" },
     toast: { variant: "default", durationMs: ATTENTION_TOAST_MS },
-    groupKey: byTarget,
+    groupKey: targetGroupKey,
     setting: null,
   },
   // A finish is quiet: the banner carries no sound (permission and failures do).
@@ -160,7 +169,7 @@ export const NOTIFICATION_CATALOG = {
     whenLooking: "drop",
     sound: null,
     toast: { variant: "success", durationMs: DONE_TOAST_MS },
-    groupKey: byTarget,
+    groupKey: targetGroupKey,
     setting: null,
   },
   "agent-failed": {
@@ -170,7 +179,7 @@ export const NOTIFICATION_CATALOG = {
     whenLooking: "record",
     sound: { native: "Ping" },
     toast: { variant: "error", durationMs: DONE_TOAST_MS },
-    groupKey: byTarget,
+    groupKey: targetGroupKey,
     setting: null,
   },
   // The agent process died; the session shows Restart. Plain copy for now.
@@ -181,7 +190,7 @@ export const NOTIFICATION_CATALOG = {
     whenLooking: "record",
     sound: { native: "Ping" },
     toast: { variant: "error", durationMs: ATTENTION_TOAST_MS },
-    groupKey: byTarget,
+    groupKey: targetGroupKey,
     setting: null,
   },
   // Sign-in problems (ATL-383): every agent stops working until the user acts,
@@ -194,7 +203,7 @@ export const NOTIFICATION_CATALOG = {
     whenLooking: "record",
     sound: { native: "Ping" },
     toast: { variant: "error", durationMs: ATTENTION_TOAST_MS },
-    groupKey: byTarget,
+    groupKey: targetGroupKey,
     setting: null,
   },
   "atlas-signed-out": {
@@ -204,7 +213,7 @@ export const NOTIFICATION_CATALOG = {
     whenLooking: "record",
     sound: { native: "Ping" },
     toast: { variant: "error", durationMs: ATTENTION_TOAST_MS },
-    groupKey: byTarget,
+    groupKey: targetGroupKey,
     setting: null,
   },
   // Chat (ATL-387): a DM / group DM message, or an @mention in a channel.
@@ -217,7 +226,7 @@ export const NOTIFICATION_CATALOG = {
     whenLooking: "drop",
     sound: { native: "Ping" },
     toast: { variant: "default", durationMs: ATTENTION_TOAST_MS },
-    groupKey: byTarget,
+    groupKey: targetGroupKey,
     setting: null,
   },
   "chat-mention": {
@@ -227,7 +236,7 @@ export const NOTIFICATION_CATALOG = {
     whenLooking: "drop",
     sound: { native: "Ping" },
     toast: { variant: "default", durationMs: ATTENTION_TOAST_MS },
-    groupKey: byTarget,
+    groupKey: targetGroupKey,
     setting: null,
   },
   // Degradation warnings (ATL-385): quiet by design — no sound, and the OS
@@ -239,7 +248,7 @@ export const NOTIFICATION_CATALOG = {
     whenLooking: "record",
     sound: null,
     toast: { variant: "default", durationMs: ATTENTION_TOAST_MS },
-    groupKey: byTarget,
+    groupKey: targetGroupKey,
     setting: null,
   },
   "agent-rate-limit": {
@@ -249,7 +258,7 @@ export const NOTIFICATION_CATALOG = {
     whenLooking: "record",
     sound: null,
     toast: { variant: "default", durationMs: ATTENTION_TOAST_MS },
-    groupKey: byTarget,
+    groupKey: targetGroupKey,
     setting: null,
   },
   // One toast per thread, updated in place as attempts advance.
@@ -260,7 +269,7 @@ export const NOTIFICATION_CATALOG = {
     whenLooking: "record",
     sound: null,
     toast: { variant: "default", durationMs: ATTENTION_TOAST_MS },
-    groupKey: byTarget,
+    groupKey: targetGroupKey,
     setting: null,
   },
 } as const satisfies Record<string, CatalogEntry>;

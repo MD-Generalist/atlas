@@ -4,10 +4,7 @@
  * reports the session expired or revoked, `noteAtlasSignedIn` when a snapshot
  * says signed-in again (which closes the episode, so the next sign-out speaks).
  */
-import { toast } from "sonner";
-import { setDockBadge } from "@/lib/dock-badge";
 import { isWindowFocused, lastInteraction } from "@/lib/window-focus";
-import { useNotificationsStore } from "../stores/notifications-store";
 import {
   INITIAL_SIGN_IN_EPISODE,
   openSignInEpisode,
@@ -16,7 +13,8 @@ import {
 } from "./agent-signin-rules";
 import { decideSignedOut } from "./app-notifier-rules";
 import { computeAway } from "./decide";
-import { deliverNotification, notificationToastId } from "./deliver";
+import { deliverNotification } from "./deliver";
+import { clearResolved } from "./resolve";
 
 let episode = INITIAL_SIGN_IN_EPISODE;
 
@@ -44,12 +42,14 @@ export function notifyAtlasSignedOut(message: string): void {
 export function noteAtlasSignedIn(): void {
   try {
     if (!episode.open) return;
-    toast.dismiss(
-      notificationToastId({ type: "atlas-sign-in" }, signedOutDedupeKey(episode.episode)),
-    );
+    const open = episode;
     episode = resolveSignInEpisode(episode);
-    useNotificationsStore.getState().actions.markKindRead("atlas-signed-out");
-    setDockBadge(useNotificationsStore.getState().items.filter((i) => !i.read).length);
+    clearResolved({
+      kind: "atlas-signed-out",
+      target: { type: "atlas-sign-in" },
+      dedupeKey: signedOutDedupeKey(open.episode),
+      markRead: [{ kind: "atlas-signed-out" }],
+    });
   } catch (err) {
     console.warn("signed-in cleanup failed:", err);
   }

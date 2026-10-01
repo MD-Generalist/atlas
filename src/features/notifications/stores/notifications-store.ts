@@ -86,6 +86,8 @@ interface NotificationsState {
     /** Mark unread items of a kind (optionally narrowed) read — the thing they
      *  were about is resolved. */
     markKindRead: (kind: NotificationKind, match?: (i: AppNotification) => boolean) => void;
+    /** Mark every unread item the predicate accepts as read. */
+    markReadWhere: (match: (i: AppNotification) => boolean) => void;
     /** Opening marks the VISIBLE items read — pass the active org so a look at
      *  org A's panel does not clear org B's unread state. */
     open: (orgId?: string | null) => void;
@@ -161,6 +163,10 @@ export const useNotificationsStore = createSelectors(
               items: s.items.map((i) =>
                 !i.read && i.kind === kind && (!match || match(i)) ? { ...i, read: true } : i,
               ),
+            })),
+          markReadWhere: (match) =>
+            set((s) => ({
+              items: s.items.map((i) => (!i.read && match(i) ? { ...i, read: true } : i)),
             })),
           open: (orgId) =>
             set((s) => ({ panelOpen: true, items: markVisibleRead(s.items, orgId) })),

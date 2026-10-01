@@ -73,7 +73,12 @@ import { OrgActionLogBridge } from "@/features/org-actions/components/org-action
 import { initWindowFocusTracking, isWindowFocused } from "@/lib/window-focus";
 import { initDockBadgeClearing } from "@/lib/dock-badge";
 import { primeNativeNotificationPermission } from "@/lib/native-notify";
-import { isStaleAgentTurn, notifyAgentEvent } from "@/features/notifications/lib/agent-notifier";
+import {
+  isStaleAgentTurn,
+  notifyAgentEvent,
+  resolveAgentPermission,
+} from "@/features/notifications/lib/agent-notifier";
+import { initSourceOpenedClearing } from "@/features/notifications/lib/source-opened";
 import { notifyChatEnvelope } from "@/features/notifications/lib/chat-notifier";
 import { noteAtlasSignedIn, notifyAtlasSignedOut } from "@/features/notifications/lib/app-notifier";
 import { logEvent } from "@/features/log/lib/log";
@@ -694,6 +699,8 @@ export function App() {
     // now — the terminal notifier needs the same answer this file did.
     const stopFocusTracking = initWindowFocusTracking();
     const stopBadgeClearing = initDockBadgeClearing();
+    // Opening a thread/terminal/conversation clears its stale banners + unread items.
+    const stopSourceOpened = initSourceOpenedClearing();
 
     // ── Idle-while-focused cold wake ─────────────────────────────────────────
     // The focus/visibility edges above never fire when Atlas stays the focused,
@@ -1022,6 +1029,8 @@ export function App() {
         }
         case "permission_resolved":
           actions.popPermission(env.session_id, env.request_id);
+          // Answered anywhere (in-app, another path, cancelled): its banner goes too.
+          resolveAgentPermission(env.session_id, String(env.request_id));
           return;
         case "agent_disconnected":
           // Flush whatever's buffered before tearing the agent down
@@ -1127,6 +1136,7 @@ export function App() {
       window.removeEventListener("atlas:window-active", flushOnWake);
       stopFocusTracking();
       stopBadgeClearing();
+      stopSourceOpened();
       window.removeEventListener("pointerdown", onUserActivity);
       window.removeEventListener("keydown", onUserActivity);
       window.removeEventListener("wheel", onUserActivity);
