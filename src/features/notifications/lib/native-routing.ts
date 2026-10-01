@@ -20,6 +20,7 @@ function isTarget(t: unknown): t is NotificationTarget {
   // App-level targets own no tab.
   if (r.type === "atlas-sign-in") return true;
   if (r.type === "agent-sign-in") return typeof r.agentType === "string" && !!r.agentType;
+  if (r.type === "chat-conversation") return typeof r.convId === "string" && !!r.convId;
   if (typeof r.tabId !== "string" || !r.tabId) return false;
   if (r.type === "terminal") return typeof r.terminalId === "string";
   return r.type === "session";

@@ -20,7 +20,7 @@ import type { AppSettings } from "@/features/settings/lib/app-settings";
 export type NotificationTier = "needs-you" | "outcome" | "warning" | "team";
 
 /** Which subsystem raised it — drives the center's icon and click routing. */
-export type NotificationSource = "agent" | "terminal" | "app";
+export type NotificationSource = "agent" | "terminal" | "app" | "chat";
 
 export type NotificationChannel = "center" | "toast" | "native" | "badge" | "sound";
 
@@ -69,7 +69,9 @@ export type NotificationTarget =
   /** Atlas itself is signed out — opens the connect dialog. */
   | { type: "atlas-sign-in" }
   /** One agent needs credentials — opens that agent's sign-in dialog. */
-  | { type: "agent-sign-in"; agentType: string };
+  | { type: "agent-sign-in"; agentType: string }
+  /** A Chat conversation (DM, group DM or channel) — opens it in the Chat panel. */
+  | { type: "chat-conversation"; convId: string; orgId?: string };
 
 /** Targets that live in a chat or terminal tab (and so carry project/org). */
 export type TabTarget = Extract<NotificationTarget, { type: "terminal" | "session" }>;
@@ -90,6 +92,8 @@ const byTarget = (t: NotificationTarget) => {
       return "atlas-sign-in";
     case "agent-sign-in":
       return `agent-sign-in:${t.agentType}`;
+    case "chat-conversation":
+      return `chat:${t.convId}`;
   }
 };
 
@@ -200,6 +204,29 @@ export const NOTIFICATION_CATALOG = {
     whenLooking: "record",
     sound: { native: "Ping" },
     toast: { variant: "error", durationMs: ATTENTION_TOAST_MS },
+    groupKey: byTarget,
+    setting: null,
+  },
+  // Chat (ATL-387): a DM / group DM message, or an @mention in a channel.
+  // Nothing to say while the conversation is on screen and being looked at.
+  // Muting does not exist in the Chat model, so there is nothing to honour yet.
+  "chat-dm": {
+    tier: "team",
+    source: "chat",
+    channels: ALL_CHANNELS,
+    whenLooking: "drop",
+    sound: { native: "Ping" },
+    toast: { variant: "default", durationMs: ATTENTION_TOAST_MS },
+    groupKey: byTarget,
+    setting: null,
+  },
+  "chat-mention": {
+    tier: "team",
+    source: "chat",
+    channels: ALL_CHANNELS,
+    whenLooking: "drop",
+    sound: { native: "Ping" },
+    toast: { variant: "default", durationMs: ATTENTION_TOAST_MS },
     groupKey: byTarget,
     setting: null,
   },

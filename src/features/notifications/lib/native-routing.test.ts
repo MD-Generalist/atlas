@@ -25,10 +25,11 @@ describe("banner payload round trip", () => {
     expect(targetForResponse(click(encodeBannerPayload(target)))).toEqual(target);
   });
 
-  it("rebuilds the app-level sign-in targets, which own no tab", () => {
+  it("rebuilds the app-level targets (sign-in, Chat), which own no tab", () => {
     for (const target of [
       { type: "atlas-sign-in" },
       { type: "agent-sign-in", agentType: "cursor" },
+      { type: "chat-conversation", convId: "c1", orgId: "o" },
     ] satisfies NotificationTarget[]) {
       expect(targetForResponse(click(encodeBannerPayload(target)))).toEqual(target);
     }

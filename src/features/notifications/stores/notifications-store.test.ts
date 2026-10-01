@@ -98,6 +98,8 @@ describe("persistence", () => {
       item("ok", { type: "agent-sign-in", agentType: "cursor" }),
       item("atlas", { type: "atlas-sign-in" }),
       item("bad", { type: "agent-sign-in" }),
+      item("chat", { type: "chat-conversation", convId: "c1" }),
+      item("badchat", { type: "chat-conversation" }),
     ];
     localStorage.setItem(KEY, JSON.stringify({ state: { items }, version: 1 }));
     await useNotificationsStore.persist.rehydrate();
@@ -105,6 +107,8 @@ describe("persistence", () => {
     expect(byId.ok.target).toEqual({ type: "agent-sign-in", agentType: "cursor" });
     expect(byId.atlas.target).toEqual({ type: "atlas-sign-in" });
     expect(byId.bad.target).toBeUndefined();
+    expect(byId.chat.target).toEqual({ type: "chat-conversation", convId: "c1" });
+    expect(byId.badchat.target).toBeUndefined();
   });
 });
 

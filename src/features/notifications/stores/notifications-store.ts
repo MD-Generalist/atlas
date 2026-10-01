@@ -12,6 +12,7 @@ import {
   type NotificationKind,
   type NotificationSource,
   type NotificationTarget,
+  type TabTarget,
 } from "../lib/catalog";
 
 export type { NotificationKind, NotificationSource } from "../lib/catalog";
@@ -34,8 +35,9 @@ export interface AppNotification {
    *  is visible everywhere. */
   projectId?: string;
   orgId?: string;
-  /** App-level target (a sign-in surface) for items that own no tab. */
-  target?: Extract<NotificationTarget, { type: "atlas-sign-in" | "agent-sign-in" }>;
+  /** App-level target (a sign-in surface, a Chat conversation) for items that
+   *  own no tab. */
+  target?: Exclude<NotificationTarget, TabTarget>;
   read: boolean;
 }
 
@@ -119,7 +121,8 @@ function isAppTarget(t: unknown): t is NonNullable<AppNotification["target"]> {
   const r = t as Record<string, unknown>;
   return (
     r.type === "atlas-sign-in" ||
-    (r.type === "agent-sign-in" && typeof r.agentType === "string" && !!r.agentType)
+    (r.type === "agent-sign-in" && typeof r.agentType === "string" && !!r.agentType) ||
+    (r.type === "chat-conversation" && typeof r.convId === "string" && !!r.convId)
   );
 }
 

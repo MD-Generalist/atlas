@@ -94,9 +94,10 @@ const TARGET_LABEL: Record<NotificationTarget["type"], string> = {
   session: "Agent",
   "atlas-sign-in": "Atlas",
   "agent-sign-in": "Agent",
+  "chat-conversation": "Chat",
 };
 
-/** Agent and app copy is already banner-shaped (title, subtitle, body); the OS shows
+/** Agent, app and Chat copy is already banner-shaped (title, subtitle, body); the OS shows
  *  the app name, so Atlas adds none. Terminal events keep the project as the
  *  banner title with the event folded into the body. */
 function nativeCopy(event: NotificationEvent, source: string) {

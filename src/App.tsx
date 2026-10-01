@@ -74,6 +74,7 @@ import { initWindowFocusTracking, isWindowFocused } from "@/lib/window-focus";
 import { initDockBadgeClearing } from "@/lib/dock-badge";
 import { primeNativeNotificationPermission } from "@/lib/native-notify";
 import { isStaleAgentTurn, notifyAgentEvent } from "@/features/notifications/lib/agent-notifier";
+import { notifyChatEnvelope } from "@/features/notifications/lib/chat-notifier";
 import { noteAtlasSignedIn, notifyAtlasSignedOut } from "@/features/notifications/lib/app-notifier";
 import { logEvent } from "@/features/log/lib/log";
 import { warmMarkdownWorker, primeMarkdownRenderer } from "@/lib/markdown-cache";
@@ -378,7 +379,11 @@ export function App() {
       const batch = buffer;
       buffer = [];
       const apply = commsActions().applyEnvelope;
-      for (const envelope of batch) apply(envelope);
+      for (const envelope of batch) {
+        apply(envelope);
+        // After the store has the message, so "on screen" and names are current.
+        notifyChatEnvelope(envelope);
+      }
     };
     const off = listenComms((envelope) => {
       buffer.push(envelope);

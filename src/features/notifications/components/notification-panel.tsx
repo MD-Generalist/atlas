@@ -8,6 +8,7 @@ import {
   BellRing,
   SquareTerminal,
   KeyRound,
+  MessageSquare,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Hint } from "@/ui/tooltip";
@@ -182,6 +183,8 @@ function NotificationCard({ n }: { n: AppNotification }) {
 function NotificationIcon({ n }: { n: AppNotification }) {
   if (n.kind === "agent-sign-in" || n.kind === "atlas-signed-out")
     return <KeyRound size={15} className="text-primary" strokeWidth={1.5} />;
+  if (n.source === "chat")
+    return <MessageSquare size={15} className="text-primary" strokeWidth={1.5} />;
   if (n.kind === "permission")
     return <Shield size={15} className="text-primary" strokeWidth={1.5} />;
   if (n.kind === "agent-failed" || n.kind === "agent-disconnected" || n.kind === "terminal-failed")

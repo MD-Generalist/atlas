@@ -17,6 +17,7 @@ import { setDockBadge } from "@/lib/dock-badge";
 import { useNotificationsStore } from "../stores/notifications-store";
 import { useAuthStore } from "@/features/auth/stores/auth-store";
 import { promptSignIn } from "@/features/chat/lib/agent-signin";
+import { commsActions } from "@/features/comms/stores/comms-store";
 import { catalogEntry, isTabTarget, type NotificationTarget } from "./catalog";
 import type { NotificationDecision } from "./decide";
 import { encodeBannerPayload, targetForResponse } from "./native-routing";
@@ -38,6 +39,9 @@ export function openNotificationTarget(t: NotificationTarget): void {
       return;
     case "agent-sign-in":
       promptSignIn(t.agentType);
+      return;
+    case "chat-conversation":
+      commsActions().openConversation(t.convId);
       return;
   }
 }
@@ -75,7 +79,7 @@ export function deliverNotification(d: NotificationDecision): boolean {
       terminalId: t.type === "terminal" ? t.terminalId : undefined,
       sessionId: t.type === "session" ? t.sessionId : undefined,
       projectId: isTabTarget(t) ? t.projectId : undefined,
-      orgId: isTabTarget(t) ? t.orgId : undefined,
+      orgId: isTabTarget(t) || t.type === "chat-conversation" ? t.orgId : undefined,
       // App-level targets have no tab to jump to; the panel opens the target.
       target: isTabTarget(t) ? undefined : t,
     });
