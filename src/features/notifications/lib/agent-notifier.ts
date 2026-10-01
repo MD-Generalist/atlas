@@ -3,8 +3,9 @@
  * notification pipeline.
  *
  * ENTRY POINT — `notifyAgentEvent(delta)`. App.tsx's session-delta listener
- * forwards `permission_request`, `elicitation_requested`, `turn_finished`, `turn_failed` and
- * `agent_disconnected` here and does nothing else notification-related.
+ * forwards `permission_request`, `elicitation_requested`, `turn_finished`, `turn_failed`,
+ * `agent_disconnected` and the warning deltas (`context_usage`, `rate_limits`,
+ * `retry_status`) here and does nothing else notification-related.
  *
  * Flow: delta → `AgentNotifyEvent` → `decideAgentNotification` (pure, in
  * `agent-notifier-rules.ts`: classify into a catalog kind, then the shared
@@ -32,13 +33,26 @@ import {
   decideAgentNotification,
   isSupersededTurn,
   questionDedupeKey,
+  retryDedupeKey,
   type AgentCtx,
   type AgentNotifyEvent,
 } from "./agent-notifier-rules";
+import {
+  INITIAL_CONTEXT_STATE,
+  INITIAL_RATE_STATE,
+  INITIAL_RETRY_STATE,
+  endRetryEpisode,
+  evaluateContextUsage,
+  evaluateRateLimits,
+  evaluateRetry,
+  type ContextWarnState,
+  type RateWarnState,
+  type RetryWarnState,
+} from "./agent-warning-rules";
 import { turnStats } from "./agent-turn-stats";
 import { createBannerCoalescer } from "./banner-coalescer";
-import { computeAway, type NotificationEnv } from "./decide";
-import { deliverNotification } from "./deliver";
+import { computeAway, type NotificationDecision, type NotificationEnv } from "./decide";
+import { deliverNotification, openNotificationTarget } from "./deliver";
 import { toast } from "sonner";
 import { setDockBadge } from "@/lib/dock-badge";
 import { useNotificationsStore } from "../stores/notifications-store";
@@ -71,6 +85,20 @@ export function isStaleAgentTurn(sessionId: string, turnSeq?: number): boolean {
   return !!found && isSupersededTurn(turnSeq, found.session.currentTurnSeq);
 }
 
+// Warning-rule state (pure rules in `agent-warning-rules.ts`). Context and retry
+// are per thread; the rate-limit quota is account-level, so one global state.
+const contextState = new Map<string, ContextWarnState>();
+const retryState = new Map<string, RetryWarnState>();
+let rateState: RateWarnState = INITIAL_RATE_STATE;
+
+/** The turn is over: close its retry episode and drop the retry toast. */
+function endRetry(sessionId: string): void {
+  const st = retryState.get(sessionId);
+  if (!st?.active) return;
+  toast.dismiss(`bg-session-${retryDedupeKey(sessionId, st.episode)}`);
+  retryState.set(sessionId, endRetryEpisode(st));
+}
+
 let counter = 0;
 const nonceFor = (turnSeq?: number) => turnSeq || `n${++counter}`;
 
@@ -91,7 +119,42 @@ function toNotifyEvent(env: AgentDelta, session: ChatSession): AgentNotifyEvent 
     }
     case "elicitation_requested":
       return { type: "question_asked", requestId: env.request_id, message: env.message };
+    case "context_usage": {
+      const r = evaluateContextUsage(
+        contextState.get(env.session_id) ?? INITIAL_CONTEXT_STATE,
+        env.used,
+        env.size,
+      );
+      contextState.set(env.session_id, r.state);
+      return r.warning && { type: "context_warning", ...r.warning };
+    }
+    case "rate_limits": {
+      const r = evaluateRateLimits(rateState, { primary: env.primary, secondary: env.secondary });
+      rateState = r.state;
+      // Every live session hears the same snapshot; the first one speaks.
+      // Both windows crossing in one snapshot is rare; the fuller one speaks.
+      const w = r.warnings.reduce<(typeof r.warnings)[number] | undefined>(
+        (a, b) => (!a || b.percent > a.percent ? b : a),
+        undefined,
+      );
+      return w ? { type: "rate_limit_warning", ...w } : null;
+    }
+    case "retry_status": {
+      const r = evaluateRetry(retryState.get(env.session_id) ?? INITIAL_RETRY_STATE, env.attempt);
+      retryState.set(env.session_id, r.state);
+      return (
+        r.update && {
+          type: "retrying",
+          attempt: env.attempt,
+          maxAttempts: env.max_attempts,
+          lastError: env.last_error,
+          episode: r.update.episode,
+          first: r.update.first,
+        }
+      );
+    }
     case "turn_finished": {
+      endRetry(env.session_id);
       const stats = turnStats(session.messages, Date.now());
       return {
         type: "turn_finished",
@@ -103,6 +166,7 @@ function toNotifyEvent(env: AgentDelta, session: ChatSession): AgentNotifyEvent 
       };
     }
     case "turn_failed":
+      endRetry(env.session_id);
       return {
         type: "turn_failed",
         error: env.error,
@@ -130,7 +194,10 @@ export function notifyAgentEvent(env: AgentDelta): void {
       env.kind !== "elicitation_requested" &&
       env.kind !== "turn_finished" &&
       env.kind !== "turn_failed" &&
-      env.kind !== "agent_disconnected"
+      env.kind !== "agent_disconnected" &&
+      env.kind !== "context_usage" &&
+      env.kind !== "rate_limits" &&
+      env.kind !== "retry_status"
     ) {
       return;
     }
@@ -175,6 +242,12 @@ export function notifyAgentEvent(env: AgentDelta): void {
     );
     if (!decision) return;
 
+    // Retry attempts after the first update the live toast in place — a plain
+    // re-delivery would be deduped, and a new key would stack a second toast.
+    if (event.type === "retrying" && !event.first) {
+      updateRetryToast(decision);
+      return;
+    }
     if (decision.kind === "agent-done" && decision.channels.native) {
       const delivered = deliverNotification({
         ...decision,
@@ -187,6 +260,16 @@ export function notifyAgentEvent(env: AgentDelta): void {
   } catch (err) {
     console.warn("agent notifier failed:", err);
   }
+}
+
+function updateRetryToast(d: NotificationDecision): void {
+  if (!d.channels.toast) return;
+  toast(d.title, {
+    id: `bg-${d.target.type}-${d.dedupeKey}`,
+    description: d.body,
+    duration: d.toast.durationMs,
+    action: { label: "Open", onClick: () => openNotificationTarget(d.target) },
+  });
 }
 
 /** The user answered or dismissed the agent's question: drop its persistent

@@ -1087,6 +1087,14 @@ export function App() {
           schedule();
           notifyAgentEvent(env);
           return;
+        case "context_usage":
+        case "rate_limits":
+        case "retry_status":
+          // Warning-tier notifications (context window, quota, retrying).
+          bufferDelta(env);
+          schedule();
+          notifyAgentEvent(env);
+          return;
         default:
           bufferDelta(env);
           schedule();

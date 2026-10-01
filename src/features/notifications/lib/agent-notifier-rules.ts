@@ -12,6 +12,7 @@
  */
 import type { NotificationTarget } from "./catalog";
 import { firstSentence } from "./agent-summary";
+import { formatResetTime, rateWindowLabel, type RateSlot } from "./agent-warning-rules";
 import { formatFileCount, formatTurnDuration } from "./agent-turn-stats";
 import {
   decideNotification,
@@ -78,7 +79,26 @@ export type AgentNotifyEvent =
       filesEdited?: number;
     }
   | { type: "turn_failed"; error: string; errorKind?: AgentErrorKind; nonce: string | number }
-  | { type: "agent_disconnected"; agentId: string; reason: string; nonce: string | number };
+  | { type: "agent_disconnected"; agentId: string; reason: string; nonce: string | number }
+  // Warning tier — the firing rules live in `agent-warning-rules.ts`.
+  | { type: "context_warning"; percent: number; crossing: number }
+  | {
+      type: "rate_limit_warning";
+      slot: RateSlot;
+      percent: number;
+      windowMinutes: number | null;
+      resetsAt: number | null;
+      seq: number;
+    }
+  | {
+      type: "retrying";
+      attempt: number;
+      maxAttempts: number;
+      lastError: string;
+      episode: number;
+      /** First of its episode: create the toast; otherwise update it. */
+      first: boolean;
+    };
 
 /** A turn_seq below the session's current one belongs to a turn already
  *  superseded by a newer send. 0 / absent (the native agent) is current. */
@@ -89,12 +109,17 @@ export function isSupersededTurn(turnSeq: number | undefined, currentTurnSeq: nu
 /** The agent prefs as per-kind prefs (the master switch gates every kind). */
 export function agentKindPrefs(p: AgentNotificationPrefs): NotificationPrefs {
   const kind = { enabled: p.enabled, native: p.native, sound: p.sound };
+  const warning = { enabled: p.enabled, native: false, sound: false };
   return {
     permission: kind,
     "agent-question": kind,
     "agent-done": kind,
     "agent-failed": kind,
     "agent-disconnected": kind,
+    // Warnings never raise an OS banner by default (no setting to opt in yet).
+    "agent-context-warning": warning,
+    "agent-rate-limit": warning,
+    "agent-retrying": warning,
   };
 }
 
@@ -180,6 +205,31 @@ export function describeQuestion(message: string): string {
 export const questionDedupeKey = (sessionKey: string, requestId: string) =>
   `${sessionKey}:${requestId}:question`;
 
+/** The retry toast's dedupe key — also what its toast id derives from, so the
+ *  notifier can update (or dismiss) it in place. One per retry episode. */
+export const retryDedupeKey = (sessionKey: string, episode: number) =>
+  `${sessionKey}:retry:${episode}`;
+
+/** "Retrying — attempt 3 of 5 · Connection reset" */
+export function describeRetry(attempt: number, maxAttempts: number, lastError: string): string {
+  const head = `Retrying — attempt ${attempt} of ${maxAttempts}`;
+  const detail = firstSentence(lastError);
+  return detail ? `${head} · ${detail}` : head;
+}
+
+/** "5-hour rate limit 92% used — resets 3:45 PM" */
+export function describeRateLimit(
+  percent: number,
+  windowMinutes: number | null,
+  resetsAt: number | null,
+  now?: Date,
+  locale?: string | string[],
+): string {
+  const label = rateWindowLabel(windowMinutes);
+  const head = `${label ? `${label[0].toUpperCase()}${label.slice(1)} rate` : "Rate"} limit ${percent}% used`;
+  return resetsAt == null ? head : `${head} — resets ${formatResetTime(resetsAt, now, locale)}`;
+}
+
 /** Agent event → catalog event, or null when it is not notification-worthy
  *  at all (independent of environment and channel prefs). */
 export function classifyAgentEvent(
@@ -244,6 +294,28 @@ export function classifyAgentEvent(
         kind: "agent-disconnected",
         body: failureBody("process_dead", ""),
         dedupeKey: `${sid}:${e.agentId}:${e.nonce}:disconnected`,
+      };
+    case "context_warning":
+      return {
+        ...base,
+        kind: "agent-context-warning",
+        body: `Context window ${e.percent}% full`,
+        dedupeKey: `${sid}:context:${e.crossing}`,
+      };
+    case "rate_limit_warning":
+      return {
+        ...base,
+        kind: "agent-rate-limit",
+        body: describeRateLimit(e.percent, e.windowMinutes, e.resetsAt),
+        // Quotas are account-level: the key carries no thread.
+        dedupeKey: `rate:${e.slot}:${e.seq}`,
+      };
+    case "retrying":
+      return {
+        ...base,
+        kind: "agent-retrying",
+        body: describeRetry(e.attempt, e.maxAttempts, e.lastError),
+        dedupeKey: retryDedupeKey(sid, e.episode),
       };
   }
 }

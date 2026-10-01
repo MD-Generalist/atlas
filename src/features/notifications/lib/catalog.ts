@@ -160,6 +160,39 @@ export const NOTIFICATION_CATALOG = {
     groupKey: byTarget,
     setting: null,
   },
+  // Degradation warnings (ATL-385): quiet by design — no sound, and the OS
+  // banner is off in the default agent prefs (`agentKindPrefs`).
+  "agent-context-warning": {
+    tier: "warning",
+    source: "agent",
+    channels: ALL_CHANNELS,
+    whenLooking: "record",
+    sound: null,
+    toast: { variant: "default", durationMs: ATTENTION_TOAST_MS },
+    groupKey: byTarget,
+    setting: null,
+  },
+  "agent-rate-limit": {
+    tier: "warning",
+    source: "agent",
+    channels: ALL_CHANNELS,
+    whenLooking: "record",
+    sound: null,
+    toast: { variant: "default", durationMs: ATTENTION_TOAST_MS },
+    groupKey: byTarget,
+    setting: null,
+  },
+  // One toast per thread, updated in place as attempts advance.
+  "agent-retrying": {
+    tier: "warning",
+    source: "agent",
+    channels: ALL_CHANNELS,
+    whenLooking: "record",
+    sound: null,
+    toast: { variant: "default", durationMs: ATTENTION_TOAST_MS },
+    groupKey: byTarget,
+    setting: null,
+  },
 } as const satisfies Record<string, CatalogEntry>;
 
 export type NotificationKind = keyof typeof NOTIFICATION_CATALOG;
