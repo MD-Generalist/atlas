@@ -41,7 +41,7 @@ describe("createBannerCoalescer", () => {
     expect(emit).toHaveBeenCalledOnce();
     const merged = emit.mock.calls[0][0] as NotificationDecision;
     expect(merged.title).toBe("3 agents finished");
-    expect(merged.native.body).toBe("3 agents finished — A, B, C");
+    expect(merged.native).toMatchObject({ title: "3 agents finished", body: "A, B, C" });
     vi.useRealTimers();
   });
 

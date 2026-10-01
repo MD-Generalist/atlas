@@ -8,12 +8,14 @@ import {
   type AgentNotificationPrefs,
   type AgentNotifyEvent,
 } from "./agent-notifier-rules";
+import { describePermission, failureBody } from "./agent-notifier-rules";
 import { AWAY_IDLE_MS, computeAway, type NotificationEnv } from "./decide";
 
 const ctx: AgentCtx = {
   tabId: "chat-1",
   sessionId: "acp-1",
   sessionTitle: "Fix the build",
+  agentName: "Claude Code",
   projectId: "ws-a",
   projectName: "atlas",
   orgId: "org-1",
@@ -54,7 +56,7 @@ describe("decideAgentNotification", () => {
   it("announces a finished turn on every channel but sound", () => {
     const d = decideAgentNotification(finished(), ctx, away, prefs);
     expect(d?.kind).toBe("agent-done");
-    expect(d?.title).toBe("Fix the build");
+    expect(d?.title).toBe("Claude Code · Fix the build");
     expect(d?.channels).toEqual({
       center: true,
       toast: true,
@@ -78,6 +80,7 @@ describe("decideAgentNotification", () => {
     const d = decideAgentNotification(failed, ctx, away, prefs);
     expect(d?.kind).toBe("agent-failed");
     expect(d?.body).toBe("Rate limited");
+    expect(d?.native).toMatchObject({ title: "Claude Code · Fix the build", body: "Rate limited" });
     expect(d?.channels).toMatchObject({ center: true, toast: true, native: true, badge: true });
   });
 
@@ -89,7 +92,8 @@ describe("decideAgentNotification", () => {
   it("a disconnect produces center, toast and the OS banner when away", () => {
     const d = decideAgentNotification(disconnected, ctx, away, prefs);
     expect(d?.kind).toBe("agent-disconnected");
-    expect(d?.title).toBe("Fix the build disconnected");
+    expect(d?.title).toBe("Claude Code · Fix the build");
+    expect(d?.body).toBe("The agent process stopped — restart it to continue");
     expect(d?.channels).toMatchObject({ center: true, toast: true, native: true });
   });
 
@@ -118,7 +122,11 @@ describe("decideAgentNotification", () => {
 
   it("names the project only when it is not the active one", () => {
     const d = decideAgentNotification(finished(), ctx, { ...away, projectActive: false }, prefs);
-    expect(d?.title).toBe("Fix the build — atlas");
+    expect(d?.title).toBe("Claude Code · Fix the build");
+    expect(d?.subtitle).toBe("atlas");
+    expect(d?.native.subtitle).toBe("atlas");
+    // On the active project there is no subtitle.
+    expect(decideAgentNotification(finished(), ctx, away, prefs)?.subtitle).toBeUndefined();
   });
 
   it("gives each occurrence its own dedupe key", () => {
@@ -172,5 +180,133 @@ describe("isSupersededTurn", () => {
     expect(isSupersededTurn(undefined, 3)).toBe(false);
     expect(isSupersededTurn(0, 3)).toBe(false);
     expect(isSupersededTurn(1, undefined)).toBe(false);
+  });
+});
+
+const render = (e: AgentNotifyEvent, env = away) => {
+  const d = decideAgentNotification(e, ctx, { ...env, projectActive: false }, prefs);
+  return d && { title: d.native.title, subtitle: d.native.subtitle, body: d.native.body };
+};
+
+describe("turn_finished copy", () => {
+  it("says what happened: summary, duration, files edited", () => {
+    expect(
+      render(
+        finished({
+          summary: "Moved token refresh into middleware",
+          durationMs: 252_000,
+          filesEdited: 6,
+        }),
+      ),
+    ).toEqual({
+      title: "Claude Code · Fix the build",
+      subtitle: "atlas",
+      body: "Moved token refresh into middleware · 4m 12s · 6 files",
+    });
+  });
+
+  it("a turn without edits omits the file count", () => {
+    expect(render(finished({ summary: "Explained the build", durationMs: 45_000 }))?.body).toBe(
+      "Explained the build · 45s",
+    );
+  });
+
+  it("falls back to stats alone with no usable text", () => {
+    expect(render(finished({ summary: null, durationMs: 90_000, filesEdited: 1 }))?.body).toBe(
+      "1m 30s · 1 file",
+    );
+  });
+
+  it("says Done when there is nothing else to say", () => {
+    expect(render(finished())?.body).toBe("Done");
+  });
+
+  it("gives each non-end_turn stop reason its own wording", () => {
+    const body = (stopReason: string) =>
+      render(finished({ stopReason, summary: "ignored", durationMs: 12_000, filesEdited: 2 }))
+        ?.body;
+    expect(body("max_tokens")).toBe("Hit the output limit · 12s · 2 files");
+    expect(body("max_turn_requests")).toBe("Hit the turn limit · 12s · 2 files");
+    expect(body("refusal")).toBe("Declined · 12s · 2 files");
+    expect(body("end_turn")).toBe("ignored · 12s · 2 files");
+  });
+
+  it("produces nothing for a cancelled turn", () => {
+    expect(render(finished({ stopReason: "cancelled", summary: "x" }))).toBeNull();
+  });
+
+  it("can no longer produce the old generic banner", () => {
+    const d = decideAgentNotification(finished(), ctx, away, prefs);
+    expect(d?.native.title).not.toMatch(/Atlas/);
+    expect(d?.native.body).not.toMatch(/Agent task finished|Task finished/);
+  });
+
+  it("titles by agent alone when the thread has no title", () => {
+    const d = decideAgentNotification(finished(), { ...ctx, sessionTitle: undefined }, away, prefs);
+    expect(d?.title).toBe("Claude Code");
+  });
+});
+
+describe("failure copy", () => {
+  it("words each error kind", () => {
+    expect(failureBody("auth", "401")).toBe("Sign-in expired — sign in again to continue");
+    expect(failureBody("transient", "503")).toBe("Temporary problem — try again in a moment");
+    expect(failureBody("process_dead", "")).toBe(
+      "The agent process stopped — restart it to continue",
+    );
+    expect(failureBody("fatal", "Context window exceeded. Start a new thread.")).toBe(
+      "Failed — Context window exceeded",
+    );
+    expect(failureBody("unknown", "Rate limited")).toBe("Rate limited");
+    expect(failureBody(undefined, "")).toBe("Something went wrong");
+  });
+
+  it("routes the kind from the event", () => {
+    expect(render({ type: "turn_failed", error: "x", errorKind: "auth", nonce: 1 })?.body).toBe(
+      "Sign-in expired — sign in again to continue",
+    );
+  });
+});
+
+describe("permission copy", () => {
+  it("names the tool and the command or target concisely", () => {
+    expect(
+      describePermission({
+        kind: "execute",
+        title: "npm test",
+        rawInput: { command: "npm test -- --run" },
+      }),
+    ).toBe("Run npm test -- --run");
+    expect(describePermission({ kind: "execute", title: "rm -rf dist" })).toBe("Run rm -rf dist");
+    expect(
+      describePermission({ kind: "edit", title: "Edit", rawInput: { file_path: "src/auth.ts" } }),
+    ).toBe("Edit src/auth.ts");
+    expect(describePermission({ title: "Fetch docs" })).toBe("Fetch docs");
+    expect(describePermission(undefined, "tool call")).toBe("tool call");
+    expect(describePermission(null)).toBe("a tool");
+  });
+
+  it("collapses whitespace and caps long commands", () => {
+    const out = describePermission({
+      kind: "execute",
+      rawInput: { command: `echo\n${"a".repeat(200)}` },
+    });
+    expect(out.length).toBeLessThanOrEqual(80);
+    expect(out.startsWith("Run echo aaa")).toBe(true);
+    expect(out.endsWith("…")).toBe(true);
+  });
+
+  it("renders the permission banner", () => {
+    expect(
+      render({
+        type: "permission_requested",
+        requestId: "r",
+        toolCall: { kind: "execute", title: "rm -rf dist" },
+      }),
+    ).toEqual({
+      title: "Claude Code · Fix the build",
+      subtitle: "atlas",
+      body: "Needs approval — Run rm -rf dist",
+    });
   });
 });

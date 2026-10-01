@@ -28,6 +28,9 @@ export interface NotificationEvent {
   kind: NotificationKind;
   title: string;
   body: string;
+  /** Second line under the title (the project, when it is not the active one),
+   *  for channels that have one. */
+  subtitle?: string;
   target: NotificationTarget;
   /** Stable per occurrence; delivery announces each key once. */
   dedupeKey: string;
@@ -63,13 +66,14 @@ export interface NotificationDecision {
   tier: NotificationTier;
   title: string;
   body: string;
+  subtitle?: string;
   target: NotificationTarget;
   dedupeKey: string;
   groupKey: string;
   channels: Record<NotificationChannel, boolean>;
   toast: { variant: ToastVariant; durationMs: number };
   /** OS banner content; `sound` is set only when the sound channel fires. */
-  native: { title: string; body: string; sound?: string };
+  native: { title: string; subtitle?: string; body: string; sound?: string };
 }
 
 /** "Looking at it" — inside this window a visible, focused target is quiet. */
@@ -88,6 +92,19 @@ const TARGET_LABEL: Record<NotificationTarget["type"], string> = {
   terminal: "Terminal",
   session: "Agent",
 };
+
+/** Agent copy is already banner-shaped (title, subtitle, body); the OS shows
+ *  the app name, so Atlas adds none. Terminal events keep the project as the
+ *  banner title with the event folded into the body. */
+function nativeCopy(event: NotificationEvent, source: string) {
+  if (source === "agent") {
+    return { title: event.title, subtitle: event.subtitle, body: event.body };
+  }
+  return {
+    title: `Atlas: ${event.target.projectName ?? TARGET_LABEL[event.target.type]}`,
+    body: `${event.title} — ${event.body}`,
+  };
+}
 
 export function decideNotification(
   event: NotificationEvent,
@@ -124,9 +141,9 @@ export function decideNotification(
       sound,
     },
     toast: entry.toast,
+    subtitle: event.subtitle,
     native: {
-      title: `Atlas: ${event.target.projectName ?? TARGET_LABEL[event.target.type]}`,
-      body: `${event.title} — ${event.body}`,
+      ...nativeCopy(event, entry.source),
       sound: sound && native ? entry.sound?.native : undefined,
     },
   };

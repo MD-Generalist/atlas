@@ -11,6 +11,10 @@
  * decision picks channels) → `deliverNotification`. Stale turns (superseded by
  * a newer send) and user-cancelled turns never notify.
  *
+ * A finish reads the turn's final text, duration and edited files from the chat
+ * store, which only has them once `turn_finished` is applied — App.tsx flushes
+ * its delta buffer before calling in.
+ *
  * Bursts: OS banners for `agent-done` are held for a short window and leave
  * as one "N agents finished" (`banner-coalescer.ts`); center, toast and badge
  * are not delayed.
@@ -18,6 +22,7 @@
 import { useChatStore } from "@/features/chat/stores/chat-store";
 import { useLayoutStore } from "@/features/layout/stores/layout-store";
 import { useProjectStore } from "@/features/projects/stores/project-store";
+import { agentMeta } from "@/features/agents/lib/agent-meta";
 import { projectIdForTab } from "@/features/chat/lib/tab-project";
 import type { AgentDelta } from "@/types/agents";
 import type { ChatSession } from "@/types/agent";
@@ -29,6 +34,7 @@ import {
   type AgentCtx,
   type AgentNotifyEvent,
 } from "./agent-notifier-rules";
+import { turnStats } from "./agent-turn-stats";
 import { createBannerCoalescer } from "./banner-coalescer";
 import { computeAway, type NotificationEnv } from "./decide";
 import { deliverNotification } from "./deliver";
@@ -61,17 +67,6 @@ export function isStaleAgentTurn(sessionId: string, turnSeq?: number): boolean {
   return !!found && isSupersededTurn(turnSeq, found.session.currentTurnSeq);
 }
 
-/** Wall time of the turn in flight: from its user message to now. */
-function turnDurationMs(session: ChatSession): number | undefined {
-  for (let i = session.messages.length - 1; i >= 0; i--) {
-    const m = session.messages[i];
-    if (m.role !== "user") continue;
-    const t = Date.parse(m.timestamp);
-    return Number.isFinite(t) ? Date.now() - t : undefined;
-  }
-  return undefined;
-}
-
 let counter = 0;
 const nonceFor = (turnSeq?: number) => turnSeq || `n${++counter}`;
 
@@ -83,17 +78,31 @@ function toNotifyEvent(env: AgentDelta, session: ChatSession): AgentNotifyEvent 
         (typeof tc?.title === "string" && tc.title) ||
         (typeof tc?.kind === "string" && tc.kind) ||
         "tool call";
-      return { type: "permission_requested", requestId: String(env.request_id), toolTitle };
+      return {
+        type: "permission_requested",
+        requestId: String(env.request_id),
+        toolCall: env.tool_call,
+        toolTitle,
+      };
     }
-    case "turn_finished":
+    case "turn_finished": {
+      const stats = turnStats(session.messages, Date.now());
       return {
         type: "turn_finished",
         stopReason: env.stop_reason,
         nonce: nonceFor(env.turn_seq),
-        durationMs: turnDurationMs(session),
+        durationMs: stats.durationMs,
+        summary: stats.summary,
+        filesEdited: stats.filesEdited,
       };
+    }
     case "turn_failed":
-      return { type: "turn_failed", error: env.error, nonce: nonceFor(env.turn_seq) };
+      return {
+        type: "turn_failed",
+        error: env.error,
+        errorKind: env.error_kind,
+        nonce: nonceFor(env.turn_seq),
+      };
     case "agent_disconnected":
       return {
         type: "agent_disconnected",
@@ -137,6 +146,7 @@ export function notifyAgentEvent(env: AgentDelta): void {
       tabId: found.tabId,
       sessionId: env.session_id,
       sessionTitle: found.session.title || undefined,
+      agentName: agentMeta(found.session.agentType).label,
       projectId,
       projectName: project?.name,
       orgId: project?.orgId,

@@ -37,7 +37,7 @@ export function mergeBanners(batch: NotificationDecision[]): NotificationDecisio
     body: list,
     dedupeKey: `${first.dedupeKey}+${batch.length - 1}`,
     groupKey: first.kind,
-    native: { title: "Atlas", body: `${headline} — ${list}`, sound: first.native.sound },
+    native: { title: headline, body: list, sound: first.native.sound },
   };
 }
 

@@ -1068,7 +1068,11 @@ export function App() {
               stopReason: env.stop_reason,
             },
           });
+          // The banner quotes the final message and the turn's stats, which the
+          // store only holds once this delta (and the text before it) is
+          // applied — drain the buffer now rather than at the next frame.
           // The pipeline skips cancelled and stale turns itself.
+          flush(true);
           notifyAgentEvent(env);
           return;
         case "turn_failed":
