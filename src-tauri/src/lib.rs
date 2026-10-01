@@ -4,6 +4,7 @@ mod commands;
 mod logging;
 #[cfg(target_os = "macos")]
 mod menu;
+mod notifier;
 mod state;
 mod telemetry;
 mod window_background;
@@ -331,6 +332,8 @@ pub fn run() {
                     }));
             }
 
+            app.manage(Arc::new(notifier::Notifier::new(app.handle())));
+
             commands::updater::init_on_startup(app.handle());
             commands::updater::check_in_background(app.handle());
             commands::updater::spawn_periodic(app.handle());
@@ -395,6 +398,11 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            commands::notifier::notifier_init,
+            commands::notifier::notifier_request_authorization,
+            commands::notifier::notifier_show,
+            commands::notifier::notifier_remove,
+            commands::notifier::notifier_remove_group,
             commands::agent_entitlement::native_agent_entitlement,
             commands::agent_entitlement::native_agent_refresh_models,
             commands::auth::auth_snapshot,

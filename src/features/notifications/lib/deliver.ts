@@ -11,12 +11,13 @@ import { toast } from "sonner";
 import { jumpToSession } from "@/features/chat/lib/tab-project";
 import { jumpToTerminal } from "@/features/terminal/lib/jump-to-terminal";
 import { isWindowFocused } from "@/lib/window-focus";
-import { sendNativeNotification } from "@/lib/native-notify";
+import { setNativeResponseHandler, showNativeNotification } from "@/lib/native-notify";
 import { playChime } from "@/lib/chime";
 import { setDockBadge } from "@/lib/dock-badge";
 import { useNotificationsStore } from "../stores/notifications-store";
 import { catalogEntry, type NotificationTarget } from "./catalog";
 import type { NotificationDecision } from "./decide";
+import { encodeBannerPayload, targetForResponse } from "./native-routing";
 
 const announced = new Set<string>();
 const ANNOUNCED_CAP = 500;
@@ -29,6 +30,15 @@ export function openNotificationTarget(t: NotificationTarget): void {
     void jumpToSession(t.tabId);
   }
 }
+
+// A click on an OS banner opens its exact source (thread tab or terminal pane),
+// across projects. Registered at module load so a click that launched the app
+// is routed as soon as the notifier flushes it. Action buttons are routed by the
+// features that offer them.
+setNativeResponseHandler((response) => {
+  const target = targetForResponse(response);
+  if (target) openNotificationTarget(target);
+});
 
 /** Perform a decision. Returns false when it was a duplicate. */
 export function deliverNotification(d: NotificationDecision): boolean {
@@ -70,7 +80,17 @@ export function deliverNotification(d: NotificationDecision): boolean {
     else toast(d.title, opts);
   }
   if (d.channels.native) {
-    void sendNativeNotification(d.native);
+    void showNativeNotification({
+      // Re-delivering a dedupe key replaces its banner; one group per thread/terminal.
+      tag: `${d.kind}:${d.dedupeKey}`,
+      group: d.groupKey,
+      title: d.native.title,
+      subtitle: d.native.subtitle,
+      body: d.native.body,
+      sound: d.native.sound,
+      urgency: d.tier === "needs-you" ? "high" : "normal",
+      payload: encodeBannerPayload(d.target),
+    });
   } else if (d.channels.sound) {
     playChime();
   }
