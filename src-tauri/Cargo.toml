@@ -235,6 +235,14 @@ tempfile = "3"
 # relaunches from (and only upgrades) the MSI's `InstallLocation`. See
 # `crate::commands::updater`. Already in the tree transitively.
 winreg = "0.55"
+# Native toasts (`crate::notifier::toast`). 0.61 is the version
+# `tauri-winrt-notification` already resolves, so no second `windows` major.
+windows = { version = "0.61", features = [
+  "Data_Xml_Dom",
+  "Foundation",
+  "Foundation_Collections",
+  "UI_Notifications",
+] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Native NSWindow access for the titlebar double-click "zoom" (AppKit

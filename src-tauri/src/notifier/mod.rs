@@ -7,16 +7,20 @@
 //!
 //! Backends:
 //!  - `macos`    `UNUserNotificationCenter`; only when running from an app bundle.
+//!  - `toast`    Windows `ToastNotificationManager`; only when installed (it
+//!    needs the bundle identifier as AppUserModelID).
 //!  - `fallback` the `tauri-plugin-notification` plugin: show only. Used when not
-//!               bundled (dev runs) and on Windows/Linux until their backends land.
+//!    bundled (dev runs) and on Linux until its backend lands.
 //!
-//! Adding a backend (Windows toast, Linux D-Bus) is a new file implementing
+//! Adding a backend (Linux D-Bus) is a new file implementing
 //! `NotifierBackend` plus a `Capabilities` value, and one arm in
 //! `select_backend`.
 
 mod fallback;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(windows)]
+mod toast;
 
 use std::sync::Arc;
 
@@ -28,7 +32,7 @@ use tauri::{AppHandle, Emitter};
 pub const RESPONSE_EVENT: &str = "atlas:notification-response";
 
 // Read only by backends that honour the field (the fallback shows title/body/sound).
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Urgency {
@@ -39,7 +43,7 @@ pub enum Urgency {
 }
 
 // Read only by backends that honour the field (the fallback shows title/body/sound).
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NotificationAction {
@@ -53,7 +57,7 @@ pub struct NotificationAction {
 }
 
 // Read only by backends that honour the field (the fallback shows title/body/sound).
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Notification {
@@ -209,7 +213,11 @@ fn select_backend(app: &AppHandle, sink: ResponseSink) -> Box<dyn NotifierBacken
     if let Some(backend) = macos::MacosBackend::new(app, sink) {
         return Box::new(backend);
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
+    if let Some(backend) = toast::ToastBackend::new(app, sink) {
+        return Box::new(backend);
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
     let _ = sink;
     Box::new(fallback::FallbackBackend::new(app))
 }
