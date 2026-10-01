@@ -188,6 +188,15 @@ notifyPermissionActions = true
 # choices into the keys above. Leave it alone. (default: false)
 notificationsMigrated = false
 
+# Notification kinds you switched off in Settings > Notifications, by id,
+# e.g. ["terminal-done", "git-behind"]. Unknown ids are ignored; a kind
+# that must always show (sign-in lost) cannot be silenced. (default: [])
+notifyDisabledKinds = []
+
+# Set once Atlas has folded your earlier per-kind notification switches
+# into notifyDisabledKinds. Leave it alone. (default: false)
+notifyKindsMigrated = false
+
 # An agent turn that finished faster than this many milliseconds stays
 # quiet; failures and requests for you are never held back. 0 turns it
 # off. Must be between 0 and 3600000. (default: 0)
@@ -244,6 +253,8 @@ wrote; `toml_edit` just preserves whatever comments are already there.
 | `notifyTeamSound` | boolean | `true` | — |
 | `notifyPermissionActions` | boolean | `true` | — |
 | `notificationsMigrated` | boolean | `false` | — |
+| `notifyDisabledKinds` | array of strings | `[]` | — |
+| `notifyKindsMigrated` | boolean | `false` | — |
 | `notifyAgentMinDurationMs` | integer | `0` | 0 ≤ n ≤ 3600000 |
 
 Any other key under `[settings]` is left on disk untouched and reported as an

@@ -126,9 +126,31 @@ describe("evaluateBehind", () => {
   });
 
   it("ignores nonsense counts", () => {
-    const s: BehindWarnState = { behind: 0, notifiedHead: null };
-    expect(evaluateBehind(s, -1, "x")).toEqual({ state: s, warning: null });
-    expect(evaluateBehind(s, Number.NaN, "x")).toEqual({ state: s, warning: null });
+    const s: BehindWarnState = { behind: 0, notifiedHead: null, liveHead: null };
+    expect(evaluateBehind(s, -1, "x")).toEqual({ state: s, warning: null, resolved: null });
+    expect(evaluateBehind(s, Number.NaN, "x")).toEqual({ state: s, warning: null, resolved: null });
+  });
+
+  it("resolves the live warning's head when the count returns to 0, once", () => {
+    let state: BehindWarnState = INITIAL_BEHIND_STATE;
+    const resolved = [
+      [0, "a"],
+      [1, "b"],
+      [2, "c"],
+      [0, "c"],
+      [0, "c"],
+    ].map(([behind, head]) => {
+      const r = evaluateBehind(state, behind as number, head as string);
+      state = r.state;
+      return r.resolved;
+    });
+    expect(resolved).toEqual([null, null, null, "b", null]);
+  });
+
+  it("does not resolve what was never warned about (seeded behind, then caught up)", () => {
+    let state: BehindWarnState = INITIAL_BEHIND_STATE;
+    state = evaluateBehind(state, 3, "a").state;
+    expect(evaluateBehind(state, 0, "a").resolved).toBeNull();
   });
 });
 

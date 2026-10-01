@@ -60,18 +60,33 @@ describe("prefsFromSettings", () => {
     }
   });
 
-  it("a kind's own setting switches only that kind off", () => {
-    const settings = { ...DEFAULT_SETTINGS, terminalNotifyOnFailure: false };
+  it("a kind listed in notifyDisabledKinds switches only that kind off", () => {
+    const settings = {
+      ...DEFAULT_SETTINGS,
+      notifyDisabledKinds: ["terminal-failed", "git-behind"],
+    };
     expect(decide("terminal-failed", settings)).toBeNull();
+    expect(decide("git-behind", settings)).toBeNull();
     expect(decide("terminal-attention", settings)).not.toBeNull();
-    expect(decide("terminal-done", { ...settings, terminalNotifications: false })).toBeNull();
+    expect(decide("terminal-done", settings)).not.toBeNull();
   });
 
-  it("every setting a catalog kind names is a real boolean setting", () => {
+  it("every non-locked kind can be switched off", () => {
     for (const kind of kinds) {
-      const key = catalogEntry(kind).setting;
-      if (key) expect(typeof DEFAULT_SETTINGS[key], kind).toBe("boolean");
+      if (catalogEntry(kind).locked) continue;
+      const settings = { ...DEFAULT_SETTINGS, notifyDisabledKinds: [kind] };
+      expect(prefsFromSettings(settings)[kind]?.enabled, kind).toBe(false);
     }
+  });
+
+  it("ignores unknown ids, and a locked kind cannot be silenced", () => {
+    const settings = {
+      ...DEFAULT_SETTINGS,
+      notifyDisabledKinds: ["not-a-kind", "atlas-signed-out"],
+    };
+    expect(decide("terminal-done", settings)).not.toBeNull();
+    expect(decide("atlas-signed-out", settings)).not.toBeNull();
+    expect(prefsFromSettings(settings)).not.toHaveProperty("not-a-kind");
   });
 });
 

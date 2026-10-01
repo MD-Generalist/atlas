@@ -131,9 +131,15 @@ export interface AppSettings {
   /** The legacy terminal and agent choices have been folded into the keys
    *  above (`migrateNotificationSettings`). */
   notificationsMigrated: boolean;
+  /** Notification kind ids switched off in Settings (one switch per kind that
+   *  is not `locked`). Unknown ids are ignored. */
+  notifyDisabledKinds: string[];
+  /** The earlier per-kind switches have been folded into `notifyDisabledKinds`
+   *  (`migrateNotificationSettings`). */
+  notifyKindsMigrated: boolean;
 }
 
-/** Settings keys holding a plain on/off — what a catalog kind's `setting` may name. */
+/** Settings keys holding a plain on/off — the tier banner and sound switches name these. */
 export type BooleanSettingKey = {
   [K in keyof AppSettings]: AppSettings[K] extends boolean ? K : never;
 }[keyof AppSettings];
@@ -178,4 +184,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
   notifyAgentMinDurationMs: 0,
   notifyPermissionActions: true,
   notificationsMigrated: false,
+  notifyDisabledKinds: [],
+  notifyKindsMigrated: false,
 };

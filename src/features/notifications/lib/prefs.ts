@@ -3,8 +3,9 @@
  * Rust-owned `AppSettings` into the per-kind `NotificationPrefs`
  * `decideNotification` takes, for every kind in the catalog:
  *
- *  - `enabled` — the master switch AND the kind's own `setting` key, if the
- *    catalog names one;
+ *  - `enabled` — the master switch AND the kind not being listed in
+ *    `notifyDisabledKinds` (its own switch in Settings; unknown ids there are
+ *    ignored);
  *  - `native` / `sound` — the switches of the kind's urgency tier.
  *
  * A kind the catalog marks `locked` gets no entry (the defaults apply), so
@@ -72,15 +73,15 @@ export function kindsInTier(
 
 export function prefsFromSettings(s: AppSettings): NotificationPrefs {
   const prefs: NotificationPrefs = {};
+  const disabled = new Set(s.notifyDisabledKinds);
   for (const [kind, entry] of Object.entries(NOTIFICATION_CATALOG) as [
     NotificationKind,
     CatalogEntry,
   ][]) {
     if (entry.locked) continue;
     const tier = TIER_SETTINGS[entry.tier];
-    const own = entry.setting ? s[entry.setting] : true;
     const kindPrefs: KindPrefs = {
-      enabled: s.notificationsEnabled && own,
+      enabled: s.notificationsEnabled && !disabled.has(kind),
       native: s[tier.native],
       sound: s[tier.sound],
     };

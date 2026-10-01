@@ -50,13 +50,20 @@ function DurationSelect({
 }
 
 /** One urgency tier: its banner + sound switches, and the catalog's kinds in
- *  it. Everything here is derived from the catalog — a new kind appears with
+ *  it, each with its own switch (`notifyDisabledKinds`). Everything here is derived from the catalog — a new kind appears with
  *  no change to this file. */
 function TierGroup({ tier, masterOn }: { tier: NotificationTier; masterOn: boolean }) {
   const settings = useSettingsStore.use.settings();
   const { updateSettings } = useSettingsStore.use.actions();
   const group = TIER_SETTINGS[tier];
   const kinds = kindsInTier(tier);
+  const disabled = new Set(settings.notifyDisabledKinds);
+  /** The disabled list with `kind` switched on or off. Ids this catalog does
+   *  not know are kept as they are. */
+  const withKind = (kind: string, on: boolean) =>
+    on
+      ? settings.notifyDisabledKinds.filter((k) => k !== kind)
+      : [...settings.notifyDisabledKinds.filter((k) => k !== kind), kind];
   return (
     <div className="flex flex-col gap-3">
       <div>
@@ -98,13 +105,13 @@ function TierGroup({ tier, masterOn }: { tier: NotificationTier; masterOn: boole
             <span className="text-2xs text-muted-foreground">{entry.label}</span>
             {entry.locked ? (
               <span className="text-2xs text-muted-foreground">Always on</span>
-            ) : entry.setting ? (
+            ) : (
               <Toggle
-                checked={settings[entry.setting]}
+                checked={!disabled.has(kind)}
                 disabled={!masterOn}
-                onChange={(next) => updateSettings({ [entry.setting as string]: next })}
+                onChange={(next) => updateSettings({ notifyDisabledKinds: withKind(kind, next) })}
               />
-            ) : null}
+            )}
           </li>
         ))}
       </ul>

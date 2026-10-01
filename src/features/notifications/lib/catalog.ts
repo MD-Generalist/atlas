@@ -11,12 +11,11 @@
  *  - its `sound` (a system sound for the OS banner; the in-app chime when the
  *    banner is not shown);
  *  - its `groupKey` (what collapses together — one terminal, one session);
- *  - the `setting` that governs it, so Settings and the catalog cannot drift.
+ *  - whether it is `locked` (cannot be silenced). Every other kind gets its
+ *    own switch in Settings, stored in `notifyDisabledKinds`.
  *
  * Pure — no store, Tauri or DOM imports.
  */
-import type { BooleanSettingKey } from "@/features/settings/lib/app-settings";
-
 export type NotificationTier = "needs-you" | "outcome" | "warning" | "team";
 
 /** Which subsystem raised it — drives the center's icon and click routing. */
@@ -47,10 +46,6 @@ export interface CatalogEntry {
   /** Grouping key — notifications sharing one collapse together in the OS
    *  notification list (once a backend supports it). */
   groupKey: (target: NotificationTarget) => string;
-  /** The boolean setting that turns this kind on and off, if it has its own
-   *  switch — Settings renders one for every kind that names a key. Kinds
-   *  without one follow the master and tier switches alone. */
-  setting: BooleanSettingKey | null;
 }
 
 /** The Settings sections a notification can open. */
@@ -145,7 +140,6 @@ export const NOTIFICATION_CATALOG = {
     sound: { native: "Ping" },
     toast: { variant: "default", durationMs: ATTENTION_TOAST_MS },
     groupKey: targetGroupKey,
-    setting: "terminalNotifyOnAttention",
   },
   "terminal-done": {
     label: "Command finished",
@@ -156,7 +150,6 @@ export const NOTIFICATION_CATALOG = {
     sound: { native: "Ping" },
     toast: { variant: "success", durationMs: DONE_TOAST_MS },
     groupKey: targetGroupKey,
-    setting: "terminalNotifications",
   },
   "terminal-failed": {
     label: "Command failed",
@@ -167,10 +160,9 @@ export const NOTIFICATION_CATALOG = {
     sound: { native: "Ping" },
     toast: { variant: "error", durationMs: DONE_TOAST_MS },
     groupKey: targetGroupKey,
-    setting: "terminalNotifyOnFailure",
   },
   // Agent kinds — raised by `agent-notifier.ts`; governed by the master and
-  // tier switches in Settings (no per-kind key).
+  // tier switches in Settings, and their own kind switch.
   permission: {
     label: "Permission requests",
     tier: "needs-you",
@@ -180,7 +172,6 @@ export const NOTIFICATION_CATALOG = {
     sound: { native: "Ping" },
     toast: { variant: "default", durationMs: ATTENTION_TOAST_MS },
     groupKey: targetGroupKey,
-    setting: null,
   },
   // The agent asked the user a question mid-turn (ADR-0013) — blocked on the
   // user exactly like a permission request, so it behaves like one.
@@ -193,7 +184,6 @@ export const NOTIFICATION_CATALOG = {
     sound: { native: "Ping" },
     toast: { variant: "default", durationMs: ATTENTION_TOAST_MS },
     groupKey: targetGroupKey,
-    setting: null,
   },
   // A finish is quiet: the banner carries no sound (permission and failures do).
   "agent-done": {
@@ -205,7 +195,6 @@ export const NOTIFICATION_CATALOG = {
     sound: null,
     toast: { variant: "success", durationMs: DONE_TOAST_MS },
     groupKey: targetGroupKey,
-    setting: null,
   },
   "agent-failed": {
     label: "Agent failed",
@@ -216,7 +205,6 @@ export const NOTIFICATION_CATALOG = {
     sound: { native: "Ping" },
     toast: { variant: "error", durationMs: DONE_TOAST_MS },
     groupKey: targetGroupKey,
-    setting: null,
   },
   // The agent process died; the session shows Restart. Nothing moves until
   // the user acts, so it is needs-you (and keeps its banner and sound).
@@ -229,7 +217,6 @@ export const NOTIFICATION_CATALOG = {
     sound: { native: "Ping" },
     toast: { variant: "error", durationMs: ATTENTION_TOAST_MS },
     groupKey: targetGroupKey,
-    setting: null,
   },
   // Sign-in problems (ATL-383): every agent stops working until the user acts,
   // so both are needs-you. Each is its own thing to look at, so a visible
@@ -243,7 +230,6 @@ export const NOTIFICATION_CATALOG = {
     sound: { native: "Ping" },
     toast: { variant: "error", durationMs: ATTENTION_TOAST_MS },
     groupKey: targetGroupKey,
-    setting: null,
   },
   "atlas-signed-out": {
     label: "Atlas signed out",
@@ -255,7 +241,6 @@ export const NOTIFICATION_CATALOG = {
     sound: { native: "Ping" },
     toast: { variant: "error", durationMs: ATTENTION_TOAST_MS },
     groupKey: targetGroupKey,
-    setting: null,
   },
   // Chat (ATL-387): a DM / group DM message, or an @mention in a channel.
   // Nothing to say while the conversation is on screen and being looked at.
@@ -269,7 +254,6 @@ export const NOTIFICATION_CATALOG = {
     sound: { native: "Ping" },
     toast: { variant: "default", durationMs: ATTENTION_TOAST_MS },
     groupKey: targetGroupKey,
-    setting: null,
   },
   "chat-mention": {
     label: "Mentions",
@@ -280,7 +264,6 @@ export const NOTIFICATION_CATALOG = {
     sound: { native: "Ping" },
     toast: { variant: "default", durationMs: ATTENTION_TOAST_MS },
     groupKey: targetGroupKey,
-    setting: null,
   },
   // Degradation warnings (ATL-385): quiet by design — no sound, and the OS
   // banner is off in the default warning-tier switches.
@@ -293,7 +276,6 @@ export const NOTIFICATION_CATALOG = {
     sound: null,
     toast: { variant: "default", durationMs: ATTENTION_TOAST_MS },
     groupKey: targetGroupKey,
-    setting: null,
   },
   "agent-rate-limit": {
     label: "Rate limited",
@@ -304,7 +286,6 @@ export const NOTIFICATION_CATALOG = {
     sound: null,
     toast: { variant: "default", durationMs: ATTENTION_TOAST_MS },
     groupKey: targetGroupKey,
-    setting: null,
   },
   // One toast per thread, updated in place as attempts advance.
   "agent-retrying": {
@@ -316,7 +297,6 @@ export const NOTIFICATION_CATALOG = {
     sound: null,
     toast: { variant: "default", durationMs: ATTENTION_TOAST_MS },
     groupKey: targetGroupKey,
-    setting: null,
   },
   // Outcome-tier app events (ATL-384): downloads and git remote operations.
   // The update prompt opens by itself on a live "ready", so the toast is the
@@ -330,7 +310,6 @@ export const NOTIFICATION_CATALOG = {
     sound: null,
     toast: { variant: "default", durationMs: ATTENTION_TOAST_MS },
     groupKey: targetGroupKey,
-    setting: null,
   },
   "model-download-done": {
     label: "Model downloaded",
@@ -341,7 +320,6 @@ export const NOTIFICATION_CATALOG = {
     sound: null,
     toast: { variant: "success", durationMs: DONE_TOAST_MS },
     groupKey: targetGroupKey,
-    setting: null,
   },
   "model-download-failed": {
     label: "Model download failed",
@@ -352,7 +330,6 @@ export const NOTIFICATION_CATALOG = {
     sound: { native: "Ping" },
     toast: { variant: "error", durationMs: ATTENTION_TOAST_MS },
     groupKey: targetGroupKey,
-    setting: null,
   },
   // A success is only worth saying after a long wait (rules in
   // `outcome-notifier-rules.ts`); a failure always is.
@@ -365,7 +342,6 @@ export const NOTIFICATION_CATALOG = {
     sound: null,
     toast: { variant: "success", durationMs: DONE_TOAST_MS },
     groupKey: targetGroupKey,
-    setting: null,
   },
   "git-op-failed": {
     label: "Git push, pull or fetch failed",
@@ -376,7 +352,6 @@ export const NOTIFICATION_CATALOG = {
     sound: { native: "Ping" },
     toast: { variant: "error", durationMs: ATTENTION_TOAST_MS },
     groupKey: targetGroupKey,
-    setting: null,
   },
   // App warnings (ATL-386): something degraded that the user can fix. Quiet —
   // no sound, and the OS banner is off in the default warning-tier switches.
@@ -389,7 +364,6 @@ export const NOTIFICATION_CATALOG = {
     sound: null,
     toast: { variant: "default", durationMs: ATTENTION_TOAST_MS },
     groupKey: targetGroupKey,
-    setting: null,
   },
   "git-behind": {
     label: "Branch fell behind its remote",
@@ -400,7 +374,6 @@ export const NOTIFICATION_CATALOG = {
     sound: null,
     toast: { variant: "default", durationMs: ATTENTION_TOAST_MS },
     groupKey: targetGroupKey,
-    setting: null,
   },
   "config-error": {
     label: "config.toml has an error",
@@ -411,7 +384,6 @@ export const NOTIFICATION_CATALOG = {
     sound: null,
     toast: { variant: "error", durationMs: ATTENTION_TOAST_MS },
     groupKey: targetGroupKey,
-    setting: null,
   },
   "agent-update-failed": {
     label: "Agent update failed",
@@ -422,7 +394,6 @@ export const NOTIFICATION_CATALOG = {
     sound: null,
     toast: { variant: "error", durationMs: ATTENTION_TOAST_MS },
     groupKey: targetGroupKey,
-    setting: null,
   },
 } as const satisfies Record<string, CatalogEntry>;
 

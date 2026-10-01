@@ -13,13 +13,20 @@ const apply = (s: AppSettings, legacy: unknown): AppSettings => ({
 describe("migrateNotificationSettings", () => {
   it("does nothing once migrated", () => {
     expect(
-      migrateNotificationSettings({ ...DEFAULT_SETTINGS, notificationsMigrated: true }, {}),
+      migrateNotificationSettings(
+        { ...DEFAULT_SETTINGS, notificationsMigrated: true, notifyKindsMigrated: true },
+        {},
+      ),
     ).toBeNull();
   });
 
   it("leaves an untouched install on the defaults, and marks it migrated", () => {
     const out = apply(DEFAULT_SETTINGS, null);
-    expect(out).toEqual({ ...DEFAULT_SETTINGS, notificationsMigrated: true });
+    expect(out).toEqual({
+      ...DEFAULT_SETTINGS,
+      notificationsMigrated: true,
+      notifyKindsMigrated: true,
+    });
   });
 
   it("carries the agent master, minimum duration and sound over", () => {
@@ -79,6 +86,59 @@ describe("migrateNotificationSettings", () => {
       notifyTeamNative: true,
       notifyTeamSound: true,
     });
+  });
+});
+
+describe("per-kind switch migration", () => {
+  it("turns each switched-off per-kind setting into a disabled kind", () => {
+    const out = apply(
+      {
+        ...DEFAULT_SETTINGS,
+        notificationsMigrated: true,
+        terminalNotifications: false,
+        terminalNotifyOnAttention: false,
+      },
+      null,
+    );
+    expect(out.notifyDisabledKinds.sort()).toEqual(["terminal-attention", "terminal-done"]);
+    expect(out.notifyKindsMigrated).toBe(true);
+  });
+
+  it("runs for an install that already ran the tier step, and leaves its tiers alone", () => {
+    const base = {
+      ...DEFAULT_SETTINGS,
+      notificationsMigrated: true,
+      notifyOutcomeNative: false,
+      terminalNotifyOnFailure: false,
+    };
+    const patch = migrateNotificationSettings(base, { enabled: false });
+    expect(patch).toEqual({ notifyDisabledKinds: ["terminal-failed"], notifyKindsMigrated: true });
+  });
+
+  it("a switched-off terminal master disables all three terminal kinds in one pass", () => {
+    const out = apply({ ...DEFAULT_SETTINGS, terminalNotifications: false }, null);
+    expect(out.notifyDisabledKinds.sort()).toEqual([
+      "terminal-attention",
+      "terminal-done",
+      "terminal-failed",
+    ]);
+  });
+
+  it("keeps kinds already listed and adds nothing for untouched switches", () => {
+    const out = apply(
+      { ...DEFAULT_SETTINGS, notificationsMigrated: true, notifyDisabledKinds: ["git-behind"] },
+      null,
+    );
+    expect(out.notifyDisabledKinds).toEqual(["git-behind"]);
+  });
+
+  it("does nothing once the kind step has run", () => {
+    expect(
+      migrateNotificationSettings(
+        { ...DEFAULT_SETTINGS, notificationsMigrated: true, notifyKindsMigrated: true },
+        null,
+      ),
+    ).toBeNull();
   });
 });
 

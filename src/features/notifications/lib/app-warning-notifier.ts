@@ -138,6 +138,15 @@ function onAutoFetchStatus(status: {
         );
         if (d) deliverNotification(d);
       }
+      if (behind.resolved !== null) {
+        // Caught up: the "behind its remote" warning no longer applies.
+        clearResolved({
+          kind: "git-behind",
+          target: { type: "git-panel", projectId: p.projectId, projectName: p.projectName },
+          dedupeKey: `behind:${p.projectId}:${behind.resolved}`,
+          markRead: [{ kind: "git-behind", projectId: p.projectId }],
+        });
+      }
     }
   } catch (err) {
     console.warn("auto-fetch warning failed:", err);

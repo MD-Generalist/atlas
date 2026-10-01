@@ -99,6 +99,16 @@ describe("matchesScope", () => {
     expect(matchesScope(si, [{ agentType: "b" }])).toBe(false);
   });
 
+  it("matches a git-panel item by project", () => {
+    const behind = item({
+      kind: "git-behind",
+      target: { type: "git-panel", projectId: "p1", projectName: "Atlas" },
+    });
+    expect(matchesScope(behind, [{ kind: "git-behind", projectId: "p1" }])).toBe(true);
+    expect(matchesScope(behind, [{ kind: "git-behind", projectId: "p2" }])).toBe(false);
+    expect(matchesScope(item({ kind: "git-behind" }), [{ projectId: "p1" }])).toBe(false);
+  });
+
   it("matches nothing for an empty scope", () => {
     expect(matchesScope(item({}), [])).toBe(false);
   });

@@ -397,6 +397,12 @@ pub struct AppSettings {
     /// Set once the legacy terminal and agent notification choices have been folded into the keys above. Not user-facing.
     #[serde(default)]
     pub notifications_migrated: bool,
+    /// Notification kinds the user switched off in Settings (kind ids from the frontend catalog). Unknown ids are ignored; a kind that cannot be silenced ignores its entry.
+    #[serde(default)]
+    pub notify_disabled_kinds: Vec<String>,
+    /// Set once the per-kind switches that predate `notifyDisabledKinds` have been folded into it. Not user-facing.
+    #[serde(default)]
+    pub notify_kinds_migrated: bool,
     /// An agent turn that finished faster than this stays quiet (milliseconds); 0 = off.
     #[serde(default)]
     pub notify_agent_min_duration_ms: u32,
@@ -473,6 +479,8 @@ impl Default for AppSettings {
             notify_team_sound: true,
             notify_permission_actions: true,
             notifications_migrated: false,
+            notify_disabled_kinds: Vec::new(),
+            notify_kinds_migrated: false,
             notify_agent_min_duration_ms: 0,
         }
     }
@@ -716,6 +724,17 @@ const SETTINGS_DOCS: &[(&str, &str)] = &[
         "notificationsMigrated",
         "# Set once Atlas has folded your earlier terminal and agent notification
          # choices into the keys above. Leave it alone. (default: false)",
+    ),
+    (
+        "notifyDisabledKinds",
+        "# Notification kinds you switched off in Settings > Notifications, by id,\n\
+         # e.g. [\"terminal-done\", \"git-behind\"]. Unknown ids are ignored; a kind\n\
+         # that must always show (sign-in lost) cannot be silenced. (default: [])",
+    ),
+    (
+        "notifyKindsMigrated",
+        "# Set once Atlas has folded your earlier per-kind notification switches\n\
+         # into notifyDisabledKinds. Leave it alone. (default: false)",
     ),
     (
         "notifyAgentMinDurationMs",
@@ -1029,6 +1048,8 @@ pub struct SettingsPatch {
     pub notify_team_sound: Option<bool>,
     pub notify_permission_actions: Option<bool>,
     pub notifications_migrated: Option<bool>,
+    pub notify_disabled_kinds: Option<Vec<String>>,
+    pub notify_kinds_migrated: Option<bool>,
     pub notify_agent_min_duration_ms: Option<u32>,
 }
 
@@ -1148,6 +1169,12 @@ impl SettingsPatch {
         if let Some(v) = self.notifications_migrated {
             settings.notifications_migrated = v;
         }
+        if let Some(v) = &self.notify_disabled_kinds {
+            settings.notify_disabled_kinds = v.clone();
+        }
+        if let Some(v) = self.notify_kinds_migrated {
+            settings.notify_kinds_migrated = v;
+        }
         if let Some(v) = self.notify_agent_min_duration_ms {
             settings.notify_agent_min_duration_ms = v;
         }
@@ -1199,6 +1226,14 @@ impl SettingsPatch {
         set_bool!(notify_team_sound, "notifyTeamSound");
         set_bool!(notify_permission_actions, "notifyPermissionActions");
         set_bool!(notifications_migrated, "notificationsMigrated");
+        set_bool!(notify_kinds_migrated, "notifyKindsMigrated");
+        if let Some(v) = &self.notify_disabled_kinds {
+            let mut arr = toml_edit::Array::new();
+            for kind in v {
+                arr.push(kind.as_str());
+            }
+            table["notifyDisabledKinds"] = toml_edit::value(arr);
+        }
         if let Some(v) = self.notify_agent_min_duration_ms {
             table["notifyAgentMinDurationMs"] = toml_edit::value(i64::from(v));
         }
@@ -2624,6 +2659,11 @@ someFutureKey = \"left alone\"
             notify_team_sound: Some(!defaults.notify_team_sound),
             notify_permission_actions: Some(!defaults.notify_permission_actions),
             notifications_migrated: Some(!defaults.notifications_migrated),
+            notify_disabled_kinds: Some(vec![
+                "terminal-done".to_string(),
+                "git-behind".to_string(),
+            ]),
+            notify_kinds_migrated: Some(!defaults.notify_kinds_migrated),
             notify_agent_min_duration_ms: Some(defaults.notify_agent_min_duration_ms + 1),
         };
         let mut expected = defaults.clone();

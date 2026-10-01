@@ -9,6 +9,7 @@
  *  - Behind remote: when an auto-fetch moves the branch's behind-count from 0
  *    to > 0, once per distinct remote head. The first observation per project
  *    only seeds the count (launching already behind is not a transition).
+ *    When the count returns to 0 the warning it raised is resolved.
  *  - config.toml: once per distinct error text; a clean load re-arms it.
  *  - Agent update: every failure speaks (the caller numbers them).
  */
@@ -77,31 +78,47 @@ export function evaluateAutoFetch(
 export interface BehindWarnState {
   /** Behind-count at the last observation; null until the first. */
   behind: number | null;
-  /** Remote head the last warning was for. */
+  /** Remote head the last warning was for (kept, so a head is announced once). */
   notifiedHead: string | null;
+  /** Remote head of the warning still showing; null once resolved. */
+  liveHead: string | null;
 }
 
-export const INITIAL_BEHIND_STATE: BehindWarnState = { behind: null, notifiedHead: null };
+export const INITIAL_BEHIND_STATE: BehindWarnState = {
+  behind: null,
+  notifiedHead: null,
+  liveHead: null,
+};
 
 export interface BehindWarning {
   behind: number;
   remoteHead: string;
 }
 
+/** `resolved` is the remote head of the warning that just stopped applying:
+ *  the branch caught up (behind is back to 0). */
 export function evaluateBehind(
   state: BehindWarnState,
   behind: number,
   remoteHead: string,
-): { state: BehindWarnState; warning: BehindWarning | null } {
-  if (!Number.isFinite(behind) || behind < 0) return { state, warning: null };
+): { state: BehindWarnState; warning: BehindWarning | null; resolved: string | null } {
+  if (!Number.isFinite(behind) || behind < 0) return { state, warning: null, resolved: null };
   const crossed = state.behind === 0 && behind > 0;
   if (crossed && remoteHead !== state.notifiedHead) {
     return {
-      state: { behind, notifiedHead: remoteHead },
+      state: { behind, notifiedHead: remoteHead, liveHead: remoteHead },
       warning: { behind, remoteHead },
+      resolved: null,
     };
   }
-  return { state: { ...state, behind }, warning: null };
+  if (behind === 0 && state.liveHead !== null) {
+    return {
+      state: { ...state, behind, liveHead: null },
+      warning: null,
+      resolved: state.liveHead,
+    };
+  }
+  return { state: { ...state, behind }, warning: null, resolved: null };
 }
 
 // --- config.toml ----------------------------------------------------------

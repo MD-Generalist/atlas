@@ -41,6 +41,7 @@ beforeEach(() => {
       themeMode: "dark",
       themeOverrides: OVERRIDES,
       notificationsMigrated: true,
+      notifyKindsMigrated: true,
     },
     configGeneration: 1,
   });

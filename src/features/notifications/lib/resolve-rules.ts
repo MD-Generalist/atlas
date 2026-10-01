@@ -27,6 +27,8 @@ export interface ReadClause {
   terminalId?: string;
   convId?: string;
   agentType?: string;
+  /** A center item whose target is this project's git panel. */
+  projectId?: string;
 }
 
 /** Items to mark read: those matching ANY clause. */
@@ -53,6 +55,9 @@ export function matchesClause(i: AppNotification, c: ReadClause): boolean {
   }
   if (c.agentType !== undefined) {
     if (i.target?.type !== "agent-sign-in" || i.target.agentType !== c.agentType) return false;
+  }
+  if (c.projectId !== undefined) {
+    if (i.target?.type !== "git-panel" || i.target.projectId !== c.projectId) return false;
   }
   return true;
 }

@@ -127,7 +127,10 @@ describe("decideTerminalNotification", () => {
     expect(d?.kind).toBe("terminal-attention");
     expect(d?.toast.durationMs).toBe(15_000);
     expect(
-      decideTerminalNotification(e, ctx, away, { ...prefs, terminalNotifyOnAttention: false }),
+      decideTerminalNotification(e, ctx, away, {
+        ...prefs,
+        notifyDisabledKinds: ["terminal-attention"],
+      }),
     ).toBeNull();
   });
 
@@ -167,7 +170,7 @@ describe("decideTerminalNotification", () => {
     expect(
       decideTerminalNotification(finished({ exitCode: 1 }), ctx, away, {
         ...prefs,
-        terminalNotifyOnFailure: false,
+        notifyDisabledKinds: ["terminal-failed"],
       }),
     ).toBeNull();
   });

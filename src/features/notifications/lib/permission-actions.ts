@@ -1,8 +1,8 @@
 /**
  * Answering a permission request from its OS banner (Allow once / Deny).
  *
- * The answer goes down the same path as the in-app card — `agents.respondPermission`
- * then `popPermission` — so the request resolves identically and the backend's
+ * The answer goes down the same path as the in-app card — the shared
+ * `respondAndPopPermission` (send, then pop) — so the request resolves identically and the backend's
  * `permission_resolved` delta clears the toast, center item and banner
  * (`resolveAgentPermission`). Which option an action means is decided by the
  * pure `permissionDecisionForAction`, against the request's live options.
@@ -11,7 +11,7 @@
  * cold start with no pending state) is a no-op: nothing is ever sent for an
  * unknown request.
  */
-import { agents } from "@/features/chat/lib/agents-api";
+import { respondAndPopPermission } from "@/features/chat/lib/respond-permission";
 import { useChatStore } from "@/features/chat/stores/chat-store";
 import { permissionForResponse } from "./native-routing";
 import { permissionDecisionForAction } from "./permission-actions-rules";
@@ -27,11 +27,9 @@ export function answerPermissionFromBanner(response: SystemNotificationResponse)
     if (!pending) return;
     const decision = permissionDecisionForAction(response.actionId, pending.options);
     if (!decision) return;
-    const { popPermission } = useChatStore.getState().actions;
-    void agents
-      .respondPermission(pending.agentId, pending.acpSessionId, pending.requestId, decision)
-      .catch((e) => console.warn("banner permission answer failed:", e))
-      .finally(() => popPermission(pending.acpSessionId, pending.requestId));
+    void respondAndPopPermission(pending, decision, {
+      onError: (e) => console.warn("banner permission answer failed:", e),
+    });
   } catch (err) {
     console.warn("banner permission action failed:", err);
   }

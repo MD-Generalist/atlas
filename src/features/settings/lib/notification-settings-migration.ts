@@ -15,6 +15,12 @@
  *    sound defaulted on, so an untouched install keeps the agent default);
  *  - agent minimum duration carries over.
  * Warnings and team kinds had no legacy choice and keep their defaults.
+ *
+ * A second step (`notifyKindsMigrated`) folds the three per-kind switches the
+ * catalog used to name (`terminalNotifications` = command finished,
+ * `terminalNotifyOnFailure`, `terminalNotifyOnAttention`) into the one
+ * `notifyDisabledKinds` list, so a user who switched one off keeps it off.
+ * It runs on its own flag, so installs that already ran the first step get it.
  */
 import type { AppSettings } from "./app-settings";
 
@@ -65,11 +71,15 @@ export function readLegacyAgentPrefs(): unknown {
   }
 }
 
-export function migrateNotificationSettings(
-  s: AppSettings,
-  legacyAgentPrefs: unknown,
-): Partial<AppSettings> | null {
-  if (s.notificationsMigrated) return null;
+/** The per-kind boolean settings the catalog named before `notifyDisabledKinds`
+ *  — retired; read only here. */
+const LEGACY_KIND_SETTINGS = [
+  ["terminal-done", "terminalNotifications"],
+  ["terminal-failed", "terminalNotifyOnFailure"],
+  ["terminal-attention", "terminalNotifyOnAttention"],
+] as const;
+
+function migrateTierSettings(s: AppSettings, legacyAgentPrefs: unknown): Partial<AppSettings> {
   const agent = sanitizeLegacyAgentPrefs(legacyAgentPrefs);
   const banner = s.terminalNotifyNative && agent.native;
   const sound = s.terminalNotifySound || agent.sound;
@@ -87,4 +97,22 @@ export function migrateNotificationSettings(
       : { terminalNotifyOnFailure: false, terminalNotifyOnAttention: false }),
     notificationsMigrated: true,
   };
+}
+
+function migrateKindSwitches(s: AppSettings): Partial<AppSettings> {
+  const disabled = [...s.notifyDisabledKinds];
+  for (const [kind, key] of LEGACY_KIND_SETTINGS) {
+    if (!s[key] && !disabled.includes(kind)) disabled.push(kind);
+  }
+  return { notifyDisabledKinds: disabled, notifyKindsMigrated: true };
+}
+
+export function migrateNotificationSettings(
+  s: AppSettings,
+  legacyAgentPrefs: unknown,
+): Partial<AppSettings> | null {
+  if (s.notificationsMigrated && s.notifyKindsMigrated) return null;
+  const tiers = s.notificationsMigrated ? {} : migrateTierSettings(s, legacyAgentPrefs);
+  const kinds = s.notifyKindsMigrated ? {} : migrateKindSwitches({ ...s, ...tiers });
+  return { ...tiers, ...kinds };
 }
