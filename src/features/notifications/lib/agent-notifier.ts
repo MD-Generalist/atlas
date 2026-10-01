@@ -49,10 +49,18 @@ import {
   type RateWarnState,
   type RetryWarnState,
 } from "./agent-warning-rules";
+import {
+  INITIAL_SIGN_IN_EPISODE,
+  openSignInEpisode,
+  resolveSignInEpisode,
+  signInDedupeKey,
+  type SignInEpisode,
+} from "./agent-signin-rules";
+import { canSignIn } from "@/features/chat/lib/agent-signin";
 import { turnStats } from "./agent-turn-stats";
 import { createBannerCoalescer } from "./banner-coalescer";
 import { computeAway, type NotificationDecision, type NotificationEnv } from "./decide";
-import { deliverNotification, openNotificationTarget } from "./deliver";
+import { deliverNotification, notificationToastId, openNotificationTarget } from "./deliver";
 import { toast } from "sonner";
 import { setDockBadge } from "@/lib/dock-badge";
 import { useNotificationsStore } from "../stores/notifications-store";
@@ -97,6 +105,40 @@ function endRetry(sessionId: string): void {
   if (!st?.active) return;
   toast.dismiss(`bg-session-${retryDedupeKey(sessionId, st.episode)}`);
   retryState.set(sessionId, endRetryEpisode(st));
+}
+
+// Sign-in episodes per agent type (pure rules in `agent-signin-rules.ts`).
+const signInEpisodes = new Map<string, SignInEpisode>();
+
+/** The agent works again (signed in, or a turn completed): close its episode,
+ *  drop the sign-in toast, mark the center item read and refresh the badge. */
+export function resolveAgentSignIn(agentType: string): void {
+  try {
+    const st = signInEpisodes.get(agentType);
+    if (!st?.open) return;
+    toast.dismiss(
+      notificationToastId(
+        { type: "agent-sign-in", agentType },
+        signInDedupeKey(agentType, st.episode),
+      ),
+    );
+    signInEpisodes.set(agentType, resolveSignInEpisode(st));
+    const store = useNotificationsStore.getState();
+    store.actions.markKindRead(
+      "agent-sign-in",
+      (i) => i.target?.type === "agent-sign-in" && i.target.agentType === agentType,
+    );
+    setDockBadge(useNotificationsStore.getState().items.filter((i) => !i.read).length);
+  } catch (err) {
+    console.warn("agent sign-in clear failed:", err);
+  }
+}
+
+/** Open (or stay in) the agent's current sign-in episode; the event carries it. */
+function signInRequired(agentType: string): AgentNotifyEvent {
+  const st = openSignInEpisode(signInEpisodes.get(agentType) ?? INITIAL_SIGN_IN_EPISODE);
+  signInEpisodes.set(agentType, st);
+  return { type: "sign_in_required", agentType, episode: st.episode };
 }
 
 let counter = 0;
@@ -155,6 +197,8 @@ function toNotifyEvent(env: AgentDelta, session: ChatSession): AgentNotifyEvent 
     }
     case "turn_finished": {
       endRetry(env.session_id);
+      // A completed turn proves the agent's credentials work again.
+      if (env.stop_reason !== "cancelled") resolveAgentSignIn(session.agentType);
       const stats = turnStats(session.messages, Date.now());
       return {
         type: "turn_finished",
@@ -167,6 +211,13 @@ function toNotifyEvent(env: AgentDelta, session: ChatSession): AgentNotifyEvent 
     }
     case "turn_failed":
       endRetry(env.session_id);
+      // One clear notification: an auth failure of an agent with a sign-in is
+      // "sign in to X" (its click opens the dialog), not also "run failed —
+      // sign-in expired". Without a sign-in flow (native / BYOK keys) it stays
+      // an ordinary failure.
+      if (env.error_kind === "auth" && canSignIn(session.agentType)) {
+        return signInRequired(session.agentType);
+      }
       return {
         type: "turn_failed",
         error: env.error,
@@ -183,6 +234,34 @@ function toNotifyEvent(env: AgentDelta, session: ChatSession): AgentNotifyEvent 
     default:
       return null;
   }
+}
+
+function envFor(tabId: string, projectId: string | undefined): NotificationEnv {
+  const windowFocused = isWindowFocused();
+  const sinceInputMs = Date.now() - lastInteraction();
+  return {
+    targetVisible: useLayoutStore.getState().activeTabId === tabId,
+    windowFocused,
+    sinceInputMs,
+    projectActive: !projectId || projectId === useProjectStore.getState().activeProjectId,
+    away: computeAway(windowFocused, sinceInputMs),
+  };
+}
+
+function buildCtx(tabId: string, session: ChatSession, sessionId: string) {
+  const ws = useProjectStore.getState();
+  const projectId = projectIdForTab(tabId) ?? undefined;
+  const project = projectId ? ws.projects.find((w) => w.id === projectId) : undefined;
+  const ctx: AgentCtx = {
+    tabId,
+    sessionId,
+    sessionTitle: session.title || undefined,
+    agentName: agentMeta(session.agentType).label,
+    projectId,
+    projectName: project?.name,
+    orgId: project?.orgId,
+  };
+  return { ctx, projectId };
 }
 
 /** Forward an agent session delta to the pipeline. Ignores kinds that do not
@@ -213,31 +292,11 @@ export function notifyAgentEvent(env: AgentDelta): void {
     const event = toNotifyEvent(env, found.session);
     if (!event) return;
 
-    const ws = useProjectStore.getState();
-    const projectId = projectIdForTab(found.tabId) ?? undefined;
-    const project = projectId ? ws.projects.find((w) => w.id === projectId) : undefined;
-    const ctx: AgentCtx = {
-      tabId: found.tabId,
-      sessionId: env.session_id,
-      sessionTitle: found.session.title || undefined,
-      agentName: agentMeta(found.session.agentType).label,
-      projectId,
-      projectName: project?.name,
-      orgId: project?.orgId,
-    };
-    const windowFocused = isWindowFocused();
-    const sinceInputMs = Date.now() - lastInteraction();
-    const nenv: NotificationEnv = {
-      targetVisible: useLayoutStore.getState().activeTabId === found.tabId,
-      windowFocused,
-      sinceInputMs,
-      projectActive: !projectId || projectId === ws.activeProjectId,
-      away: computeAway(windowFocused, sinceInputMs),
-    };
+    const { ctx, projectId } = buildCtx(found.tabId, found.session, env.session_id);
     const decision = decideAgentNotification(
       event,
       ctx,
-      nenv,
+      envFor(found.tabId, projectId),
       useAgentNotifyPrefsStore.getState().prefs,
     );
     if (!decision) return;
@@ -262,10 +321,29 @@ export function notifyAgentEvent(env: AgentDelta): void {
   }
 }
 
+/** An agent refused to bind or run for want of sign-in, outside a turn failure
+ *  (a bind failure on open). Same notification and episode as a failed turn's. */
+export function notifyAgentSignInRequired(tabId: string, agentType: string): void {
+  try {
+    const session = useChatStore.getState().sessions[tabId];
+    if (!session || !canSignIn(agentType)) return;
+    const { ctx, projectId } = buildCtx(tabId, session, session.acpSessionId ?? tabId);
+    const decision = decideAgentNotification(
+      signInRequired(agentType),
+      ctx,
+      envFor(tabId, projectId),
+      useAgentNotifyPrefsStore.getState().prefs,
+    );
+    if (decision) deliverNotification(decision);
+  } catch (err) {
+    console.warn("agent sign-in notification failed:", err);
+  }
+}
+
 function updateRetryToast(d: NotificationDecision): void {
   if (!d.channels.toast) return;
   toast(d.title, {
-    id: `bg-${d.target.type}-${d.dedupeKey}`,
+    id: notificationToastId(d.target, d.dedupeKey),
     description: d.body,
     duration: d.toast.durationMs,
     action: { label: "Open", onClick: () => openNotificationTarget(d.target) },

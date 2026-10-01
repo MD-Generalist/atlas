@@ -16,6 +16,7 @@
  */
 import {
   catalogEntry,
+  isTabTarget,
   type NotificationChannel,
   type NotificationKind,
   type NotificationTarget,
@@ -91,17 +92,19 @@ export function computeAway(windowFocused: boolean, sinceInputMs: number): boole
 const TARGET_LABEL: Record<NotificationTarget["type"], string> = {
   terminal: "Terminal",
   session: "Agent",
+  "atlas-sign-in": "Atlas",
+  "agent-sign-in": "Agent",
 };
 
-/** Agent copy is already banner-shaped (title, subtitle, body); the OS shows
+/** Agent and app copy is already banner-shaped (title, subtitle, body); the OS shows
  *  the app name, so Atlas adds none. Terminal events keep the project as the
  *  banner title with the event folded into the body. */
 function nativeCopy(event: NotificationEvent, source: string) {
-  if (source === "agent") {
+  if (source !== "terminal") {
     return { title: event.title, subtitle: event.subtitle, body: event.body };
   }
   return {
-    title: `Atlas: ${event.target.projectName ?? TARGET_LABEL[event.target.type]}`,
+    title: `Atlas: ${(isTabTarget(event.target) && event.target.projectName) || TARGET_LABEL[event.target.type]}`,
     body: `${event.title} — ${event.body}`,
   };
 }

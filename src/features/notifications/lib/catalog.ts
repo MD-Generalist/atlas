@@ -20,7 +20,7 @@ import type { AppSettings } from "@/features/settings/lib/app-settings";
 export type NotificationTier = "needs-you" | "outcome" | "warning" | "team";
 
 /** Which subsystem raised it — drives the center's icon and click routing. */
-export type NotificationSource = "agent" | "terminal";
+export type NotificationSource = "agent" | "terminal" | "app";
 
 export type NotificationChannel = "center" | "toast" | "native" | "badge" | "sound";
 
@@ -64,14 +64,34 @@ export type NotificationTarget =
       projectId?: string;
       projectName?: string;
       orgId?: string;
-    };
+    }
+  // App-level targets own no tab: they open a sign-in surface.
+  /** Atlas itself is signed out — opens the connect dialog. */
+  | { type: "atlas-sign-in" }
+  /** One agent needs credentials — opens that agent's sign-in dialog. */
+  | { type: "agent-sign-in"; agentType: string };
+
+/** Targets that live in a chat or terminal tab (and so carry project/org). */
+export type TabTarget = Extract<NotificationTarget, { type: "terminal" | "session" }>;
+export const isTabTarget = (t: NotificationTarget): t is TabTarget =>
+  t.type === "terminal" || t.type === "session";
 
 const ALL_CHANNELS = { center: true, toast: true, native: true, badge: true, sound: true };
 const DONE_TOAST_MS = 5_000;
 const ATTENTION_TOAST_MS = 15_000;
 
-const byTarget = (t: NotificationTarget) =>
-  t.type === "terminal" ? `terminal:${t.terminalId}` : `session:${t.sessionId ?? t.tabId}`;
+const byTarget = (t: NotificationTarget) => {
+  switch (t.type) {
+    case "terminal":
+      return `terminal:${t.terminalId}`;
+    case "session":
+      return `session:${t.sessionId ?? t.tabId}`;
+    case "atlas-sign-in":
+      return "atlas-sign-in";
+    case "agent-sign-in":
+      return `agent-sign-in:${t.agentType}`;
+  }
+};
 
 export const NOTIFICATION_CATALOG = {
   "terminal-attention": {
@@ -153,6 +173,29 @@ export const NOTIFICATION_CATALOG = {
   "agent-disconnected": {
     tier: "warning",
     source: "agent",
+    channels: ALL_CHANNELS,
+    whenLooking: "record",
+    sound: { native: "Ping" },
+    toast: { variant: "error", durationMs: ATTENTION_TOAST_MS },
+    groupKey: byTarget,
+    setting: null,
+  },
+  // Sign-in problems (ATL-383): every agent stops working until the user acts,
+  // so both are needs-you. Each is its own thing to look at, so a visible
+  // window is no reason to drop the center record.
+  "agent-sign-in": {
+    tier: "needs-you",
+    source: "agent",
+    channels: ALL_CHANNELS,
+    whenLooking: "record",
+    sound: { native: "Ping" },
+    toast: { variant: "error", durationMs: ATTENTION_TOAST_MS },
+    groupKey: byTarget,
+    setting: null,
+  },
+  "atlas-signed-out": {
+    tier: "needs-you",
+    source: "app",
     channels: ALL_CHANNELS,
     whenLooking: "record",
     sound: { native: "Ping" },

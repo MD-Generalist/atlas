@@ -15,7 +15,9 @@ import { setNativeResponseHandler, showNativeNotification } from "@/lib/native-n
 import { playChime } from "@/lib/chime";
 import { setDockBadge } from "@/lib/dock-badge";
 import { useNotificationsStore } from "../stores/notifications-store";
-import { catalogEntry, type NotificationTarget } from "./catalog";
+import { useAuthStore } from "@/features/auth/stores/auth-store";
+import { promptSignIn } from "@/features/chat/lib/agent-signin";
+import { catalogEntry, isTabTarget, type NotificationTarget } from "./catalog";
 import type { NotificationDecision } from "./decide";
 import { encodeBannerPayload, targetForResponse } from "./native-routing";
 
@@ -24,12 +26,25 @@ const ANNOUNCED_CAP = 500;
 
 /** Bring a notification's target into view, across projects. */
 export function openNotificationTarget(t: NotificationTarget): void {
-  if (t.type === "terminal") {
-    void jumpToTerminal({ tabId: t.tabId, terminalId: t.terminalId, projectId: t.projectId });
-  } else {
-    void jumpToSession(t.tabId);
+  switch (t.type) {
+    case "terminal":
+      void jumpToTerminal({ tabId: t.tabId, terminalId: t.terminalId, projectId: t.projectId });
+      return;
+    case "session":
+      void jumpToSession(t.tabId);
+      return;
+    case "atlas-sign-in":
+      void useAuthStore.getState().actions.beginSignIn();
+      return;
+    case "agent-sign-in":
+      promptSignIn(t.agentType);
+      return;
   }
 }
+
+/** The toast id a decision's toast carries, so a source can dismiss it later. */
+export const notificationToastId = (target: NotificationTarget, dedupeKey: string) =>
+  `bg-${target.type}-${dedupeKey}`;
 
 // A click on an OS banner opens its exact source (thread tab or terminal pane),
 // across projects. Registered at module load so a click that launched the app
@@ -56,11 +71,13 @@ export function deliverNotification(d: NotificationDecision): boolean {
       source: catalogEntry(d.kind).source,
       title: d.title,
       body: d.body,
-      tabId: t.tabId,
+      tabId: isTabTarget(t) ? t.tabId : undefined,
       terminalId: t.type === "terminal" ? t.terminalId : undefined,
       sessionId: t.type === "session" ? t.sessionId : undefined,
-      projectId: t.projectId,
-      orgId: t.orgId,
+      projectId: isTabTarget(t) ? t.projectId : undefined,
+      orgId: isTabTarget(t) ? t.orgId : undefined,
+      // App-level targets have no tab to jump to; the panel opens the target.
+      target: isTabTarget(t) ? undefined : t,
     });
   }
   // Re-checked at delivery: the badge is for a window in the background now.
@@ -70,7 +87,7 @@ export function deliverNotification(d: NotificationDecision): boolean {
   }
   if (d.channels.toast) {
     const opts = {
-      id: `bg-${t.type}-${d.dedupeKey}`,
+      id: notificationToastId(t, d.dedupeKey),
       description: d.body,
       duration: d.toast.durationMs,
       action: { label: "Open", onClick: () => openNotificationTarget(t) },

@@ -82,4 +82,55 @@ describe("persistence", () => {
     expect(useNotificationsStore.getState().panelOpen).toBe(false);
     expect(visibleItems(restored, "org-b")).toHaveLength(0);
   });
+
+  it("keeps app-level sign-in targets and drops malformed ones on restore", async () => {
+    const item = (id: string, target: unknown) => ({
+      id,
+      kind: "agent-sign-in",
+      title: "t",
+      body: "b",
+      timestamp: new Date(0).toISOString(),
+      source: "agent",
+      target,
+      read: false,
+    });
+    const items = [
+      item("ok", { type: "agent-sign-in", agentType: "cursor" }),
+      item("atlas", { type: "atlas-sign-in" }),
+      item("bad", { type: "agent-sign-in" }),
+    ];
+    localStorage.setItem(KEY, JSON.stringify({ state: { items }, version: 1 }));
+    await useNotificationsStore.persist.rehydrate();
+    const byId = Object.fromEntries(useNotificationsStore.getState().items.map((i) => [i.id, i]));
+    expect(byId.ok.target).toEqual({ type: "agent-sign-in", agentType: "cursor" });
+    expect(byId.atlas.target).toEqual({ type: "atlas-sign-in" });
+    expect(byId.bad.target).toBeUndefined();
+  });
+});
+
+describe("markKindRead", () => {
+  it("marks only matching unread items of the kind", () => {
+    const { actions } = useNotificationsStore.getState();
+    const base = { source: "agent" as const, title: "t", body: "b" };
+    actions.add({
+      ...base,
+      kind: "agent-sign-in",
+      target: { type: "agent-sign-in", agentType: "a" },
+    });
+    actions.add({
+      ...base,
+      kind: "agent-sign-in",
+      target: { type: "agent-sign-in", agentType: "b" },
+    });
+    actions.add({ ...base, kind: "agent-failed" });
+    actions.markKindRead(
+      "agent-sign-in",
+      (i) => i.target?.type === "agent-sign-in" && i.target.agentType === "a",
+    );
+    const read = useNotificationsStore
+      .getState()
+      .items.filter((i) => i.read)
+      .map((i) => i.kind);
+    expect(read).toEqual(["agent-sign-in"]);
+  });
 });

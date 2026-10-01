@@ -7,7 +7,12 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { createSelectors } from "@/lib/create-selectors";
-import { isNotificationKind, type NotificationKind, type NotificationSource } from "../lib/catalog";
+import {
+  isNotificationKind,
+  type NotificationKind,
+  type NotificationSource,
+  type NotificationTarget,
+} from "../lib/catalog";
 
 export type { NotificationKind, NotificationSource } from "../lib/catalog";
 
@@ -29,6 +34,8 @@ export interface AppNotification {
    *  is visible everywhere. */
   projectId?: string;
   orgId?: string;
+  /** App-level target (a sign-in surface) for items that own no tab. */
+  target?: Extract<NotificationTarget, { type: "atlas-sign-in" | "agent-sign-in" }>;
   read: boolean;
 }
 
@@ -56,6 +63,8 @@ const ERROR_KINDS: ReadonlySet<NotificationKind> = new Set([
   "agent-failed",
   "agent-disconnected",
   "terminal-failed",
+  "atlas-signed-out",
+  "agent-sign-in",
 ]);
 export const isErrorKind = (i: AppNotification) => ERROR_KINDS.has(i.kind);
 
@@ -72,6 +81,9 @@ interface NotificationsState {
     markAllRead: () => void;
     /** Mark one session's items of a kind read (its question was answered). */
     markSessionKindRead: (sessionId: string, kind: NotificationKind) => void;
+    /** Mark unread items of a kind (optionally narrowed) read — the thing they
+     *  were about is resolved. */
+    markKindRead: (kind: NotificationKind, match?: (i: AppNotification) => boolean) => void;
     /** Opening marks the VISIBLE items read — pass the active org so a look at
      *  org A's panel does not clear org B's unread state. */
     open: (orgId?: string | null) => void;
@@ -96,7 +108,19 @@ function sanitize(items: unknown): AppNotification[] {
         typeof i.timestamp === "string" &&
         isNotificationKind(i.kind),
     )
+    .map((i) =>
+      i.target !== undefined && !isAppTarget(i.target) ? { ...i, target: undefined } : i,
+    )
     .slice(0, MAX_ITEMS);
+}
+
+function isAppTarget(t: unknown): t is NonNullable<AppNotification["target"]> {
+  if (!t || typeof t !== "object") return false;
+  const r = t as Record<string, unknown>;
+  return (
+    r.type === "atlas-sign-in" ||
+    (r.type === "agent-sign-in" && typeof r.agentType === "string" && !!r.agentType)
+  );
 }
 
 export const useNotificationsStore = createSelectors(
@@ -127,6 +151,12 @@ export const useNotificationsStore = createSelectors(
             set((s) => ({
               items: s.items.map((i) =>
                 !i.read && i.kind === kind && i.sessionId === sessionId ? { ...i, read: true } : i,
+              ),
+            })),
+          markKindRead: (kind, match) =>
+            set((s) => ({
+              items: s.items.map((i) =>
+                !i.read && i.kind === kind && (!match || match(i)) ? { ...i, read: true } : i,
               ),
             })),
           open: (orgId) =>

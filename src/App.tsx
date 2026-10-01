@@ -74,6 +74,7 @@ import { initWindowFocusTracking, isWindowFocused } from "@/lib/window-focus";
 import { initDockBadgeClearing } from "@/lib/dock-badge";
 import { primeNativeNotificationPermission } from "@/lib/native-notify";
 import { isStaleAgentTurn, notifyAgentEvent } from "@/features/notifications/lib/agent-notifier";
+import { noteAtlasSignedIn, notifyAtlasSignedOut } from "@/features/notifications/lib/app-notifier";
 import { logEvent } from "@/features/log/lib/log";
 import { warmMarkdownWorker, primeMarkdownRenderer } from "@/lib/markdown-cache";
 import { primeMarkdown } from "@/lib/markdown";
@@ -265,6 +266,7 @@ export function App() {
     const offs: Array<Promise<() => void>> = [
       listenAuthChanged((snapshot) => {
         a.setSnapshot(snapshot);
+        if (snapshot.status === "signed-in") noteAtlasSignedIn();
         // Merge the server's org list into the local switcher (adds new ones,
         // takes renamed names onto linked ones, never removes).
         // Guarded on `orgs !== null` (three-state): `null` is "not known yet"
@@ -274,10 +276,10 @@ export function App() {
         }
       }),
       listenAuthError((e) => a.setError(e.message)),
-      // A revoked or expired session arrives with nothing on screen, so the
-      // only place it can land is a toast — the title bar quietly reverting to
-      // a signed-out icon reads as a bug rather than an explanation.
-      listenAuthSignedOut((e) => toast.error(e.message)),
+      // A revoked or expired session arrives with nothing on screen, so it must
+      // announce itself — the title bar quietly reverting to a signed-out icon
+      // reads as a bug. Through the pipeline: toast, center and (away) a banner.
+      listenAuthSignedOut((e) => notifyAtlasSignedOut(e.message)),
     ];
     void a.hydrate();
     // Re-pull on wake so an org renamed on the web shows up when the user

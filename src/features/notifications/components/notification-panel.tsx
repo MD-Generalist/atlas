@@ -1,5 +1,14 @@
 import { useMemo } from "react";
-import { Bell, Shield, AlertTriangle, X, Sparkles, BellRing, SquareTerminal } from "lucide-react";
+import {
+  Bell,
+  Shield,
+  AlertTriangle,
+  X,
+  Sparkles,
+  BellRing,
+  SquareTerminal,
+  KeyRound,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Hint } from "@/ui/tooltip";
 import { timeAgo } from "@/lib/time-ago";
@@ -7,6 +16,7 @@ import { AtlasIcon } from "@/components/atlas-icon";
 import { jumpToSession } from "@/features/chat/lib/tab-project";
 import { jumpToTerminal } from "@/features/terminal/lib/jump-to-terminal";
 import { useOrgStore } from "@/features/organisations/stores/org-store";
+import { openNotificationTarget } from "../lib/deliver";
 import {
   useNotificationsStore,
   visibleItems,
@@ -170,6 +180,8 @@ function NotificationCard({ n }: { n: AppNotification }) {
 }
 
 function NotificationIcon({ n }: { n: AppNotification }) {
+  if (n.kind === "agent-sign-in" || n.kind === "atlas-signed-out")
+    return <KeyRound size={15} className="text-primary" strokeWidth={1.5} />;
   if (n.kind === "permission")
     return <Shield size={15} className="text-primary" strokeWidth={1.5} />;
   if (n.kind === "agent-failed" || n.kind === "agent-disconnected" || n.kind === "terminal-failed")
@@ -194,8 +206,12 @@ function NotificationIcon({ n }: { n: AppNotification }) {
   return <Sparkles size={15} className="text-secondary-foreground" strokeWidth={1.5} />;
 }
 
-/** Best-effort: bring the originating chat or terminal into view. */
+/** Best-effort: bring the originating chat, terminal or sign-in surface into view. */
 function focusNotification(n: AppNotification) {
+  if (n.target) {
+    openNotificationTarget(n.target);
+    return;
+  }
   if (n.source === "terminal" && n.tabId) {
     void jumpToTerminal({ tabId: n.tabId, terminalId: n.terminalId, projectId: n.projectId });
     return;

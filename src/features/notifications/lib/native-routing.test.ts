@@ -24,6 +24,15 @@ describe("banner payload round trip", () => {
     const target: NotificationTarget = { type: "session", tabId: "tab-9", sessionId: "s" };
     expect(targetForResponse(click(encodeBannerPayload(target)))).toEqual(target);
   });
+
+  it("rebuilds the app-level sign-in targets, which own no tab", () => {
+    for (const target of [
+      { type: "atlas-sign-in" },
+      { type: "agent-sign-in", agentType: "cursor" },
+    ] satisfies NotificationTarget[]) {
+      expect(targetForResponse(click(encodeBannerPayload(target)))).toEqual(target);
+    }
+  });
 });
 
 describe("targetForResponse", () => {
@@ -40,5 +49,6 @@ describe("targetForResponse", () => {
     expect(targetForResponse(click('{"target":{"type":"session"}}'))).toBeNull();
     expect(targetForResponse(click('{"target":{"type":"terminal","tabId":"t"}}'))).toBeNull();
     expect(targetForResponse(click('{"target":{"type":"x","tabId":"t"}}'))).toBeNull();
+    expect(targetForResponse(click('{"target":{"type":"agent-sign-in"}}'))).toBeNull();
   });
 });

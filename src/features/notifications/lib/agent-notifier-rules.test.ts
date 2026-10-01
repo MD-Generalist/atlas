@@ -363,3 +363,47 @@ describe("question copy", () => {
     expect(d?.channels.native).toBe(false);
   });
 });
+
+describe("agent sign-in required", () => {
+  const signIn = (episode = 0): AgentNotifyEvent => ({
+    type: "sign_in_required",
+    agentType: "cursor",
+    episode,
+  });
+
+  it("uses every channel when away, naming the agent", () => {
+    const d = decideAgentNotification(signIn(), ctx, away, prefs);
+    expect(d?.kind).toBe("agent-sign-in");
+    expect(d?.tier).toBe("needs-you");
+    expect(d?.channels).toMatchObject({ center: true, toast: true, native: true, badge: true });
+    expect(d?.title).toBe("Sign in to Claude Code");
+    expect(d?.native.title).toBe("Sign in to Claude Code");
+    expect(d?.native.sound).toBe("Ping");
+  });
+
+  it("routes the click to that agent's sign-in, not a thread", () => {
+    const d = decideAgentNotification(signIn(), ctx, away, prefs);
+    expect(d?.target).toEqual({ type: "agent-sign-in", agentType: "cursor" });
+    expect(d?.groupKey).toBe("agent-sign-in:cursor");
+  });
+
+  it("keeps the center record and toast even on the thread's own tab", () => {
+    const d = decideAgentNotification(signIn(), ctx, looking, prefs);
+    expect(d?.channels.center).toBe(true);
+  });
+
+  it("repeats within an episode share one dedupe key; a new episode differs", () => {
+    const key = (e: AgentNotifyEvent, c: AgentCtx = ctx) =>
+      decideAgentNotification(e, c, away, prefs)?.dedupeKey;
+    expect(key(signIn(0))).toBe(key(signIn(0)));
+    // Another thread of the same agent is the same problem.
+    expect(key(signIn(0), { ...ctx, tabId: "chat-2", sessionId: "acp-2" })).toBe(key(signIn(0)));
+    expect(key(signIn(1))).not.toBe(key(signIn(0)));
+  });
+
+  it("is silenced by the master switch and the banner pref", () => {
+    expect(decideAgentNotification(signIn(), ctx, away, { ...prefs, enabled: false })).toBeNull();
+    const d = decideAgentNotification(signIn(), ctx, away, { ...prefs, native: false });
+    expect(d?.channels.native).toBe(false);
+  });
+});

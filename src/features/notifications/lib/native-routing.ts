@@ -17,6 +17,9 @@ export function encodeBannerPayload(target: NotificationTarget): string {
 function isTarget(t: unknown): t is NotificationTarget {
   if (typeof t !== "object" || t === null) return false;
   const r = t as Record<string, unknown>;
+  // App-level targets own no tab.
+  if (r.type === "atlas-sign-in") return true;
+  if (r.type === "agent-sign-in") return typeof r.agentType === "string" && !!r.agentType;
   if (typeof r.tabId !== "string" || !r.tabId) return false;
   if (r.type === "terminal") return typeof r.terminalId === "string";
   return r.type === "session";

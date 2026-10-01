@@ -12,6 +12,7 @@
  */
 import type { NotificationTarget } from "./catalog";
 import { firstSentence } from "./agent-summary";
+import { signInDedupeKey } from "./agent-signin-rules";
 import { formatResetTime, rateWindowLabel, type RateSlot } from "./agent-warning-rules";
 import { formatFileCount, formatTurnDuration } from "./agent-turn-stats";
 import {
@@ -79,6 +80,9 @@ export type AgentNotifyEvent =
       filesEdited?: number;
     }
   | { type: "turn_failed"; error: string; errorKind?: AgentErrorKind; nonce: string | number }
+  // An agent cannot run until the user signs in to it. `episode` is the
+  // sign-in episode (`agent-signin-rules.ts`): repeats within one share a key.
+  | { type: "sign_in_required"; agentType: string; episode: number }
   | { type: "agent_disconnected"; agentId: string; reason: string; nonce: string | number }
   // Warning tier — the firing rules live in `agent-warning-rules.ts`.
   | { type: "context_warning"; percent: number; crossing: number }
@@ -116,6 +120,7 @@ export function agentKindPrefs(p: AgentNotificationPrefs): NotificationPrefs {
     "agent-done": kind,
     "agent-failed": kind,
     "agent-disconnected": kind,
+    "agent-sign-in": kind,
     // Warnings never raise an OS banner by default (no setting to opt in yet).
     "agent-context-warning": warning,
     "agent-rate-limit": warning,
@@ -230,6 +235,9 @@ export function describeRateLimit(
   return resetsAt == null ? head : `${head} — resets ${formatResetTime(resetsAt, now, locale)}`;
 }
 
+const projectSubtitle = (ctx: AgentCtx, projectActive: boolean) =>
+  !projectActive && ctx.projectName ? ctx.projectName : undefined;
+
 /** Agent event → catalog event, or null when it is not notification-worthy
  *  at all (independent of environment and channel prefs). */
 export function classifyAgentEvent(
@@ -247,10 +255,22 @@ export function classifyAgentEvent(
     orgId: ctx.orgId,
   };
   const sid = ctx.sessionId ?? ctx.tabId;
+  if (e.type === "sign_in_required") {
+    // Not about a thread: the click opens the agent's sign-in, and one
+    // notification stands for every thread of that agent.
+    return {
+      kind: "agent-sign-in",
+      title: `Sign in to ${ctx.agentName || "agent"}`,
+      subtitle: projectSubtitle(ctx, projectActive),
+      body: ctx.sessionTitle ? `Signed out — "${ctx.sessionTitle}" is waiting` : "Signed out",
+      target: { type: "agent-sign-in", agentType: e.agentType },
+      dedupeKey: signInDedupeKey(e.agentType, e.episode),
+    };
+  }
   const agent = ctx.agentName || "Agent";
   const title = ctx.sessionTitle ? `${agent} · ${ctx.sessionTitle}` : agent;
   // Name the project only when it is not the one on screen.
-  const subtitle = !projectActive && ctx.projectName ? ctx.projectName : undefined;
+  const subtitle = projectSubtitle(ctx, projectActive);
   const base = { title, subtitle, target };
 
   switch (e.type) {
