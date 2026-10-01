@@ -83,6 +83,27 @@ describe("persistence", () => {
     expect(visibleItems(restored, "org-b")).toHaveLength(0);
   });
 
+  it("restores agentType, tolerating old items without it and malformed values", async () => {
+    const item = (id: string, agentType?: unknown) => ({
+      id,
+      kind: "agent-done",
+      title: "t",
+      body: "b",
+      timestamp: new Date(0).toISOString(),
+      source: "agent",
+      read: false,
+      ...(agentType === undefined ? {} : { agentType }),
+    });
+    const items = [item("ok", "codex"), item("old"), item("bad", 7), item("empty", "")];
+    localStorage.setItem(KEY, JSON.stringify({ state: { items }, version: 1 }));
+    await useNotificationsStore.persist.rehydrate();
+    const byId = Object.fromEntries(useNotificationsStore.getState().items.map((i) => [i.id, i]));
+    expect(byId.ok.agentType).toBe("codex");
+    expect(byId.old.agentType).toBeUndefined();
+    expect(byId.bad.agentType).toBeUndefined();
+    expect(byId.empty.agentType).toBeUndefined();
+  });
+
   it("keeps app-level sign-in targets and drops malformed ones on restore", async () => {
     const item = (id: string, target: unknown) => ({
       id,

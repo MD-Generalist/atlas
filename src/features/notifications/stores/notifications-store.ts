@@ -35,6 +35,9 @@ export interface AppNotification {
    *  is visible everywhere. */
   projectId?: string;
   orgId?: string;
+  /** The originating agent (agent kinds) — resolved to its icon by the
+   *  registry-aware agent glyph. Absent on items from before it was stored. */
+  agentType?: string;
   /** App-level target (a sign-in surface, a Chat conversation) for items that
    *  own no tab. */
   target?: Exclude<NotificationTarget, TabTarget>;
@@ -112,9 +115,12 @@ function sanitize(items: unknown): AppNotification[] {
         typeof i.timestamp === "string" &&
         isNotificationKind(i.kind),
     )
-    .map((i) =>
-      i.target !== undefined && !isAppTarget(i.target) ? { ...i, target: undefined } : i,
-    )
+    .map((i) => {
+      const t = i.target !== undefined && !isAppTarget(i.target) ? { ...i, target: undefined } : i;
+      return t.agentType !== undefined && (typeof t.agentType !== "string" || !t.agentType)
+        ? { ...t, agentType: undefined }
+        : t;
+    })
     .slice(0, MAX_ITEMS);
 }
 

@@ -1,22 +1,12 @@
 import { useMemo } from "react";
-import {
-  Bell,
-  Shield,
-  AlertTriangle,
-  X,
-  Sparkles,
-  BellRing,
-  SquareTerminal,
-  KeyRound,
-  MessageSquare,
-} from "lucide-react";
+import { Bell, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Hint } from "@/ui/tooltip";
 import { timeAgo } from "@/lib/time-ago";
-import { AtlasIcon } from "@/components/atlas-icon";
 import { jumpToSession } from "@/features/chat/lib/tab-project";
 import { jumpToTerminal } from "@/features/terminal/lib/jump-to-terminal";
 import { useOrgStore } from "@/features/organisations/stores/org-store";
+import { NotificationLeadingIcon } from "./notification-leading-icon";
 import { openNotificationTarget } from "../lib/deliver";
 import {
   useNotificationsStore,
@@ -147,7 +137,7 @@ function NotificationCard({ n }: { n: AppNotification }) {
       )}
     >
       <span className="mt-0.5 shrink-0">
-        <NotificationIcon n={n} />
+        <NotificationLeadingIcon kind={n.kind} agentType={n.agentType} />
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
@@ -178,35 +168,6 @@ function NotificationCard({ n }: { n: AppNotification }) {
       </Hint>
     </div>
   );
-}
-
-function NotificationIcon({ n }: { n: AppNotification }) {
-  if (n.kind === "agent-sign-in" || n.kind === "atlas-signed-out")
-    return <KeyRound size={15} className="text-primary" strokeWidth={1.5} />;
-  if (n.source === "chat")
-    return <MessageSquare size={15} className="text-primary" strokeWidth={1.5} />;
-  if (n.kind === "permission")
-    return <Shield size={15} className="text-primary" strokeWidth={1.5} />;
-  if (n.kind === "agent-failed" || n.kind === "agent-disconnected" || n.kind === "terminal-failed")
-    return (
-      <AlertTriangle
-        size={15}
-        className="text-[var(--atlas-status-error-foreground)]"
-        strokeWidth={1.5}
-      />
-    );
-  if (n.kind === "terminal-attention")
-    return (
-      <BellRing
-        size={15}
-        className="text-[var(--atlas-status-warning-foreground)]"
-        strokeWidth={1.5}
-      />
-    );
-  if (n.kind === "terminal-done")
-    return <SquareTerminal size={15} className="text-secondary-foreground" strokeWidth={1.5} />;
-  if (n.source === "agent") return <AtlasIcon size={16} className="rounded-md" />;
-  return <Sparkles size={15} className="text-secondary-foreground" strokeWidth={1.5} />;
 }
 
 /** Best-effort: bring the originating chat, terminal or sign-in surface into view. */

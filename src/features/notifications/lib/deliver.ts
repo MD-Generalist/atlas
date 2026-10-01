@@ -14,6 +14,8 @@ import { isWindowFocused } from "@/lib/window-focus";
 import { setNativeResponseHandler, showNativeNotification } from "@/lib/native-notify";
 import { playChime } from "@/lib/chime";
 import { setDockBadge } from "@/lib/dock-badge";
+import { useChatStore } from "@/features/chat/stores/chat-store";
+import { notificationToastIcon } from "../components/notification-leading-icon";
 import { useNotificationsStore } from "../stores/notifications-store";
 import { useAuthStore } from "@/features/auth/stores/auth-store";
 import { promptSignIn } from "@/features/chat/lib/agent-signin";
@@ -63,6 +65,14 @@ setNativeResponseHandler((response) => {
   if (target) openNotificationTarget(target);
 });
 
+/** The agent a notification is about, for its leading icon. Resolved here from
+ *  the target so every agent kind carries it without per-rule plumbing. */
+function agentTypeOf(t: NotificationTarget): string | undefined {
+  if (t.type === "agent-sign-in") return t.agentType;
+  if (t.type === "session") return useChatStore.getState().sessions[t.tabId]?.agentType;
+  return undefined;
+}
+
 /** Perform a decision. Returns false when it was a duplicate. */
 export function deliverNotification(d: NotificationDecision): boolean {
   if (announced.has(d.dedupeKey)) return false;
@@ -73,6 +83,7 @@ export function deliverNotification(d: NotificationDecision): boolean {
   }
 
   const t = d.target;
+  const agentType = catalogEntry(d.kind).source === "agent" ? agentTypeOf(t) : undefined;
   if (d.channels.center) {
     useNotificationsStore.getState().actions.add({
       kind: d.kind,
@@ -83,6 +94,7 @@ export function deliverNotification(d: NotificationDecision): boolean {
       terminalId: t.type === "terminal" ? t.terminalId : undefined,
       sessionId: t.type === "session" ? t.sessionId : undefined,
       projectId: isTabTarget(t) ? t.projectId : undefined,
+      agentType,
       orgId: isTabTarget(t) || t.type === "chat-conversation" ? t.orgId : undefined,
       // App-level targets have no tab to jump to; the panel opens the target.
       target: isTabTarget(t) ? undefined : t,
@@ -98,6 +110,7 @@ export function deliverNotification(d: NotificationDecision): boolean {
       id: notificationToastId(t, d.dedupeKey),
       description: d.body,
       duration: d.toast.durationMs,
+      icon: notificationToastIcon(d.kind, agentType),
       action: { label: "Open", onClick: () => openNotificationTarget(t) },
     };
     if (d.toast.variant === "error") toast.error(d.title, opts);
