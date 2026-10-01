@@ -79,6 +79,18 @@ export function notifierRemoveGroup(group: string): Promise<void> {
   return invoke<void>("notifier_remove_group", { group });
 }
 
+/** Path of the already-cached banner icon for `key`, or null. */
+export async function notifierIconLookup(key: string): Promise<string | null> {
+  return (await invoke<string | null>("notifier_icon_lookup", { key })) ?? null;
+}
+
+/** Persist a rasterised PNG under `key` (no-op if present); resolves to its path. */
+export async function notifierIconStore(key: string, png: Uint8Array): Promise<string | null> {
+  return (
+    (await invoke<string | null>("notifier_icon_store", { key, png: Array.from(png) })) ?? null
+  );
+}
+
 export function listenNotificationResponses(
   handler: (response: SystemNotificationResponse) => void,
 ): Promise<UnlistenFn> {

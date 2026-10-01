@@ -11,7 +11,13 @@ import { toast } from "sonner";
 import { jumpToSession } from "@/features/chat/lib/tab-project";
 import { jumpToTerminal } from "@/features/terminal/lib/jump-to-terminal";
 import { isWindowFocused } from "@/lib/window-focus";
-import { setNativeResponseHandler, showNativeNotification } from "@/lib/native-notify";
+import { agentBannerIconPath } from "@/lib/notification-icon";
+import {
+  nativeCapabilities,
+  primeNativeNotificationPermission,
+  setNativeResponseHandler,
+  showNativeNotification,
+} from "@/lib/native-notify";
 import { playChime } from "@/lib/chime";
 import { setDockBadge } from "@/lib/dock-badge";
 import { useChatStore } from "@/features/chat/stores/chat-store";
@@ -73,6 +79,28 @@ function agentTypeOf(t: NotificationTarget): string | undefined {
   return undefined;
 }
 
+/** The OS banner. Agent kinds carry the agent's icon where the backend can
+ *  show an image; a missing icon just means no image. */
+async function showBanner(d: NotificationDecision, agentType: string | undefined): Promise<void> {
+  let imagePath: string | undefined;
+  if (agentType) {
+    await primeNativeNotificationPermission();
+    if (nativeCapabilities().images) imagePath = await agentBannerIconPath(agentType);
+  }
+  await showNativeNotification({
+    // Re-delivering a dedupe key replaces its banner; one group per thread/terminal.
+    tag: notificationTag(d.kind, d.dedupeKey),
+    group: d.groupKey,
+    title: d.native.title,
+    subtitle: d.native.subtitle,
+    body: d.native.body,
+    imagePath,
+    sound: d.native.sound,
+    urgency: d.tier === "needs-you" ? "high" : "normal",
+    payload: encodeBannerPayload(d.target),
+  });
+}
+
 /** Perform a decision. Returns false when it was a duplicate. */
 export function deliverNotification(d: NotificationDecision): boolean {
   if (announced.has(d.dedupeKey)) return false;
@@ -118,17 +146,7 @@ export function deliverNotification(d: NotificationDecision): boolean {
     else toast(d.title, opts);
   }
   if (d.channels.native) {
-    void showNativeNotification({
-      // Re-delivering a dedupe key replaces its banner; one group per thread/terminal.
-      tag: notificationTag(d.kind, d.dedupeKey),
-      group: d.groupKey,
-      title: d.native.title,
-      subtitle: d.native.subtitle,
-      body: d.native.body,
-      sound: d.native.sound,
-      urgency: d.tier === "needs-you" ? "high" : "normal",
-      payload: encodeBannerPayload(d.target),
-    });
+    void showBanner(d, agentType);
   } else if (d.channels.sound) {
     playChime();
   }

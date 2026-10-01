@@ -403,6 +403,8 @@ pub fn run() {
             commands::notifier::notifier_show,
             commands::notifier::notifier_remove,
             commands::notifier::notifier_remove_group,
+            commands::notifier::notifier_icon_lookup,
+            commands::notifier::notifier_icon_store,
             commands::agent_entitlement::native_agent_entitlement,
             commands::agent_entitlement::native_agent_refresh_models,
             commands::auth::auth_snapshot,
