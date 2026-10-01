@@ -75,7 +75,7 @@ pub fn elicitation_wire(elicitation: &atlas_acp_thread::Elicitation) -> Elicitat
     }
 }
 
-/// Projects every attached thread's events onto the frozen wire.
+/// Projects every attached thread's events onto the session-delta wire.
 ///
 /// One projector serves every session: it hands out the per-session event sink
 /// that `ConnectOptions` wants, and each attached thread gets a task that
