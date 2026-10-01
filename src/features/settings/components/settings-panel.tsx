@@ -43,7 +43,10 @@ import { isLinux, isWindows } from "@/lib/platform";
 import { useSettingsNav, type SettingsSection } from "../stores/settings-nav-store";
 import { openConfigFile } from "../lib/atlas-config-api";
 import { useSettingsStore } from "@/features/settings/stores/settings-store";
-import { useAgentNotifyPrefsStore } from "@/features/notifications/stores/agent-notify-prefs-store";
+import { NotificationsSettings } from "./notifications-settings";
+import { SectionTitle, SettingRow, Toggle } from "./settings-controls";
+
+export { Toggle };
 import { useAgentRegistryStore } from "@/features/agents/stores/agent-registry-store";
 
 const SECTIONS: Array<{
@@ -233,8 +236,6 @@ function GeneralSettings() {
   const settings = useSettingsStore.use.settings();
   const configError = useSettingsStore.use.configError();
   const { updateSettings, clearConfigError, resetConfig } = useSettingsStore.use.actions();
-  const agentNotify = useAgentNotifyPrefsStore.use.prefs();
-  const { update: updateAgentNotify } = useAgentNotifyPrefsStore.use.actions();
   const [cli, setCli] = useState<CliStatus | null>(null);
   const [installing, setInstalling] = useState(false);
   const [resettingConfig, setResettingConfig] = useState(false);
@@ -381,121 +382,7 @@ function GeneralSettings() {
           onChange={(next) => updateSettings({ enterToSend: next })}
         />
       </SettingRow>
-      <SectionTitle
-        title="Terminal notifications"
-        subtitle="Be told when a command finishes or wants input, wherever you are in Atlas"
-      />
-      <SettingRow
-        label="Terminal notifications"
-        description="A command that fails, runs longer than the threshold, or asks for input raises an item in the notification center, a toast when its terminal is off screen, and a macOS notification when Atlas is in the background. Nothing fires while you are looking at that terminal."
-      >
-        <Toggle
-          checked={settings.terminalNotifications}
-          onChange={(next) => updateSettings({ terminalNotifications: next })}
-        />
-      </SettingRow>
-      <SettingRow
-        label="Notify on success after"
-        description="A command that succeeds faster than this stays quiet. Failures always notify (below)."
-      >
-        <select
-          value={String(settings.terminalNotifyMinDurationMs)}
-          disabled={!settings.terminalNotifications}
-          onChange={(e) => updateSettings({ terminalNotifyMinDurationMs: Number(e.target.value) })}
-          className="h-7 rounded-md border border-[var(--border)] bg-[var(--card)] px-2 text-xs text-[var(--foreground)] outline-none disabled:opacity-40"
-        >
-          <option value="5000">5 seconds</option>
-          <option value="10000">10 seconds</option>
-          <option value="30000">30 seconds</option>
-          <option value="60000">1 minute</option>
-          <option value="300000">5 minutes</option>
-        </select>
-      </SettingRow>
-      <SettingRow
-        label="Notify on failure"
-        description="A non-zero exit code notifies regardless of how long the command ran. Ctrl-C is not a failure."
-      >
-        <Toggle
-          checked={settings.terminalNotifyOnFailure}
-          disabled={!settings.terminalNotifications}
-          onChange={(next) => updateSettings({ terminalNotifyOnFailure: next })}
-        />
-      </SettingRow>
-      <SettingRow
-        label="Notify when input is needed"
-        description="A password prompt, a terminal bell, or a program's own notification (OSC 9 / 777) while the terminal is not on screen."
-      >
-        <Toggle
-          checked={settings.terminalNotifyOnAttention}
-          disabled={!settings.terminalNotifications}
-          onChange={(next) => updateSettings({ terminalNotifyOnAttention: next })}
-        />
-      </SettingRow>
-      <SettingRow
-        label="macOS notifications"
-        description="Also raise a system notification when the Atlas window is not focused."
-      >
-        <Toggle
-          checked={settings.terminalNotifyNative}
-          disabled={!settings.terminalNotifications}
-          onChange={(next) => updateSettings({ terminalNotifyNative: next })}
-        />
-      </SettingRow>
-      <SettingRow label="Sound" description="Play a short chime with terminal notifications.">
-        <Toggle
-          checked={settings.terminalNotifySound}
-          disabled={!settings.terminalNotifications}
-          onChange={(next) => updateSettings({ terminalNotifySound: next })}
-        />
-      </SettingRow>
-
-      <SectionTitle
-        title="Agent notifications"
-        subtitle="Be told when an agent finishes, fails, disconnects or needs permission"
-      />
-      <SettingRow
-        label="Agent notifications"
-        description="An agent finishing, failing or disconnecting, or asking for permission, raises an item in the notification center, a toast when its chat is off screen, and a system notification when you are away (Atlas in the background, or no input for 2 minutes)."
-      >
-        <Toggle
-          checked={agentNotify.enabled}
-          onChange={(next) => updateAgentNotify({ enabled: next })}
-        />
-      </SettingRow>
-      <SettingRow
-        label="System notifications"
-        description="Also raise a system notification when you are away."
-      >
-        <Toggle
-          checked={agentNotify.native}
-          disabled={!agentNotify.enabled}
-          onChange={(next) => updateAgentNotify({ native: next })}
-        />
-      </SettingRow>
-      <SettingRow label="Sound" description="Play a sound with permission requests and failures.">
-        <Toggle
-          checked={agentNotify.sound}
-          disabled={!agentNotify.enabled}
-          onChange={(next) => updateAgentNotify({ sound: next })}
-        />
-      </SettingRow>
-      <SettingRow
-        label="Notify on finish after"
-        description="A turn that finishes faster than this stays quiet. Failures and permission requests always notify."
-      >
-        <select
-          value={String(agentNotify.minDurationMs)}
-          disabled={!agentNotify.enabled}
-          onChange={(e) => updateAgentNotify({ minDurationMs: Number(e.target.value) })}
-          className="h-7 rounded-md border border-[var(--border)] bg-[var(--card)] px-2 text-xs text-[var(--foreground)] outline-none disabled:opacity-40"
-        >
-          <option value="0">Always</option>
-          <option value="10000">10 seconds</option>
-          <option value="30000">30 seconds</option>
-          <option value="60000">1 minute</option>
-          <option value="300000">5 minutes</option>
-        </select>
-      </SettingRow>
+      <NotificationsSettings />
 
       <SectionTitle title="Behaviour" subtitle="Files, logs and the editor" />
       <SettingRow
@@ -827,89 +714,5 @@ function AboutSettings() {
         </p>
       </div>
     </div>
-  );
-}
-
-function SectionTitle({ title, subtitle }: { title: string; subtitle: string }) {
-  return (
-    <div>
-      <h2 className="text-sm font-semibold text-foreground">{title}</h2>
-      <p className="text-xs text-muted-foreground mt-0.5">{subtitle}</p>
-    </div>
-  );
-}
-
-function SettingRow({
-  label,
-  description,
-  children,
-}: {
-  label: string;
-  description: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="flex items-start justify-between gap-4">
-      <div>
-        <p className="text-sm font-medium text-foreground">{label}</p>
-        <p className="text-2xs text-muted-foreground mt-0.5">{description}</p>
-      </div>
-      <div className="shrink-0">{children}</div>
-    </div>
-  );
-}
-
-/**
- * Toggle — controlled OR uncontrolled. If `checked` is provided the parent
- * owns the state and `onChange` is fired on click; otherwise we keep
- * internal state seeded by `defaultChecked` (original behavior).
- */
-export function Toggle({
-  defaultChecked = false,
-  checked,
-  onChange,
-  disabled = false,
-}: {
-  defaultChecked?: boolean;
-  checked?: boolean;
-  onChange?: (next: boolean) => void;
-  /** For a sub-setting whose parent is off — dimmed and inert, but still
-   *  showing its own stored value rather than lying about it. */
-  disabled?: boolean;
-}) {
-  const [internal, setInternal] = useState(defaultChecked);
-  const isControlled = checked !== undefined;
-  const value = isControlled ? checked : internal;
-  const apply = (next: boolean) => {
-    if (disabled) return;
-    if (!isControlled) setInternal(next);
-    onChange?.(next);
-  };
-  // shadcn/Radix switch proportions: the track has a 2px transparent
-  // border so its inner content area is exactly the thumb's size,
-  // making the thumb fill vertically and animate translate-x-0 → -x-4
-  // edge to edge. The thumb flips color when ON because Atlas's accent
-  // is pure white — a white-on-white thumb would disappear.
-  return (
-    <button
-      onClick={() => apply(!value)}
-      role="switch"
-      aria-checked={value}
-      disabled={disabled}
-      className={cn(
-        "relative inline-flex h-5 w-9 shrink-0 items-center",
-        "rounded-full border-2 border-transparent transition-colors",
-        disabled ? "opacity-40 cursor-not-allowed" : "cursor-pointer",
-        value ? "bg-[var(--primary)]" : "bg-[var(--card)]",
-      )}
-    >
-      <span
-        className={cn(
-          "pointer-events-none block h-4 w-4 rounded-full shadow-sm",
-          "transition-transform duration-150",
-          value ? "translate-x-4 bg-[var(--background)]" : "translate-x-0 bg-card-foreground",
-        )}
-      />
-    </button>
   );
 }

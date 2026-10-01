@@ -124,10 +124,9 @@ agentUiNavigation = true
 # call is refused. (default: true)
 agentOrgAccess = true
 
-# Terminal notifications: a command that fails, runs longer than
-# terminalNotifyMinDurationMs, or asks for input raises an in-app
-# notification, a toast when its terminal is off screen and a macOS
-# notification when Atlas is in the background. (default: true)
+# Notify when a command succeeds after running longer than
+# terminalNotifyMinDurationMs. (The master switch for all notifications
+# is notificationsEnabled.) (default: true)
 terminalNotifications = true
 
 # A successful command shorter than this many milliseconds never
@@ -147,6 +146,52 @@ terminalNotifyNative = true
 
 # Play a short chime with terminal notifications. (default: false)
 terminalNotifySound = false
+
+# Notifications master switch. Off silences every notification except
+# sign-in problems, which always show. (default: true)
+notificationsEnabled = true
+
+# OS banner for notifications that need you — a permission request, a
+# question, a terminal asking for input. Shown only when you are away.
+# (default: true)
+notifyNeedsYouNative = true
+
+# Sound for notifications that need you. (default: true)
+notifyNeedsYouSound = true
+
+# OS banner when an agent turn or terminal command finishes or fails.
+# Shown only when you are away. (default: true)
+notifyOutcomeNative = true
+
+# Sound for finished / failed notifications. (default: true)
+notifyOutcomeSound = true
+
+# OS banner for warnings — context nearly full, rate limited, retrying,
+# agent stopped. (default: false)
+notifyWarningNative = false
+
+# Sound for warnings. (default: false)
+notifyWarningSound = false
+
+# OS banner for Chat direct messages and @mentions. Shown only when you
+# are away. (default: true)
+notifyTeamNative = true
+
+# Sound for Chat notifications. (default: true)
+notifyTeamSound = true
+
+# Show Allow once / Deny buttons on permission banners. Off: the banner
+# only opens the session. (default: true)
+notifyPermissionActions = true
+
+# Set once Atlas has folded your earlier terminal and agent notification
+# choices into the keys above. Leave it alone. (default: false)
+notificationsMigrated = false
+
+# An agent turn that finished faster than this many milliseconds stays
+# quiet; failures and requests for you are never held back. 0 turns it
+# off. Must be between 0 and 3600000. (default: 0)
+notifyAgentMinDurationMs = 0
 ```
 
 Note `updaterIgnoredVersion`: a key that serializes to nothing still gets its
@@ -188,6 +233,18 @@ wrote; `toml_edit` just preserves whatever comments are already there.
 | `terminalNotifyOnAttention` | boolean | `true` | — |
 | `terminalNotifyNative` | boolean | `true` | — |
 | `terminalNotifySound` | boolean | `false` | — |
+| `notificationsEnabled` | boolean | `true` | — |
+| `notifyNeedsYouNative` | boolean | `true` | — |
+| `notifyNeedsYouSound` | boolean | `true` | — |
+| `notifyOutcomeNative` | boolean | `true` | — |
+| `notifyOutcomeSound` | boolean | `true` | — |
+| `notifyWarningNative` | boolean | `false` | — |
+| `notifyWarningSound` | boolean | `false` | — |
+| `notifyTeamNative` | boolean | `true` | — |
+| `notifyTeamSound` | boolean | `true` | — |
+| `notifyPermissionActions` | boolean | `true` | — |
+| `notificationsMigrated` | boolean | `false` | — |
+| `notifyAgentMinDurationMs` | integer | `0` | 0 ≤ n ≤ 3600000 |
 
 Any other key under `[settings]` is left on disk untouched and reported as an
 `unknownKeys` entry in `get_atlas_config_info` — never treated as an error,

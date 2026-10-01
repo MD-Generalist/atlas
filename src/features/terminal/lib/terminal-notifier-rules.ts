@@ -2,8 +2,7 @@
  * The terminal notifier's rules — a pure module with no store or Tauri
  * imports, so it is unit-testable in plain node and cannot drift into side
  * effects. It classifies a parser event into a notification-catalog kind
- * (`classifyTerminalEvent`) and maps the terminal settings onto per-kind
- * prefs; the shared `decideNotification` picks the channels.
+ * (`classifyTerminalEvent`); the shared `decideNotification` picks the channels.
  * `terminal-notifier.ts` supplies the environment and delivers.
  */
 import type { NotificationTarget } from "@/features/notifications/lib/catalog";
@@ -12,9 +11,9 @@ import {
   type NotificationDecision,
   type NotificationEnv,
   type NotificationEvent,
-  type NotificationPrefs,
 } from "@/features/notifications/lib/decide";
-import type { TerminalNotificationPrefs } from "@/features/settings/lib/app-settings";
+import { prefsFromSettings } from "@/features/notifications/lib/prefs";
+import type { AppSettings } from "@/features/settings/lib/app-settings";
 import type { TerminalEvent } from "./block-parser";
 import { formatDuration } from "./format-duration";
 
@@ -34,17 +33,6 @@ function where(ctx: TerminalCtx, cwd: string, projectActive: boolean): string {
   // Name the project only when it is not the one on screen — mirrors the
   // chat's background toast.
   return !projectActive && ctx.projectName ? `${dir} — ${ctx.projectName}` : dir;
-}
-
-/** The terminal settings as per-kind prefs (the catalog names each kind's
- *  governing toggle; the master switch gates all three). */
-export function terminalKindPrefs(p: TerminalNotificationPrefs): NotificationPrefs {
-  const kind = (on: boolean) => ({ enabled: p.enabled && on, native: p.native, sound: p.sound });
-  return {
-    "terminal-done": kind(true),
-    "terminal-failed": kind(p.onFailure),
-    "terminal-attention": kind(p.onAttention),
-  };
 }
 
 /** Parser event → catalog event, or null when it is not notification-worthy
@@ -113,9 +101,14 @@ export function decideTerminalNotification(
   e: TerminalEvent,
   ctx: TerminalCtx,
   env: NotificationEnv,
-  prefs: TerminalNotificationPrefs,
+  settings: AppSettings,
 ): NotificationDecision | null {
-  if (!prefs.enabled) return null;
-  const event = classifyTerminalEvent(e, ctx, env.projectActive, prefs.minDurationMs);
-  return event ? decideNotification(event, env, terminalKindPrefs(prefs)) : null;
+  if (!settings.notificationsEnabled) return null;
+  const event = classifyTerminalEvent(
+    e,
+    ctx,
+    env.projectActive,
+    settings.terminalNotifyMinDurationMs,
+  );
+  return event ? decideNotification(event, env, prefsFromSettings(settings)) : null;
 }

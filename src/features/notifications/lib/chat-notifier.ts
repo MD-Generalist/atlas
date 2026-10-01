@@ -14,6 +14,8 @@ import { isWindowFocused, lastInteraction } from "@/lib/window-focus";
 import { decideChatNotification } from "./chat-notifier-rules";
 import { computeAway } from "./decide";
 import { deliverNotification } from "./deliver";
+import { prefsFromSettings } from "./prefs";
+import { useSettingsStore } from "@/features/settings/stores/settings-store";
 
 /** Never throws — a notification must not break the comms stream. */
 export function notifyChatEnvelope(envelope: CommsEnvelope): void {
@@ -40,6 +42,7 @@ export function notifyChatEnvelope(envelope: CommsEnvelope): void {
         projectActive: true,
         away: computeAway(windowFocused, sinceInputMs),
       },
+      prefsFromSettings(useSettingsStore.getState().settings),
     );
     if (decision) deliverNotification(decision);
   } catch (err) {

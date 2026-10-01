@@ -1,14 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
-  DEFAULT_AGENT_NOTIFICATION_PREFS,
-  agentKindPrefs,
   decideAgentNotification,
   isSupersededTurn,
   type AgentCtx,
-  type AgentNotificationPrefs,
   type AgentNotifyEvent,
 } from "./agent-notifier-rules";
 import { describePermission, describeQuestion, failureBody } from "./agent-notifier-rules";
+import { DEFAULT_SETTINGS, type AppSettings } from "@/features/settings/lib/app-settings";
+import { prefsFromSettings } from "./prefs";
 import { AWAY_IDLE_MS, computeAway, type NotificationEnv } from "./decide";
 
 const ctx: AgentCtx = {
@@ -20,7 +19,7 @@ const ctx: AgentCtx = {
   projectName: "atlas",
   orgId: "org-1",
 };
-const prefs: AgentNotificationPrefs = DEFAULT_AGENT_NOTIFICATION_PREFS;
+const prefs: AppSettings = DEFAULT_SETTINGS;
 
 const away: NotificationEnv = {
   windowFocused: false,
@@ -139,23 +138,28 @@ describe("decideAgentNotification", () => {
 describe("agent prefs", () => {
   it("master off silences every kind", () => {
     for (const e of [finished(), failed, disconnected, permission]) {
-      expect(decideAgentNotification(e, ctx, away, { ...prefs, enabled: false })).toBeNull();
+      expect(
+        decideAgentNotification(e, ctx, away, { ...prefs, notificationsEnabled: false }),
+      ).toBeNull();
     }
   });
 
   it("OS banners off keeps center and toast", () => {
-    const d = decideAgentNotification(failed, ctx, away, { ...prefs, native: false });
+    const d = decideAgentNotification(failed, ctx, away, { ...prefs, notifyOutcomeNative: false });
     expect(d?.channels).toMatchObject({ center: true, toast: true, native: false });
   });
 
   it("sound off removes the banner sound", () => {
-    const d = decideAgentNotification(permission, ctx, away, { ...prefs, sound: false });
+    const d = decideAgentNotification(permission, ctx, away, {
+      ...prefs,
+      notifyNeedsYouSound: false,
+    });
     expect(d?.channels).toMatchObject({ native: true, sound: false });
     expect(d?.native.sound).toBeUndefined();
   });
 
   it("minimum turn duration silences quick finishes only", () => {
-    const p = { ...prefs, minDurationMs: 30_000 };
+    const p = { ...prefs, notifyAgentMinDurationMs: 30_000 };
     expect(decideAgentNotification(finished({ durationMs: 5_000 }), ctx, away, p)).toBeNull();
     expect(decideAgentNotification(finished({ durationMs: 30_000 }), ctx, away, p)).not.toBeNull();
     // Unknown duration is not silenced; failures ignore the threshold.
@@ -164,8 +168,8 @@ describe("agent prefs", () => {
   });
 
   it("defaults the minimum to off", () => {
-    expect(DEFAULT_AGENT_NOTIFICATION_PREFS.minDurationMs).toBe(0);
-    expect(agentKindPrefs(prefs)["agent-done"]).toEqual({
+    expect(DEFAULT_SETTINGS.notifyAgentMinDurationMs).toBe(0);
+    expect(prefsFromSettings(prefs)["agent-done"]).toEqual({
       enabled: true,
       native: true,
       sound: true,
@@ -358,8 +362,13 @@ describe("question copy", () => {
   });
 
   it("is silenced by the master switch and the banner pref", () => {
-    expect(decideAgentNotification(ask("q?"), ctx, away, { ...prefs, enabled: false })).toBeNull();
-    const d = decideAgentNotification(ask("q?"), ctx, away, { ...prefs, native: false });
+    expect(
+      decideAgentNotification(ask("q?"), ctx, away, { ...prefs, notificationsEnabled: false }),
+    ).toBeNull();
+    const d = decideAgentNotification(ask("q?"), ctx, away, {
+      ...prefs,
+      notifyNeedsYouNative: false,
+    });
     expect(d?.channels.native).toBe(false);
   });
 });
@@ -402,8 +411,13 @@ describe("agent sign-in required", () => {
   });
 
   it("is silenced by the master switch and the banner pref", () => {
-    expect(decideAgentNotification(signIn(), ctx, away, { ...prefs, enabled: false })).toBeNull();
-    const d = decideAgentNotification(signIn(), ctx, away, { ...prefs, native: false });
+    expect(
+      decideAgentNotification(signIn(), ctx, away, { ...prefs, notificationsEnabled: false }),
+    ).toBeNull();
+    const d = decideAgentNotification(signIn(), ctx, away, {
+      ...prefs,
+      notifyNeedsYouNative: false,
+    });
     expect(d?.channels.native).toBe(false);
   });
 });

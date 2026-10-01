@@ -343,10 +343,9 @@ pub struct AppSettings {
     /// Default ON.
     #[serde(default = "default_true")]
     pub agent_org_access: bool,
-    /// Terminal notifications master switch. A command that fails, runs
-    /// longer than `terminal_notify_min_duration_ms`, or asks for input raises
-    /// an in-app notification, a toast when its terminal is off screen and a
-    /// native notification when Atlas is not the front app.
+    /// "Command finished": a successful command longer than
+    /// `terminal_notify_min_duration_ms` notifies. (Once the terminal master
+    /// switch; `notifications_enabled` is the master now.)
     #[serde(default = "default_true")]
     pub terminal_notifications: bool,
     /// A successful command shorter than this never notifies (milliseconds).
@@ -358,12 +357,49 @@ pub struct AppSettings {
     /// Notify when a command wants input (password prompt, bell, OSC 9/777).
     #[serde(default = "default_true")]
     pub terminal_notify_on_attention: bool,
-    /// Also raise a macOS notification when the window is not focused.
+    /// Legacy terminal OS-banner switch; folded into the `notify_*_native`
+    /// tier keys once (`notificationsMigrated`), unused afterwards.
     #[serde(default = "default_true")]
     pub terminal_notify_native: bool,
-    /// Play a short chime with the notification.
+    /// Legacy terminal sound switch — migrated like the one above.
     #[serde(default)]
     pub terminal_notify_sound: bool,
+    /// Notifications master switch: off silences every kind except sign-in problems.
+    #[serde(default = "default_true")]
+    pub notifications_enabled: bool,
+    /// OS banner for "needs you" notifications (permission, question, sign-in, terminal input).
+    #[serde(default = "default_true")]
+    pub notify_needs_you_native: bool,
+    /// Sound for "needs you" notifications.
+    #[serde(default = "default_true")]
+    pub notify_needs_you_sound: bool,
+    /// OS banner for outcome notifications (a turn or command finished or failed).
+    #[serde(default = "default_true")]
+    pub notify_outcome_native: bool,
+    /// Sound for outcome notifications.
+    #[serde(default = "default_true")]
+    pub notify_outcome_sound: bool,
+    /// OS banner for warnings (context nearly full, rate limit, retrying, agent stopped).
+    #[serde(default)]
+    pub notify_warning_native: bool,
+    /// Sound for warnings.
+    #[serde(default)]
+    pub notify_warning_sound: bool,
+    /// OS banner for team notifications (Chat DMs and @mentions).
+    #[serde(default = "default_true")]
+    pub notify_team_native: bool,
+    /// Sound for team notifications.
+    #[serde(default = "default_true")]
+    pub notify_team_sound: bool,
+    /// Show Allow once / Deny on permission banners.
+    #[serde(default = "default_true")]
+    pub notify_permission_actions: bool,
+    /// Set once the legacy terminal and agent notification choices have been folded into the keys above. Not user-facing.
+    #[serde(default)]
+    pub notifications_migrated: bool,
+    /// An agent turn that finished faster than this stays quiet (milliseconds); 0 = off.
+    #[serde(default)]
+    pub notify_agent_min_duration_ms: u32,
 }
 
 fn default_true() -> bool {
@@ -426,6 +462,18 @@ impl Default for AppSettings {
             terminal_notify_on_attention: true,
             terminal_notify_native: true,
             terminal_notify_sound: false,
+            notifications_enabled: true,
+            notify_needs_you_native: true,
+            notify_needs_you_sound: true,
+            notify_outcome_native: true,
+            notify_outcome_sound: true,
+            notify_warning_native: false,
+            notify_warning_sound: false,
+            notify_team_native: true,
+            notify_team_sound: true,
+            notify_permission_actions: true,
+            notifications_migrated: false,
+            notify_agent_min_duration_ms: 0,
         }
     }
 }
@@ -590,10 +638,9 @@ const SETTINGS_DOCS: &[(&str, &str)] = &[
     ),
     (
         "terminalNotifications",
-        "# Terminal notifications: a command that fails, runs longer than\n\
-         # terminalNotifyMinDurationMs, or asks for input raises an in-app\n\
-         # notification, a toast when its terminal is off screen and a macOS\n\
-         # notification when Atlas is in the background. (default: true)",
+        "# Notify when a command succeeds after running longer than\n\
+         # terminalNotifyMinDurationMs. (The master switch for all notifications\n\
+         # is notificationsEnabled.) (default: true)",
     ),
     (
         "terminalNotifyMinDurationMs",
@@ -617,6 +664,64 @@ const SETTINGS_DOCS: &[(&str, &str)] = &[
     (
         "terminalNotifySound",
         "# Play a short chime with terminal notifications. (default: false)",
+    ),
+    (
+        "notificationsEnabled",
+        "# Notifications master switch. Off silences every notification except
+         # sign-in problems, which always show. (default: true)",
+    ),
+    (
+        "notifyNeedsYouNative",
+        "# OS banner for notifications that need you — a permission request, a
+         # question, a terminal asking for input. Shown only when you are away.
+         # (default: true)",
+    ),
+    (
+        "notifyNeedsYouSound",
+        "# Sound for notifications that need you. (default: true)",
+    ),
+    (
+        "notifyOutcomeNative",
+        "# OS banner when an agent turn or terminal command finishes or fails.
+         # Shown only when you are away. (default: true)",
+    ),
+    (
+        "notifyOutcomeSound",
+        "# Sound for finished / failed notifications. (default: true)",
+    ),
+    (
+        "notifyWarningNative",
+        "# OS banner for warnings — context nearly full, rate limited, retrying,
+         # agent stopped. (default: false)",
+    ),
+    (
+        "notifyWarningSound",
+        "# Sound for warnings. (default: false)",
+    ),
+    (
+        "notifyTeamNative",
+        "# OS banner for Chat direct messages and @mentions. Shown only when you
+         # are away. (default: true)",
+    ),
+    (
+        "notifyTeamSound",
+        "# Sound for Chat notifications. (default: true)",
+    ),
+    (
+        "notifyPermissionActions",
+        "# Show Allow once / Deny buttons on permission banners. Off: the banner
+         # only opens the session. (default: true)",
+    ),
+    (
+        "notificationsMigrated",
+        "# Set once Atlas has folded your earlier terminal and agent notification
+         # choices into the keys above. Leave it alone. (default: false)",
+    ),
+    (
+        "notifyAgentMinDurationMs",
+        "# An agent turn that finished faster than this many milliseconds stays\n\
+         # quiet; failures and requests for you are never held back. 0 turns it\n\
+         # off. Must be between 0 and 3600000. (default: 0)",
     ),
 ];
 
@@ -654,6 +759,15 @@ pub fn validate(settings: &AppSettings) -> Result<(), ValidationIssue> {
             message: format!(
                 "must be between 0 and {MAX_TERMINAL_NOTIFY_MS}, got {}",
                 settings.terminal_notify_min_duration_ms
+            ),
+        });
+    }
+    if settings.notify_agent_min_duration_ms > MAX_TERMINAL_NOTIFY_MS {
+        return Err(ValidationIssue {
+            key: "notifyAgentMinDurationMs",
+            message: format!(
+                "must be between 0 and {MAX_TERMINAL_NOTIFY_MS}, got {}",
+                settings.notify_agent_min_duration_ms
             ),
         });
     }
@@ -904,6 +1018,18 @@ pub struct SettingsPatch {
     pub terminal_notify_on_attention: Option<bool>,
     pub terminal_notify_native: Option<bool>,
     pub terminal_notify_sound: Option<bool>,
+    pub notifications_enabled: Option<bool>,
+    pub notify_needs_you_native: Option<bool>,
+    pub notify_needs_you_sound: Option<bool>,
+    pub notify_outcome_native: Option<bool>,
+    pub notify_outcome_sound: Option<bool>,
+    pub notify_warning_native: Option<bool>,
+    pub notify_warning_sound: Option<bool>,
+    pub notify_team_native: Option<bool>,
+    pub notify_team_sound: Option<bool>,
+    pub notify_permission_actions: Option<bool>,
+    pub notifications_migrated: Option<bool>,
+    pub notify_agent_min_duration_ms: Option<u32>,
 }
 
 impl SettingsPatch {
@@ -989,6 +1115,42 @@ impl SettingsPatch {
         if let Some(v) = self.terminal_notify_sound {
             settings.terminal_notify_sound = v;
         }
+        if let Some(v) = self.notifications_enabled {
+            settings.notifications_enabled = v;
+        }
+        if let Some(v) = self.notify_needs_you_native {
+            settings.notify_needs_you_native = v;
+        }
+        if let Some(v) = self.notify_needs_you_sound {
+            settings.notify_needs_you_sound = v;
+        }
+        if let Some(v) = self.notify_outcome_native {
+            settings.notify_outcome_native = v;
+        }
+        if let Some(v) = self.notify_outcome_sound {
+            settings.notify_outcome_sound = v;
+        }
+        if let Some(v) = self.notify_warning_native {
+            settings.notify_warning_native = v;
+        }
+        if let Some(v) = self.notify_warning_sound {
+            settings.notify_warning_sound = v;
+        }
+        if let Some(v) = self.notify_team_native {
+            settings.notify_team_native = v;
+        }
+        if let Some(v) = self.notify_team_sound {
+            settings.notify_team_sound = v;
+        }
+        if let Some(v) = self.notify_permission_actions {
+            settings.notify_permission_actions = v;
+        }
+        if let Some(v) = self.notifications_migrated {
+            settings.notifications_migrated = v;
+        }
+        if let Some(v) = self.notify_agent_min_duration_ms {
+            settings.notify_agent_min_duration_ms = v;
+        }
     }
 
     /// Mutate only the touched keys of `doc["settings"]` — everything else
@@ -1026,6 +1188,20 @@ impl SettingsPatch {
         set_bool!(terminal_notify_on_attention, "terminalNotifyOnAttention");
         set_bool!(terminal_notify_native, "terminalNotifyNative");
         set_bool!(terminal_notify_sound, "terminalNotifySound");
+        set_bool!(notifications_enabled, "notificationsEnabled");
+        set_bool!(notify_needs_you_native, "notifyNeedsYouNative");
+        set_bool!(notify_needs_you_sound, "notifyNeedsYouSound");
+        set_bool!(notify_outcome_native, "notifyOutcomeNative");
+        set_bool!(notify_outcome_sound, "notifyOutcomeSound");
+        set_bool!(notify_warning_native, "notifyWarningNative");
+        set_bool!(notify_warning_sound, "notifyWarningSound");
+        set_bool!(notify_team_native, "notifyTeamNative");
+        set_bool!(notify_team_sound, "notifyTeamSound");
+        set_bool!(notify_permission_actions, "notifyPermissionActions");
+        set_bool!(notifications_migrated, "notificationsMigrated");
+        if let Some(v) = self.notify_agent_min_duration_ms {
+            table["notifyAgentMinDurationMs"] = toml_edit::value(i64::from(v));
+        }
         if let Some(v) = self.terminal_notify_min_duration_ms {
             table["terminalNotifyMinDurationMs"] = toml_edit::value(i64::from(v));
         }
@@ -2437,6 +2613,18 @@ someFutureKey = \"left alone\"
             terminal_notify_on_attention: Some(!defaults.terminal_notify_on_attention),
             terminal_notify_native: Some(!defaults.terminal_notify_native),
             terminal_notify_sound: Some(!defaults.terminal_notify_sound),
+            notifications_enabled: Some(!defaults.notifications_enabled),
+            notify_needs_you_native: Some(!defaults.notify_needs_you_native),
+            notify_needs_you_sound: Some(!defaults.notify_needs_you_sound),
+            notify_outcome_native: Some(!defaults.notify_outcome_native),
+            notify_outcome_sound: Some(!defaults.notify_outcome_sound),
+            notify_warning_native: Some(!defaults.notify_warning_native),
+            notify_warning_sound: Some(!defaults.notify_warning_sound),
+            notify_team_native: Some(!defaults.notify_team_native),
+            notify_team_sound: Some(!defaults.notify_team_sound),
+            notify_permission_actions: Some(!defaults.notify_permission_actions),
+            notifications_migrated: Some(!defaults.notifications_migrated),
+            notify_agent_min_duration_ms: Some(defaults.notify_agent_min_duration_ms + 1),
         };
         let mut expected = defaults.clone();
         patch.apply_to(&mut expected);

@@ -1,9 +1,9 @@
 /**
  * The agent notifier's rules — pure, no store or Tauri imports. It classifies
  * an agent event (a turn ending, a permission request or question, the agent process
- * dying) into a notification-catalog kind (`classifyAgentEvent`) and maps the
- * agent prefs onto per-kind prefs; the shared `decideNotification` picks the
- * channels. `agent-notifier.ts` supplies the environment and delivers.
+ * dying) into a notification-catalog kind (`classifyAgentEvent`); the shared
+ * `decideNotification` picks the channels from `prefsFromSettings`.
+ * `agent-notifier.ts` supplies the environment and delivers.
  *
  * Copy: title `<agent> · <thread>`, subtitle = the project when it is not the
  * active one, body says what happened (stop reason, first sentence of the
@@ -20,28 +20,9 @@ import {
   type NotificationDecision,
   type NotificationEnv,
   type NotificationEvent,
-  type NotificationPrefs,
 } from "./decide";
-
-/** The user's agent notification settings. */
-export interface AgentNotificationPrefs {
-  /** Master switch — off silences every agent kind. */
-  enabled: boolean;
-  /** Allow the OS banner (still only when away). */
-  native: boolean;
-  /** Allow sound (banner sound or in-app chime). */
-  sound: boolean;
-  /** A turn that finished faster than this stays quiet. 0 = off. Failures,
-   *  permission requests, questions and disconnects ignore it. */
-  minDurationMs: number;
-}
-
-export const DEFAULT_AGENT_NOTIFICATION_PREFS: AgentNotificationPrefs = {
-  enabled: true,
-  native: true,
-  sound: true,
-  minDurationMs: 0,
-};
+import { prefsFromSettings } from "./prefs";
+import type { AppSettings } from "@/features/settings/lib/app-settings";
 
 export type AgentCtx = Omit<Extract<NotificationTarget, { type: "session" }>, "type"> & {
   /** The session's title, when it has one. */
@@ -108,24 +89,6 @@ export type AgentNotifyEvent =
  *  superseded by a newer send. 0 / absent (the native agent) is current. */
 export function isSupersededTurn(turnSeq: number | undefined, currentTurnSeq: number | undefined) {
   return !!turnSeq && turnSeq < (currentTurnSeq ?? 0);
-}
-
-/** The agent prefs as per-kind prefs (the master switch gates every kind). */
-export function agentKindPrefs(p: AgentNotificationPrefs): NotificationPrefs {
-  const kind = { enabled: p.enabled, native: p.native, sound: p.sound };
-  const warning = { enabled: p.enabled, native: false, sound: false };
-  return {
-    permission: kind,
-    "agent-question": kind,
-    "agent-done": kind,
-    "agent-failed": kind,
-    "agent-disconnected": kind,
-    "agent-sign-in": kind,
-    // Warnings never raise an OS banner by default (no setting to opt in yet).
-    "agent-context-warning": warning,
-    "agent-rate-limit": warning,
-    "agent-retrying": warning,
-  };
 }
 
 const BODY_BY_STOP_REASON: Record<string, string> = {
@@ -349,9 +312,9 @@ export function decideAgentNotification(
   e: AgentNotifyEvent,
   ctx: AgentCtx,
   env: NotificationEnv,
-  prefs: AgentNotificationPrefs,
+  settings: AppSettings,
 ): NotificationDecision | null {
-  if (!prefs.enabled) return null;
-  const event = classifyAgentEvent(e, ctx, env.projectActive, prefs.minDurationMs);
-  return event ? decideNotification(event, env, agentKindPrefs(prefs)) : null;
+  if (!settings.notificationsEnabled) return null;
+  const event = classifyAgentEvent(e, ctx, env.projectActive, settings.notifyAgentMinDurationMs);
+  return event ? decideNotification(event, env, prefsFromSettings(settings)) : null;
 }

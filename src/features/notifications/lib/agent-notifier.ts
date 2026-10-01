@@ -28,7 +28,7 @@ import { projectIdForTab } from "@/features/chat/lib/tab-project";
 import type { AgentDelta } from "@/types/agents";
 import type { ChatSession } from "@/types/agent";
 import { isWindowFocused, lastInteraction } from "@/lib/window-focus";
-import { useAgentNotifyPrefsStore } from "../stores/agent-notify-prefs-store";
+import { useSettingsStore } from "@/features/settings/stores/settings-store";
 import {
   decideAgentNotification,
   isSupersededTurn,
@@ -295,7 +295,7 @@ export function notifyAgentEvent(env: AgentDelta): void {
       event,
       ctx,
       envFor(found.tabId, projectId),
-      useAgentNotifyPrefsStore.getState().prefs,
+      useSettingsStore.getState().settings,
     );
     if (!decision) return;
     noteOutstanding(env.session_id, decision);
@@ -331,7 +331,7 @@ export function notifyAgentSignInRequired(tabId: string, agentType: string): voi
       signInRequired(agentType),
       ctx,
       envFor(tabId, projectId),
-      useAgentNotifyPrefsStore.getState().prefs,
+      useSettingsStore.getState().settings,
     );
     if (decision) deliverNotification(decision);
   } catch (err) {

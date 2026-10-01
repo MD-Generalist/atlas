@@ -8,7 +8,7 @@
  * shared decision pick the channels — center, toast, OS banner, badge, sound;
  * `deliverNotification` performs them.
  *
- * Rules (defaults from Settings; see `terminalNotificationPrefs`):
+ * Rules (defaults from Settings; see `prefsFromSettings`):
  *  - a command that exits non-zero → "failed", always (unless Ctrl-C);
  *  - a command that ran ≥ `minDurationMs` → "done";
  *  - a password prompt, a bell, or an OSC 9/777 message → "attention", which
@@ -31,7 +31,6 @@ import { computeAway, type NotificationEnv } from "@/features/notifications/lib/
 import { useLayoutStore } from "@/features/layout/stores/layout-store";
 import { useProjectStore } from "@/features/projects/stores/project-store";
 import { projectIdForTab } from "@/features/chat/lib/tab-project";
-import { terminalNotificationPrefs } from "@/features/settings/lib/app-settings";
 import { useSettingsStore } from "@/features/settings/stores/settings-store";
 import { isWindowFocused, lastInteraction } from "@/lib/window-focus";
 import type { TerminalEvent, TerminalEventSink } from "./block-parser";
@@ -132,8 +131,8 @@ function handleEvent(e: TerminalEvent, base: { terminalId: string; tabId: string
     useTerminalAttention.getState().actions.set(base.terminalId, e.kind);
   }
 
-  const prefs = terminalNotificationPrefs(useSettingsStore.getState().settings);
-  if (!prefs.enabled) return;
+  const { settings } = useSettingsStore.getState();
+  if (!settings.notificationsEnabled) return;
 
   const ws = useProjectStore.getState();
   const projectId = projectIdForTab(base.tabId) ?? undefined;
@@ -153,6 +152,6 @@ function handleEvent(e: TerminalEvent, base: { terminalId: string; tabId: string
     projectActive: !projectId || projectId === ws.activeProjectId,
     away: computeAway(windowFocused, sinceInputMs),
   };
-  const decision = decideTerminalNotification(e, ctx, env, prefs);
+  const decision = decideTerminalNotification(e, ctx, env, settings);
   if (decision) deliverNotification(decision);
 }

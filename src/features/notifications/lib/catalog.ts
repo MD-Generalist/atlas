@@ -15,7 +15,7 @@
  *
  * Pure — no store, Tauri or DOM imports.
  */
-import type { AppSettings } from "@/features/settings/lib/app-settings";
+import type { BooleanSettingKey } from "@/features/settings/lib/app-settings";
 
 export type NotificationTier = "needs-you" | "outcome" | "warning" | "team";
 
@@ -27,6 +27,11 @@ export type NotificationChannel = "center" | "toast" | "native" | "badge" | "sou
 export type ToastVariant = "default" | "success" | "error";
 
 export interface CatalogEntry {
+  /** What Settings calls this kind in its group. */
+  label: string;
+  /** Not switchable: Settings lists it as always on, and the prefs mapping
+   *  leaves it at the defaults (no master, tier or kind switch applies). */
+  locked?: true;
   tier: NotificationTier;
   source: NotificationSource;
   /** Channels this kind may use at all. */
@@ -42,8 +47,10 @@ export interface CatalogEntry {
   /** Grouping key — notifications sharing one collapse together in the OS
    *  notification list (once a backend supports it). */
   groupKey: (target: NotificationTarget) => string;
-  /** The setting toggle that turns this kind on and off, if any. */
-  setting: Extract<keyof AppSettings, string> | null;
+  /** The boolean setting that turns this kind on and off, if it has its own
+   *  switch — Settings renders one for every kind that names a key. Kinds
+   *  without one follow the master and tier switches alone. */
+  setting: BooleanSettingKey | null;
 }
 
 /** What a notification is about — where "Open" jumps, and the owner used to
@@ -108,6 +115,7 @@ export const notificationTag = (kind: NotificationKind, dedupeKey: string) =>
 
 export const NOTIFICATION_CATALOG = {
   "terminal-attention": {
+    label: "Terminal needs input",
     tier: "needs-you",
     source: "terminal",
     channels: ALL_CHANNELS,
@@ -118,6 +126,7 @@ export const NOTIFICATION_CATALOG = {
     setting: "terminalNotifyOnAttention",
   },
   "terminal-done": {
+    label: "Command finished",
     tier: "outcome",
     source: "terminal",
     channels: ALL_CHANNELS,
@@ -128,6 +137,7 @@ export const NOTIFICATION_CATALOG = {
     setting: "terminalNotifications",
   },
   "terminal-failed": {
+    label: "Command failed",
     tier: "outcome",
     source: "terminal",
     channels: ALL_CHANNELS,
@@ -137,9 +147,10 @@ export const NOTIFICATION_CATALOG = {
     groupKey: targetGroupKey,
     setting: "terminalNotifyOnFailure",
   },
-  // Agent kinds — raised by `agent-notifier.ts`; governed by the agent
-  // notification prefs (`agent-notify-prefs-store`), not an AppSettings key.
+  // Agent kinds — raised by `agent-notifier.ts`; governed by the master and
+  // tier switches in Settings (no per-kind key).
   permission: {
+    label: "Permission requests",
     tier: "needs-you",
     source: "agent",
     channels: ALL_CHANNELS,
@@ -152,6 +163,7 @@ export const NOTIFICATION_CATALOG = {
   // The agent asked the user a question mid-turn (ADR-0013) — blocked on the
   // user exactly like a permission request, so it behaves like one.
   "agent-question": {
+    label: "Agent questions",
     tier: "needs-you",
     source: "agent",
     channels: ALL_CHANNELS,
@@ -163,6 +175,7 @@ export const NOTIFICATION_CATALOG = {
   },
   // A finish is quiet: the banner carries no sound (permission and failures do).
   "agent-done": {
+    label: "Agent finished",
     tier: "outcome",
     source: "agent",
     channels: ALL_CHANNELS,
@@ -173,6 +186,7 @@ export const NOTIFICATION_CATALOG = {
     setting: null,
   },
   "agent-failed": {
+    label: "Agent failed",
     tier: "outcome",
     source: "agent",
     channels: ALL_CHANNELS,
@@ -182,9 +196,11 @@ export const NOTIFICATION_CATALOG = {
     groupKey: targetGroupKey,
     setting: null,
   },
-  // The agent process died; the session shows Restart. Plain copy for now.
+  // The agent process died; the session shows Restart. Nothing moves until
+  // the user acts, so it is needs-you (and keeps its banner and sound).
   "agent-disconnected": {
-    tier: "warning",
+    label: "Agent stopped",
+    tier: "needs-you",
     source: "agent",
     channels: ALL_CHANNELS,
     whenLooking: "record",
@@ -197,6 +213,7 @@ export const NOTIFICATION_CATALOG = {
   // so both are needs-you. Each is its own thing to look at, so a visible
   // window is no reason to drop the center record.
   "agent-sign-in": {
+    label: "Agent sign-in needed",
     tier: "needs-you",
     source: "agent",
     channels: ALL_CHANNELS,
@@ -207,6 +224,8 @@ export const NOTIFICATION_CATALOG = {
     setting: null,
   },
   "atlas-signed-out": {
+    label: "Atlas signed out",
+    locked: true,
     tier: "needs-you",
     source: "app",
     channels: ALL_CHANNELS,
@@ -220,6 +239,7 @@ export const NOTIFICATION_CATALOG = {
   // Nothing to say while the conversation is on screen and being looked at.
   // Muting does not exist in the Chat model, so there is nothing to honour yet.
   "chat-dm": {
+    label: "Direct messages",
     tier: "team",
     source: "chat",
     channels: ALL_CHANNELS,
@@ -230,6 +250,7 @@ export const NOTIFICATION_CATALOG = {
     setting: null,
   },
   "chat-mention": {
+    label: "Mentions",
     tier: "team",
     source: "chat",
     channels: ALL_CHANNELS,
@@ -240,8 +261,9 @@ export const NOTIFICATION_CATALOG = {
     setting: null,
   },
   // Degradation warnings (ATL-385): quiet by design — no sound, and the OS
-  // banner is off in the default agent prefs (`agentKindPrefs`).
+  // banner is off in the default warning-tier switches.
   "agent-context-warning": {
+    label: "Context nearly full",
     tier: "warning",
     source: "agent",
     channels: ALL_CHANNELS,
@@ -252,6 +274,7 @@ export const NOTIFICATION_CATALOG = {
     setting: null,
   },
   "agent-rate-limit": {
+    label: "Rate limited",
     tier: "warning",
     source: "agent",
     channels: ALL_CHANNELS,
@@ -263,6 +286,7 @@ export const NOTIFICATION_CATALOG = {
   },
   // One toast per thread, updated in place as attempts advance.
   "agent-retrying": {
+    label: "Retrying",
     tier: "warning",
     source: "agent",
     channels: ALL_CHANNELS,

@@ -5,7 +5,7 @@ import {
   computeAway,
   type NotificationEnv,
 } from "@/features/notifications/lib/decide";
-import type { TerminalNotificationPrefs } from "@/features/settings/lib/app-settings";
+import { DEFAULT_SETTINGS, type AppSettings } from "@/features/settings/lib/app-settings";
 import type { TerminalEvent } from "./block-parser";
 
 const ctx: TerminalCtx = {
@@ -15,13 +15,11 @@ const ctx: TerminalCtx = {
   projectName: "atlas",
   orgId: "org-1",
 };
-const prefs: TerminalNotificationPrefs = {
-  enabled: true,
-  minDurationMs: 10_000,
-  onFailure: true,
-  onAttention: true,
-  native: true,
-  sound: false,
+// The terminal's historic defaults: sound off (the tier defaults have it on).
+const prefs: AppSettings = {
+  ...DEFAULT_SETTINGS,
+  notifyNeedsYouSound: false,
+  notifyOutcomeSound: false,
 };
 const away: NotificationEnv = {
   targetVisible: false,
@@ -55,7 +53,7 @@ const finished = (over: Partial<Extract<TerminalEvent, { type: "commandFinished"
 describe("decideTerminalNotification", () => {
   it("is silent when disabled", () => {
     expect(
-      decideTerminalNotification(finished(), ctx, away, { ...prefs, enabled: false }),
+      decideTerminalNotification(finished(), ctx, away, { ...prefs, notificationsEnabled: false }),
     ).toBeNull();
   });
 
@@ -128,7 +126,9 @@ describe("decideTerminalNotification", () => {
     const d = decideTerminalNotification(e, ctx, away, prefs);
     expect(d?.kind).toBe("terminal-attention");
     expect(d?.toast.durationMs).toBe(15_000);
-    expect(decideTerminalNotification(e, ctx, away, { ...prefs, onAttention: false })).toBeNull();
+    expect(
+      decideTerminalNotification(e, ctx, away, { ...prefs, terminalNotifyOnAttention: false }),
+    ).toBeNull();
   });
 
   it("chimes in-app for attention when the terminal is off screen and the window is focused", () => {
@@ -137,7 +137,7 @@ describe("decideTerminalNotification", () => {
       e,
       ctx,
       { ...looking, targetVisible: false },
-      { ...prefs, sound: true },
+      { ...prefs, notifyNeedsYouSound: true },
     );
     expect(d?.channels.sound).toBe(true);
     expect(d?.channels.native).toBe(false);
@@ -157,7 +157,7 @@ describe("decideTerminalNotification", () => {
   it("an OS banner carries the system sound instead of the in-app chime", () => {
     const d = decideTerminalNotification(finished({ exitCode: 1 }), ctx, away, {
       ...prefs,
-      sound: true,
+      notifyOutcomeSound: true,
     });
     expect(d?.channels.native).toBe(true);
     expect(d?.native.sound).toBe("Ping");
@@ -167,7 +167,7 @@ describe("decideTerminalNotification", () => {
     expect(
       decideTerminalNotification(finished({ exitCode: 1 }), ctx, away, {
         ...prefs,
-        onFailure: false,
+        terminalNotifyOnFailure: false,
       }),
     ).toBeNull();
   });

@@ -15,7 +15,6 @@ import {
   type RetryWarnState,
 } from "./agent-warning-rules";
 import {
-  DEFAULT_AGENT_NOTIFICATION_PREFS,
   decideAgentNotification,
   describeRateLimit,
   describeRetry,
@@ -24,6 +23,7 @@ import {
   type AgentNotifyEvent,
 } from "./agent-notifier-rules";
 import type { NotificationEnv } from "./decide";
+import { DEFAULT_SETTINGS } from "@/features/settings/lib/app-settings";
 
 const SEEDED_CONTEXT: ContextWarnState = evaluateContextUsage(INITIAL_CONTEXT_STATE, 0, 100).state;
 const SEEDED_RATE: RateWarnState = evaluateRateLimits(INITIAL_RATE_STATE, {
@@ -192,7 +192,7 @@ describe("warning decisions", () => {
     projectActive: true,
     away: true,
   };
-  const prefs = DEFAULT_AGENT_NOTIFICATION_PREFS;
+  const prefs = DEFAULT_SETTINGS;
   const decide = (e: AgentNotifyEvent, env = away) => decideAgentNotification(e, ctx, env, prefs);
 
   it("names the agent and thread and uses center + toast, never an OS banner", () => {
@@ -240,7 +240,7 @@ describe("warning decisions", () => {
     expect(
       decideAgentNotification({ type: "context_warning", percent: 95, crossing: 1 }, ctx, away, {
         ...prefs,
-        enabled: false,
+        notificationsEnabled: false,
       }),
     ).toBeNull();
   });
