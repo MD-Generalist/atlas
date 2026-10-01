@@ -25,9 +25,27 @@ import {
 } from "./agent-notifier-rules";
 import type { NotificationEnv } from "./decide";
 
+const SEEDED_CONTEXT: ContextWarnState = evaluateContextUsage(INITIAL_CONTEXT_STATE, 0, 100).state;
+const SEEDED_RATE: RateWarnState = evaluateRateLimits(INITIAL_RATE_STATE, {
+  primary: null,
+  secondary: null,
+}).state;
+
 describe("context window warning", () => {
+  it("the first observation seeds silently, even when already above 90%", () => {
+    const first = evaluateContextUsage(INITIAL_CONTEXT_STATE, 95, 100);
+    expect(first.warning).toBeNull();
+    expect(evaluateContextUsage(first.state, 97, 100).warning).toBeNull();
+    // ...and it re-arms once usage falls, so a later live crossing notifies.
+    const down = evaluateContextUsage(first.state, 20, 100);
+    expect(evaluateContextUsage(down.state, 92, 100).warning?.percent).toBe(92);
+  });
+  it("a first observation below 90% leaves the next crossing live", () => {
+    const first = evaluateContextUsage(INITIAL_CONTEXT_STATE, 40, 100);
+    expect(evaluateContextUsage(first.state, 91, 100).warning?.percent).toBe(91);
+  });
   const feed = (usages: number[]) => {
-    let state: ContextWarnState = INITIAL_CONTEXT_STATE;
+    let state: ContextWarnState = SEEDED_CONTEXT;
     return usages.map((used) => {
       const r = evaluateContextUsage(state, used, 100);
       state = r.state;
@@ -45,7 +63,7 @@ describe("context window warning", () => {
     expect(feed([92, 20, 91])).toEqual([92, null, 91]);
   });
   it("numbers each crossing so dedupe keys differ", () => {
-    let state = INITIAL_CONTEXT_STATE;
+    let state = SEEDED_CONTEXT;
     const a = evaluateContextUsage(state, 95, 100);
     state = evaluateContextUsage(a.state, 10, 100).state;
     const b = evaluateContextUsage(state, 95, 100);
@@ -68,8 +86,14 @@ describe("rate limit warning", () => {
     secondary: RateWindowInput | null = null,
   ) => evaluateRateLimits(state, { primary, secondary });
 
+  it("the first snapshot seeds silently; a later window still warns", () => {
+    const first = run(INITIAL_RATE_STATE, win(95, 1_000_000));
+    expect(first.warnings).toEqual([]);
+    expect(run(first.state, win(96, 1_000_000)).warnings).toEqual([]);
+    expect(run(first.state, win(96, 1_018_000)).warnings).toHaveLength(1);
+  });
   it("fires at 90% and once per window", () => {
-    const a = run(INITIAL_RATE_STATE, win(90));
+    const a = run(SEEDED_RATE, win(90));
     expect(a.warnings.map((w) => w.percent)).toEqual([90]);
     const b = run(a.state, win(97));
     expect(b.warnings).toEqual([]);
@@ -78,25 +102,25 @@ describe("rate limit warning", () => {
     expect(c.warnings).toEqual([]);
   });
   it("fires again for the next window (new reset time)", () => {
-    const a = run(INITIAL_RATE_STATE, win(92, 1_000_000));
+    const a = run(SEEDED_RATE, win(92, 1_000_000));
     const b = run(a.state, win(92, 1_018_000));
     expect(b.warnings).toHaveLength(1);
     expect(b.warnings[0].seq).toBeGreaterThan(a.warnings[0].seq);
   });
   it("re-arms an undated window once usage falls", () => {
-    const a = run(INITIAL_RATE_STATE, win(95, null));
+    const a = run(SEEDED_RATE, win(95, null));
     expect(run(a.state, win(96, null)).warnings).toEqual([]);
     const b = run(run(a.state, win(10, null)).state, win(95, null));
     expect(b.warnings).toHaveLength(1);
   });
   it("tracks the two windows independently", () => {
-    const a = run(INITIAL_RATE_STATE, win(50), win(91, 2_000_000));
+    const a = run(SEEDED_RATE, win(50), win(91, 2_000_000));
     expect(a.warnings.map((w) => w.slot)).toEqual(["secondary"]);
     const b = run(a.state, win(93), win(91, 2_000_000));
     expect(b.warnings.map((w) => w.slot)).toEqual(["primary"]);
   });
   it("skips absent windows", () => {
-    expect(run(INITIAL_RATE_STATE, null, null).warnings).toEqual([]);
+    expect(run(SEEDED_RATE, null, null).warnings).toEqual([]);
   });
 });
 

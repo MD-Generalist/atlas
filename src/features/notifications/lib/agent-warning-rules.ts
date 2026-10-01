@@ -24,9 +24,16 @@ export interface ContextWarnState {
   armed: boolean;
   /** Crossings fired so far; makes each crossing's dedupe key unique. */
   crossings: number;
+  /** False until the first observation, which only seeds `armed` — a thread
+   *  restored already above the threshold is not a crossing. */
+  seeded: boolean;
 }
 
-export const INITIAL_CONTEXT_STATE: ContextWarnState = { armed: true, crossings: 0 };
+export const INITIAL_CONTEXT_STATE: ContextWarnState = {
+  armed: true,
+  crossings: 0,
+  seeded: false,
+};
 
 export interface ContextWarning {
   percent: number;
@@ -40,13 +47,19 @@ export function evaluateContextUsage(
 ): { state: ContextWarnState; warning: ContextWarning | null } {
   if (!(size > 0) || !Number.isFinite(used)) return { state, warning: null };
   const percent = (used / size) * 100;
+  if (!state.seeded) {
+    return {
+      state: { ...state, seeded: true, armed: percent < CONTEXT_WARN_PERCENT },
+      warning: null,
+    };
+  }
   if (percent < CONTEXT_WARN_PERCENT) {
     return { state: state.armed ? state : { ...state, armed: true }, warning: null };
   }
   if (!state.armed) return { state, warning: null };
   const crossings = state.crossings + 1;
   return {
-    state: { armed: false, crossings },
+    state: { armed: false, crossings, seeded: true },
     warning: { percent: Math.min(100, Math.floor(percent)), crossing: crossings },
   };
 }
@@ -66,11 +79,15 @@ export interface RateWarnState {
   /** Window key the slot last warned for; null = not warned (or re-armed). */
   fired: Record<RateSlot, string | null>;
   count: number;
+  /** False until the first snapshot, which only records what is already at
+   *  the threshold (as fired) without warning. */
+  seeded: boolean;
 }
 
 export const INITIAL_RATE_STATE: RateWarnState = {
   fired: { primary: null, secondary: null },
   count: 0,
+  seeded: false,
 };
 
 export interface RateWarning {
@@ -107,6 +124,7 @@ export function evaluateRateLimits(
     const key = windowKey(w.resets_at);
     if (fired[slot] === key) continue;
     fired[slot] = key;
+    if (!state.seeded) continue;
     count += 1;
     warnings.push({
       slot,
@@ -116,7 +134,7 @@ export function evaluateRateLimits(
       seq: count,
     });
   }
-  return { state: { fired, count }, warnings };
+  return { state: { fired, count, seeded: true }, warnings };
 }
 
 // --- Retry ---------------------------------------------------------------
