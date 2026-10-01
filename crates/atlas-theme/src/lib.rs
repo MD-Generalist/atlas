@@ -1405,10 +1405,15 @@ mod tests {
         assert_eq!(written, 1);
     }
 
+    /// Compared as parsed JSON, not text: `serde_json`'s `preserve_order` is
+    /// enabled by sibling crates whenever the workspace is tested in one cargo
+    /// invocation (`scripts/test-rust.sh`), which reorders object keys in the
+    /// generated schema without changing it.
     #[test]
     fn generated_schema_is_current() {
-        let expected = serde_json::to_string_pretty(&json_schema()).unwrap() + "\n";
-        assert_eq!(include_str!("../schema/theme-v1.json"), expected);
+        let committed: serde_json::Value =
+            serde_json::from_str(include_str!("../schema/theme-v1.json")).unwrap();
+        assert_eq!(committed, serde_json::to_value(json_schema()).unwrap());
     }
 
     #[test]
