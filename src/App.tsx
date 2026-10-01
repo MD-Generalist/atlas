@@ -81,6 +81,10 @@ import {
 import { initSourceOpenedClearing } from "@/features/notifications/lib/source-opened";
 import { notifyChatEnvelope } from "@/features/notifications/lib/chat-notifier";
 import { noteAtlasSignedIn, notifyAtlasSignedOut } from "@/features/notifications/lib/app-notifier";
+import {
+  notifyModelDownload,
+  notifyUpdateReady,
+} from "@/features/notifications/lib/outcome-notifier";
 import { logEvent } from "@/features/log/lib/log";
 import { warmMarkdownWorker, primeMarkdownRenderer } from "@/lib/markdown-cache";
 import { primeMarkdown } from "@/lib/markdown";
@@ -122,6 +126,7 @@ import { createWakeRefresher } from "@/features/auth/lib/refresh-on-wake";
 import { useMembersStore } from "@/features/organisations/stores/members-store";
 import { ConnectDialog } from "@/features/auth/components/connect-dialog";
 import { clampScale, SCALE_STEP, DEFAULT_SCALE } from "@/features/settings/lib/ui-scale";
+import { listenModelDone } from "@/features/settings/lib/models-api";
 import { useModelsStore } from "@/features/settings/stores/models-store";
 
 /** Minimum gap between two wake-triggered account re-pulls. Long enough that a
@@ -145,6 +150,8 @@ export function App() {
   // delivered even when Settings is closed.
   useEffect(() => {
     void useModelsStore.getState().actions.init();
+    const off = listenModelDone(notifyModelDownload);
+    return () => void off.then((f) => f());
   }, []);
 
   // Keybinding profiles: load once, then pick up hand edits to
@@ -242,7 +249,10 @@ export function App() {
     const a = useUpdaterStore.getState().actions;
     const offs: Array<Promise<() => void>> = [
       listenUpdateProgress((e) => a.setDownloading(e.version, e.downloaded, e.total, e.phase)),
-      listenUpdateReady((e) => a.setReady(e.version)),
+      listenUpdateReady((e) => {
+        a.setReady(e.version);
+        notifyUpdateReady(e.version);
+      }),
       listenUpdateApplied((e) => {
         a.reset();
         toast.success(`Updated to Atlas ${e.version}.`);

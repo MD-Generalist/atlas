@@ -4,6 +4,8 @@ import {
   BellRing,
   Bot,
   Check,
+  Download,
+  GitBranch,
   Hand,
   KeyRound,
   MessageSquare,
@@ -26,7 +28,15 @@ const BADGE_STYLE: Record<LeadingBadge, { bg: string; Icon: typeof Check }> = {
 /** Source icon for kinds that do not come from an agent. */
 function SourceIcon({ kind, size }: { kind: NotificationKind; size: number }) {
   const common = { size, strokeWidth: 1.5 };
+  const error = "text-[var(--atlas-status-error-foreground)]";
   if (kind === "atlas-signed-out") return <KeyRound {...common} className="text-primary" />;
+  if (kind === "app-update-ready") return <Download {...common} className="text-primary" />;
+  if (kind === "model-download-done")
+    return <Download {...common} className="text-secondary-foreground" />;
+  if (kind === "model-download-failed") return <Download {...common} className={error} />;
+  if (kind === "git-op-done")
+    return <GitBranch {...common} className="text-secondary-foreground" />;
+  if (kind === "git-op-failed") return <GitBranch {...common} className={error} />;
   const source = catalogEntry(kind).source;
   if (source === "chat") return <MessageSquare {...common} className="text-primary" />;
   if (kind === "terminal-failed")

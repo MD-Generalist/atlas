@@ -26,6 +26,9 @@ import { useNotificationsStore } from "../stores/notifications-store";
 import { useAuthStore } from "@/features/auth/stores/auth-store";
 import { promptSignIn } from "@/features/chat/lib/agent-signin";
 import { commsActions } from "@/features/comms/stores/comms-store";
+import { openGitPanel } from "@/features/git/lib/open-git-panel";
+import { openSettingsSection } from "@/features/settings/lib/open-settings";
+import { openUpdatePrompt, restartToUpdate } from "@/features/updater/lib/restart-to-update";
 import {
   catalogEntry,
   isTabTarget,
@@ -57,6 +60,15 @@ export function openNotificationTarget(t: NotificationTarget): void {
       return;
     case "chat-conversation":
       commsActions().openConversation(t.convId);
+      return;
+    case "app-update":
+      openUpdatePrompt();
+      return;
+    case "settings":
+      openSettingsSection(t.section);
+      return;
+    case "git-panel":
+      void openGitPanel(t.projectId);
       return;
   }
 }
@@ -146,7 +158,11 @@ export function deliverNotification(d: NotificationDecision): boolean {
       description: d.body,
       duration: d.toast.durationMs,
       icon: notificationToastIcon(d.kind, agentType),
-      action: { label: "Open", onClick: () => openNotificationTarget(t) },
+      // A staged update's toast restarts into it; the click target is the prompt.
+      action:
+        t.type === "app-update"
+          ? { label: "Restart", onClick: restartToUpdate }
+          : { label: "Open", onClick: () => openNotificationTarget(t) },
     };
     if (d.toast.variant === "error") toast.error(d.title, opts);
     else if (d.toast.variant === "success") toast.success(d.title, opts);

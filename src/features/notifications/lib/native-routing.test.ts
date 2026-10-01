@@ -30,6 +30,9 @@ describe("banner payload round trip", () => {
       { type: "atlas-sign-in" },
       { type: "agent-sign-in", agentType: "cursor" },
       { type: "chat-conversation", convId: "c1", orgId: "o" },
+      { type: "app-update" },
+      { type: "settings", section: "models" },
+      { type: "git-panel", projectId: "p1", projectName: "Atlas" },
     ] satisfies NotificationTarget[]) {
       expect(targetForResponse(click(encodeBannerPayload(target)))).toEqual(target);
     }
@@ -50,6 +53,8 @@ describe("targetForResponse", () => {
     expect(targetForResponse(click('{"target":{"type":"session"}}'))).toBeNull();
     expect(targetForResponse(click('{"target":{"type":"terminal","tabId":"t"}}'))).toBeNull();
     expect(targetForResponse(click('{"target":{"type":"x","tabId":"t"}}'))).toBeNull();
+    expect(targetForResponse(click('{"target":{"type":"git-panel"}}'))).toBeNull();
+    expect(targetForResponse(click('{"target":{"type":"settings","section":"x"}}'))).toBeNull();
     expect(targetForResponse(click('{"target":{"type":"agent-sign-in"}}'))).toBeNull();
   });
 });

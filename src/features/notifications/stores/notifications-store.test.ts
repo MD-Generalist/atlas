@@ -121,6 +121,11 @@ describe("persistence", () => {
       item("bad", { type: "agent-sign-in" }),
       item("chat", { type: "chat-conversation", convId: "c1" }),
       item("badchat", { type: "chat-conversation" }),
+      item("upd", { type: "app-update" }),
+      item("models", { type: "settings", section: "models" }),
+      item("badsettings", { type: "settings", section: "nope" }),
+      item("git", { type: "git-panel", projectId: "p1" }),
+      item("badgit", { type: "git-panel" }),
     ];
     localStorage.setItem(KEY, JSON.stringify({ state: { items }, version: 1 }));
     await useNotificationsStore.persist.rehydrate();
@@ -130,6 +135,11 @@ describe("persistence", () => {
     expect(byId.bad.target).toBeUndefined();
     expect(byId.chat.target).toEqual({ type: "chat-conversation", convId: "c1" });
     expect(byId.badchat.target).toBeUndefined();
+    expect(byId.upd.target).toEqual({ type: "app-update" });
+    expect(byId.models.target).toEqual({ type: "settings", section: "models" });
+    expect(byId.badsettings.target).toBeUndefined();
+    expect(byId.git.target).toEqual({ type: "git-panel", projectId: "p1" });
+    expect(byId.badgit.target).toBeUndefined();
   });
 });
 

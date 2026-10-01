@@ -78,7 +78,13 @@ export type NotificationTarget =
   /** One agent needs credentials — opens that agent's sign-in dialog. */
   | { type: "agent-sign-in"; agentType: string }
   /** A Chat conversation (DM, group DM or channel) — opens it in the Chat panel. */
-  | { type: "chat-conversation"; convId: string; orgId?: string };
+  | { type: "chat-conversation"; convId: string; orgId?: string }
+  /** An update is staged — opens the "Restart to update" prompt. */
+  | { type: "app-update" }
+  /** A Settings section (the model download's home). */
+  | { type: "settings"; section: "models" }
+  /** One project's git panel (a push / pull / fetch ran there). */
+  | { type: "git-panel"; projectId: string; projectName?: string };
 
 /** Targets that live in a chat or terminal tab (and so carry project/org). */
 export type TabTarget = Extract<NotificationTarget, { type: "terminal" | "session" }>;
@@ -102,6 +108,12 @@ export const targetGroupKey = (t: NotificationTarget): string => {
       return `agent-sign-in:${t.agentType}`;
     case "chat-conversation":
       return `chat:${t.convId}`;
+    case "app-update":
+      return "app-update";
+    case "settings":
+      return `settings:${t.section}`;
+    case "git-panel":
+      return `git:${t.projectId}`;
   }
 };
 
@@ -293,6 +305,66 @@ export const NOTIFICATION_CATALOG = {
     whenLooking: "record",
     sound: null,
     toast: { variant: "default", durationMs: ATTENTION_TOAST_MS },
+    groupKey: targetGroupKey,
+    setting: null,
+  },
+  // Outcome-tier app events (ATL-384): downloads and git remote operations.
+  // The update prompt opens by itself on a live "ready", so the toast is the
+  // way back to it (with Restart) once dismissed; no sound — nothing is urgent.
+  "app-update-ready": {
+    label: "Update ready",
+    tier: "outcome",
+    source: "app",
+    channels: ALL_CHANNELS,
+    whenLooking: "record",
+    sound: null,
+    toast: { variant: "default", durationMs: ATTENTION_TOAST_MS },
+    groupKey: targetGroupKey,
+    setting: null,
+  },
+  "model-download-done": {
+    label: "Model downloaded",
+    tier: "outcome",
+    source: "app",
+    channels: ALL_CHANNELS,
+    whenLooking: "record",
+    sound: null,
+    toast: { variant: "success", durationMs: DONE_TOAST_MS },
+    groupKey: targetGroupKey,
+    setting: null,
+  },
+  "model-download-failed": {
+    label: "Model download failed",
+    tier: "outcome",
+    source: "app",
+    channels: ALL_CHANNELS,
+    whenLooking: "record",
+    sound: { native: "Ping" },
+    toast: { variant: "error", durationMs: ATTENTION_TOAST_MS },
+    groupKey: targetGroupKey,
+    setting: null,
+  },
+  // A success is only worth saying after a long wait (rules in
+  // `outcome-notifier-rules.ts`); a failure always is.
+  "git-op-done": {
+    label: "Git push, pull or fetch finished",
+    tier: "outcome",
+    source: "app",
+    channels: ALL_CHANNELS,
+    whenLooking: "drop",
+    sound: null,
+    toast: { variant: "success", durationMs: DONE_TOAST_MS },
+    groupKey: targetGroupKey,
+    setting: null,
+  },
+  "git-op-failed": {
+    label: "Git push, pull or fetch failed",
+    tier: "outcome",
+    source: "app",
+    channels: ALL_CHANNELS,
+    whenLooking: "record",
+    sound: { native: "Ping" },
+    toast: { variant: "error", durationMs: ATTENTION_TOAST_MS },
     groupKey: targetGroupKey,
     setting: null,
   },

@@ -108,6 +108,9 @@ const TARGET_LABEL: Record<NotificationTarget["type"], string> = {
   "atlas-sign-in": "Atlas",
   "agent-sign-in": "Agent",
   "chat-conversation": "Chat",
+  "app-update": "Atlas",
+  settings: "Atlas",
+  "git-panel": "Git",
 };
 
 /** Agent, app and Chat copy is already banner-shaped (title, subtitle, body); the OS shows

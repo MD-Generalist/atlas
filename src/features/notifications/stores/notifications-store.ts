@@ -70,6 +70,8 @@ const ERROR_KINDS: ReadonlySet<NotificationKind> = new Set([
   "terminal-failed",
   "atlas-signed-out",
   "agent-sign-in",
+  "model-download-failed",
+  "git-op-failed",
 ]);
 export const isErrorKind = (i: AppNotification) => ERROR_KINDS.has(i.kind);
 
@@ -130,7 +132,10 @@ function isAppTarget(t: unknown): t is NonNullable<AppNotification["target"]> {
   return (
     r.type === "atlas-sign-in" ||
     (r.type === "agent-sign-in" && typeof r.agentType === "string" && !!r.agentType) ||
-    (r.type === "chat-conversation" && typeof r.convId === "string" && !!r.convId)
+    (r.type === "chat-conversation" && typeof r.convId === "string" && !!r.convId) ||
+    r.type === "app-update" ||
+    (r.type === "settings" && r.section === "models") ||
+    (r.type === "git-panel" && typeof r.projectId === "string" && !!r.projectId)
   );
 }
 

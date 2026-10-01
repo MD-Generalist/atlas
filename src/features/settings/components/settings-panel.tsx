@@ -76,6 +76,11 @@ export function SettingsPanel({ initialSection }: { initialSection?: string } = 
   // sidebar's Skills button), whether this panel is fresh or already mounted.
   const navSection = useSettingsNav((s) => s.section);
   const clearNav = useSettingsNav((s) => s.clear);
+  const setShown = useSettingsNav((s) => s.setShown);
+  useEffect(() => {
+    setShown(activeSection);
+    return () => setShown(null);
+  }, [activeSection, setShown]);
   useEffect(() => {
     if (navSection) {
       setActiveSection(navSection);

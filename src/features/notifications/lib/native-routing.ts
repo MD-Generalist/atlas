@@ -42,6 +42,9 @@ function isTarget(t: unknown): t is NotificationTarget {
   if (r.type === "atlas-sign-in") return true;
   if (r.type === "agent-sign-in") return typeof r.agentType === "string" && !!r.agentType;
   if (r.type === "chat-conversation") return typeof r.convId === "string" && !!r.convId;
+  if (r.type === "app-update") return true;
+  if (r.type === "settings") return r.section === "models";
+  if (r.type === "git-panel") return typeof r.projectId === "string" && !!r.projectId;
   if (typeof r.tabId !== "string" || !r.tabId) return false;
   if (r.type === "terminal") return typeof r.terminalId === "string";
   return r.type === "session";
