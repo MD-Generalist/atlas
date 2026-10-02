@@ -59,26 +59,23 @@ beforeEach(() => {
   mocks.error.mockClear();
 });
 
-describe("model download completion notifications", () => {
-  it("shows exactly one success toast for an embedding model", () => {
+describe("model download completion", () => {
+  it("clears the in-flight row and leaves the announcing to the pipeline", () => {
+    useModelsStore.setState({
+      downloading: {
+        [embeddingModel.id]: {
+          id: embeddingModel.id,
+          file: "",
+          fileIndex: 0,
+          fileCount: 1,
+          received: 0,
+          total: 0,
+        },
+      },
+    });
     mocks.doneHandler?.({ id: embeddingModel.id, success: true, error: null });
 
-    expect(mocks.success).toHaveBeenCalledExactlyOnceWith("MiniLM-L6-v2 downloaded");
-    expect(mocks.error).not.toHaveBeenCalled();
-  });
-
-  it("shows the download error for an embedding model", () => {
-    mocks.doneHandler?.({ id: embeddingModel.id, success: false, error: "network offline" });
-
-    expect(mocks.error).toHaveBeenCalledExactlyOnceWith("MiniLM-L6-v2 download failed", {
-      description: "network offline",
-    });
-    expect(mocks.success).not.toHaveBeenCalled();
-  });
-
-  it("does not notify for an event outside the embedding catalog", () => {
-    mocks.doneHandler?.({ id: "unknown-model", success: true, error: null });
-
+    expect(useModelsStore.getState().downloading).toEqual({});
     expect(mocks.success).not.toHaveBeenCalled();
     expect(mocks.error).not.toHaveBeenCalled();
   });

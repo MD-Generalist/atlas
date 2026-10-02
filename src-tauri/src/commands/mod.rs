@@ -55,6 +55,7 @@ pub mod mention_search;
 pub mod modelchat;
 pub mod models;
 pub mod models_pricing;
+pub mod notifier;
 pub mod org_server;
 pub mod pdf_annotations;
 pub mod plans;

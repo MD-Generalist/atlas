@@ -10,8 +10,9 @@ if [[ "$(uname -s)" == "Darwin" && -z "${SDKROOT:-}" ]]; then
 fi
 
 # A SUBSET of CI, not a replica. CI (.github/workflows/ci.yml) is the
-# authority; this is the quick local pass over the same test suites. What it
-# leaves out:
+# authority; this is the quick local pass over the same test suites. For the
+# replica — each crate from its own directory, clippy included — run
+# `bun run ci:local`. What this leaves out:
 #   - clippy. CI runs one pass per crate: `cargo clippy --locked --all-targets`,
 #     plus `-- -D warnings` for the crates flagged `clippy: true` in the
 #     matrix, and plain for the app. Run those by hand for a crate you touched.
