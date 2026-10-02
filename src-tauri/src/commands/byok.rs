@@ -104,6 +104,10 @@ const ENV_KEY_VARS: &[(&str, &[&str])] = &[
         "orcarouter",
         &["ORCAROUTER_API_KEY", "ORCA_ROUTER_API_KEY", "ORCA_API_KEY"],
     ),
+    (
+        "cheaperinference",
+        &["CHEAPER_INFERENCE_API_KEY", "CHEAPERINFERENCE_API_KEY"],
+    ),
 ];
 
 /// One env-imported key: which provider it maps to, the variable it came from,
@@ -748,6 +752,19 @@ mod tests {
         assert_eq!(
             vars,
             &["ORCAROUTER_API_KEY", "ORCA_ROUTER_API_KEY", "ORCA_API_KEY"]
+        );
+    }
+
+    #[test]
+    fn test_cheaperinference_env_vars() {
+        let entry = ENV_KEY_VARS
+            .iter()
+            .find(|(provider, _)| *provider == "cheaperinference");
+        assert!(entry.is_some(), "cheaperinference must be in ENV_KEY_VARS");
+        let (_, vars) = entry.unwrap();
+        assert_eq!(
+            vars,
+            &["CHEAPER_INFERENCE_API_KEY", "CHEAPERINFERENCE_API_KEY"]
         );
     }
 }
