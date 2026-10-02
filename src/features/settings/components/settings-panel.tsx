@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { ScrollArea } from "@/ui/scroll-area";
 import { cn } from "@/lib/utils";
-import { isMac } from "@/lib/platform";
+import { isLinux, isMac, isWindows } from "@/lib/platform";
 import { Hint } from "@/ui/tooltip";
 import {
   Settings,
@@ -39,7 +39,6 @@ import { setEnabled as setTelemetryEnabled } from "@/features/telemetry/posthog-
 import { useFeedbackStore } from "@/features/feedback/stores/feedback-store";
 import { updater } from "@/features/updater/lib/updater-api";
 import { useUpdaterStore } from "@/features/updater/stores/updater-store";
-import { isLinux, isWindows } from "@/lib/platform";
 import { useSettingsNav, type SettingsSection } from "../stores/settings-nav-store";
 import { openConfigFile } from "../lib/atlas-config-api";
 import { useSettingsStore } from "@/features/settings/stores/settings-store";
@@ -384,7 +383,7 @@ function GeneralSettings() {
       />
       <SettingRow
         label="Terminal notifications"
-        description="A command that fails, runs longer than the threshold, or asks for input raises an item in the notification center, a toast when its terminal is off screen, and a macOS notification when Atlas is in the background. Nothing fires while you are looking at that terminal."
+        description={`A command that fails, runs longer than the threshold, or asks for input raises an item in the notification center, a toast when its terminal is off screen, and a ${isMac ? "macOS" : "desktop"} notification when Atlas is in the background. Nothing fires while you are looking at that terminal.`}
       >
         <Toggle
           checked={settings.terminalNotifications}
@@ -429,7 +428,7 @@ function GeneralSettings() {
         />
       </SettingRow>
       <SettingRow
-        label="macOS notifications"
+        label={isMac ? "macOS notifications" : "Desktop notifications"}
         description="Also raise a system notification when the Atlas window is not focused."
       >
         <Toggle

@@ -507,6 +507,33 @@ pub async fn fs_open_in_terminal(path: String) -> Result<(), String> {
             };
             let dir_str = target_dir.to_string_lossy();
 
+            // Check $TERMINAL first before falling back to the default list.
+            if let Ok(terminal_env) = std::env::var("TERMINAL") {
+                let trimmed = terminal_env.trim();
+                if !trimmed.is_empty() {
+                    let mut parts = trimmed.split_whitespace();
+                    if let Some(bin) = parts.next() {
+                        let args: Vec<&str> = parts.collect();
+                        if Command::new(bin)
+                            .args(&args)
+                            .current_dir(target_dir)
+                            .spawn()
+                            .is_ok()
+                        {
+                            return Ok(());
+                        }
+                        if !args.is_empty()
+                            && Command::new(trimmed)
+                                .current_dir(target_dir)
+                                .spawn()
+                                .is_ok()
+                        {
+                            return Ok(());
+                        }
+                    }
+                }
+            }
+
             // Modern desktop spec, common desktop terminals, and popular standalone emulators.
             let terminals: &[(&str, &[&str])] = &[
                 ("xdg-terminal-exec", &[]),
