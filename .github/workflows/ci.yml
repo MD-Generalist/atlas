@@ -110,13 +110,20 @@ jobs:
         env:
           BEFORE: ${{ github.event.before }}
           PR_BASE: ${{ github.event.pull_request.base.sha }}
+          RUSTUP_TOOLCHAIN: stable
         # Node and cargo come with the runner image; `cargo metadata
         # --no-deps` reads only the manifests, so no toolchain step is needed.
+        # RUSTUP_TOOLCHAIN overrides rust-toolchain.toml, which would otherwise
+        # make rustup download the pinned toolchain just to read manifests.
         run: node scripts/ci-affected.mjs --github
 
   frontend:
     name: frontend
     runs-on: ubuntu-24.04-arm
+    env:
+      # tests/ci-affected.test.ts runs `cargo metadata`, which reads only
+      # manifests; see the plan job for why this bypasses rust-toolchain.toml.
+      RUSTUP_TOOLCHAIN: stable
     steps:
       - uses: actions/checkout@v5
         with:
@@ -125,7 +132,12 @@ jobs:
           # and on a shallow clone that resolves to HEAD — the modification
           # set comes back empty and the suite fails (#58).
           fetch-depth: 0
-      - uses: oven-sh/setup-bun@v2
+      # Bun and Node at the versions mise.toml pins. Both used to float (setup-bun
+      # took the latest Bun, and Node was whatever the image shipped), and
+      # Vitest runs under Node: its version decides whether `navigator`
+      # exists and how `Date` parses, so a test could pass on the machine that
+      # wrote it and fail here with no change to the code.
+      - uses: jdx/mise-action@v2
       - name: Install
         run: bun install --frozen-lockfile
       - name: Lint
@@ -167,9 +179,11 @@ jobs:
       RUSTC_WRAPPER: sccache
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
+      # The version rust-toolchain.toml pins, with its components (clippy
+      # included). Not `dtolnay/rust-toolchain@stable`: floating on stable let
+      # a new Rust release add clippy lints here before any local run saw them.
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install
       # Before rust-cache: once RUSTC_WRAPPER is set, cargo invokes it even to
       # probe `rustc -vV`, so sccache must be on PATH before anything runs
       # cargo.
@@ -228,7 +242,8 @@ jobs:
       RUSTC_WRAPPER: sccache # see the app job
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install the pinned Rust toolchain # see the app job
+        run: rustup toolchain install
       - uses: mozilla-actions/sccache-action@v0.0.11
       - uses: Swatinem/rust-cache@v2
         with:
@@ -289,9 +304,8 @@ jobs:
         include: ${{ fromJSON(needs.changes.outputs.crates) }}
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
+      - name: Install the pinned Rust toolchain # see the app job
+        run: rustup toolchain install
       - uses: mozilla-actions/sccache-action@v0.0.11
       # Workspace members share the root lockfile and target dir;
       # `atlas-kb-server` is excluded from the workspace (it keeps its own

@@ -8,6 +8,7 @@
 # Touches:
 #   - package.json                  ("version": "...")
 #   - src-tauri/Cargo.toml          (version = "...")
+#   - Cargo.lock                    (the atlas package's entry)
 #   - src-tauri/tauri.conf.json     ("version": "...")
 #   - src/features/settings/components/settings-panel.tsx  (About label)
 
@@ -70,8 +71,15 @@ in_place "s/^version = \"$escaped\"/version = \"$new\"/" "$CARGO"
 # Settings panel About label.
 in_place "s/v$escaped — The second brain IDE/v$new — The second brain IDE/g" "$SETTINGS"
 
+# Cargo.lock records the app's own version too. Left stale, every CI job's
+# `cargo test --locked` refuses to run (one "v bump" commit failed 63 jobs).
+# `--workspace` touches only workspace members' entries; `--offline` because
+# no dependency changes.
+(cd "$ROOT" && cargo update --workspace --offline --quiet)
+
 echo "done. updated:"
 echo "  $PKG"
 echo "  $CARGO"
+echo "  $ROOT/Cargo.lock"
 echo "  $TAURI_CONF"
 echo "  $SETTINGS"
