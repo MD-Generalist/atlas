@@ -5,6 +5,7 @@ import { HintGroup, HintItem } from "@/ui/hint-group";
 import { useGitStore } from "../../stores/git-store";
 import { handleGitError } from "../../lib/git-errors";
 import { fetchHint } from "../../lib/auto-fetch";
+import { gitErrorText, notifyGitRemoteOp } from "@/features/notifications/lib/outcome-notifier";
 import { BranchSwitcher } from "./branch-switcher";
 import { MergeBranchDialog } from "./merge-branch-dialog";
 import { GitErrorDialog } from "./git-error-dialog";
@@ -45,11 +46,17 @@ export function GitManagerPanel() {
     if (selectedCommit) setView("history");
   }, [selectedCommit]);
 
-  const run = async (label: string, fn: () => Promise<void>) => {
+  // The toolbar buttons are the user-started remote operations — the only
+  // callers that notify (auto-fetch and the merge dialog's fetch never do).
+  const run = async (label: "fetch" | "pull" | "push" | "publish", fn: () => Promise<void>) => {
     setBusy(label);
+    const startedAt = Date.now();
+    const path = repoPath;
     try {
       await fn();
+      notifyGitRemoteOp(label, path, startedAt, null);
     } catch (e) {
+      notifyGitRemoteOp(label, path, startedAt, gitErrorText(e));
       handleGitError(e);
     } finally {
       setBusy(null);

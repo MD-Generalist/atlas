@@ -83,11 +83,13 @@ jobs:
             rpm \
             squashfs-tools
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+      # Bun, Node and Rust at the versions mise.toml and rust-toolchain.toml
+      # pin: a release is built with exactly what CI tested.
+      - name: Setup Bun and Node
+        uses: jdx/mise-action@v2
 
       - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        run: rustup toolchain install
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2

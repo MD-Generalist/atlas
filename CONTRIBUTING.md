@@ -55,10 +55,10 @@ Atlas has a lot of surfaces — a change that looks right in one panel often rea
 You need:
 
 - [Bun](https://bun.sh/)
-- [Rust](https://rustup.rs/), stable
+- [Rust](https://rustup.rs/) via rustup, which installs the version `rust-toolchain.toml` pins on first use
 - Xcode Command Line Tools
 
-We suggest using [mise](https://mise.jdx.dev/) to manage the Bun version — the repo ships an `mise.toml` pinning it, so `mise install` picks up the right version automatically. Not required; installing Bun directly works too.
+We suggest using [mise](https://mise.jdx.dev/) to manage Bun and Node — the repo ships a `mise.toml` pinning both, and CI installs exactly those, so `mise install` gives you the versions CI tests with. Not required; `bun run ci:local` warns when your versions differ from the pins.
 
 **No API keys, no `.env` file, no account.** Atlas builds and runs from a clean clone:
 
@@ -157,7 +157,7 @@ Releases are tagged `alpha-X.Y.Z`, with occasional `exp-X.Y.Z-X.Y.Z` snapshots.
 
 ### Versioning
 
-The version lives in four places: `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`, and the Settings "About" label in `src/features/settings/components/settings-panel.tsx`. The scripts change all four together.
+The version lives in four places: `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`, and the Settings "About" label in `src/features/settings/components/settings-panel.tsx`. The scripts change all four together, and refresh `Cargo.lock`'s entry for the app so CI's `--locked` builds still run.
 
 ```bash
 ./bump.sh          # patch bump: 0.2.3 -> 0.2.4
@@ -177,6 +177,53 @@ bun run test                       # frontend and cross-cutting tests
 bun run test:rust                  # every Rust crate + src-tauri --lib
 cargo check --workspace            # Rust typecheck: every workspace member + the app
 ```
+
+Before pushing, `bun run ci:local` runs what CI would run for your branch, the
+way CI runs it: the jobs and commands are read out of
+`.github/workflows/ci.yml`, the jobs a change affects are planned by the same
+script CI uses, and every crate is tested and linted (clippy, CI's flags) from
+its own directory. `bun run test:rust` is the quicker subset — no clippy, and
+all crates in one cargo invocation — so it can pass where CI fails. Rust, Bun
+and Node are pinned (`rust-toolchain.toml`, `mise.toml`) to the versions CI
+installs; `ci:local` warns when yours differ.
+
+```bash
+bun run ci:local                      # the jobs CI would run for this branch
+bun run ci:local --all                # every job
+bun run ci:local atlas-git frontend   # chosen jobs, by the names CI shows
+bun run ci:local --list               # what it would run, without running it
+bun run ci:local --linux              # CI's Linux jobs in a Linux container
+bun run ci:local --shell              # a shell in that container
+```
+
+By default every job runs on your machine, and a job CI runs on macOS (the app)
+is skipped on any other OS. CI runs every other job on arm64 Ubuntu, so from a
+Mac or Windows the Linux-only paths go untested; the engine's bubblewrap
+sandbox is the one that bites. `--linux` runs those jobs in a container built
+from `scripts/ci-linux/Dockerfile`, with Rust, Bun and Node at the pinned
+versions. It's opt-in because the first run is a cold build; the target dir,
+cargo registry and a Linux `node_modules` then live in Docker volumes for that
+checkout, and later runs are incremental. Your checkout's own `node_modules`
+and `dist/` are left alone.
+
+- **Any Docker-compatible runtime works**: Docker Desktop, OrbStack, Colima,
+  or Podman (`ATLAS_CI_DOCKER=podman`). Give its VM enough memory for a
+  parallel Rust build.
+- **Windows**: clone inside WSL2 and run from there. A checkout on the Windows
+  filesystem is bind-mounted over a slow bridge, too slow for a build.
+- **x86-64 hosts** get an x86-64 container, never an emulated arm64 one
+  (emulation is several times slower). Results transfer to CI except for
+  arch-specific code, and a run there is useful in its own right: Linux
+  releases ship x86-64 builds, which no CI job tests.
+- **Linux hosts** already run the crate jobs natively. `--linux` still buys
+  CI's exact toolchain and Ubuntu userland, and installs bubblewrap for you.
+  On Linux, Docker needs AppArmor and seccomp relaxed for the sandbox, which
+  `ci:local` does per container.
+
+Volumes are named `atlas-ci-<hash>-*`, one set per checkout; `docker volume rm`
+them to start cold.
+
+A pre-push hook runs the full `bun run test`; pre-commit runs only `tests/`.
 
 Rust tests run offline and need no API keys. Every crate under `crates/` except
 `atlas-kb-server` (see below) is a member of the root cargo workspace, sharing

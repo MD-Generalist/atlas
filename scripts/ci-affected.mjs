@@ -305,7 +305,8 @@ function git(args) {
   return execFileSync("git", args, { cwd: REPO_ROOT, encoding: "utf8" });
 }
 
-function changedFiles(base, head) {
+/** Files changed in `base..head`, or `base..work tree` (untracked included) without `head`. */
+export function changedFiles(base, head) {
   const lines = (s) => s.split("\n").filter(Boolean);
   if (head) return lines(git(["diff", "--name-only", "--no-renames", base, head]));
   return [

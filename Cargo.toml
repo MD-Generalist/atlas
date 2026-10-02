@@ -643,6 +643,13 @@ unnecessary_lazy_evaluations = "deny"
 unnecessary_sort_by = "deny"
 unnecessary_to_owned = "deny"
 
+# An allow, not a deny. `#[async_trait]` marks every method it generates
+# `#[must_use]` while returning a boxed `Future`, already must-use, and from
+# clippy 1.99 this lint flags each expansion: atlas-memory's traits and the
+# tonic-generated service traits in atlas-engine-code-mode-protocol, none of
+# it code anyone wrote. A hand-written redundant `#[must_use]` is harmless.
+double_must_use = "allow"
+
 # cargo-shear cannot see the platform-specific openssl-sys usage, so we
 # silence the false positive here instead of deleting a real dependency.
 

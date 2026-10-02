@@ -267,10 +267,13 @@ pub enum ExecPolicyUpdateError {
     #[error("failed to join blocking rules update task: {source}")]
     JoinBlockingTask { source: tokio::task::JoinError },
 
-    #[error("failed to update in-memory rules: {source}")]
+    // Not named `source`: `#[from]` on such a field expands to
+    // `Self::AddRule { source: source }`, which clippy 1.99 rejects. `#[from]`
+    // still makes it the error's source.
+    #[error("failed to update in-memory rules: {rule_error}")]
     AddRule {
         #[from]
-        source: ExecPolicyRuleError,
+        rule_error: ExecPolicyRuleError,
     },
 }
 
@@ -447,7 +450,7 @@ impl ExecPolicyManager {
                 .acquire()
                 .await
                 .map_err(|_| ExecPolicyUpdateError::AddRule {
-                    source: ExecPolicyRuleError::InvalidRule(
+                    rule_error: ExecPolicyRuleError::InvalidRule(
                         "exec policy update semaphore closed".to_string(),
                     ),
                 })?;
@@ -500,7 +503,7 @@ impl ExecPolicyManager {
                 .acquire()
                 .await
                 .map_err(|_| ExecPolicyUpdateError::AddRule {
-                    source: ExecPolicyRuleError::InvalidRule(
+                    rule_error: ExecPolicyRuleError::InvalidRule(
                         "exec policy update semaphore closed".to_string(),
                     ),
                 })?;

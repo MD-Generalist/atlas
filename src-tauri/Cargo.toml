@@ -235,12 +235,60 @@ tempfile = "3"
 # relaunches from (and only upgrades) the MSI's `InstallLocation`. See
 # `crate::commands::updater`. Already in the tree transitively.
 winreg = "0.55"
+# Native toasts (`crate::notifier::toast`). 0.61 is the version
+# `tauri-winrt-notification` already resolves, so no second `windows` major.
+windows = { version = "0.61", features = [
+  "Data_Xml_Dom",
+  "Foundation",
+  "Foundation_Collections",
+  "UI_Notifications",
+] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Native notifications over the freedesktop D-Bus interface
+# (`crate::notifier::freedesktop`). 5.14 is the zbus `notify-rust` already
+# resolves (the lockfile also holds a 4.x for other crates), default features
+# (async-io), so no new resolution.
+zbus = "5"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Native NSWindow access for the titlebar double-click "zoom" (AppKit
 # performZoom:), which Tauri's cross-platform maximize API doesn't cover.
 # Already in the tree transitively; pinned here for the direct msg_send.
 objc2 = "0.6"
+# Native system notifications (`crate::notifier::macos`): UNUserNotificationCenter.
+# All three are already in the lockfile (objc2 0.6 / block2 0.6 / foundation 0.3);
+# no second objc2 major.
+objc2-foundation = { version = "0.3", default-features = false, features = [
+  "std",
+  "NSArray",
+  "NSBundle",
+  "NSDictionary",
+  "NSError",
+  "NSObject",
+  "NSSet",
+  "NSString",
+  "NSURL",
+] }
+objc2-user-notifications = { version = "0.3", default-features = false, features = [
+  "std",
+  "bitflags",
+  "block2",
+  "NSString_UserNotifications",
+  "UNError",
+  "UNNotification",
+  "UNNotificationAction",
+  "UNNotificationAttachment",
+  "UNNotificationCategory",
+  "UNNotificationContent",
+  "UNNotificationRequest",
+  "UNNotificationResponse",
+  "UNNotificationSettings",
+  "UNNotificationSound",
+  "UNNotificationTrigger",
+  "UNUserNotificationCenter",
+] }
+block2 = "0.6"
 # Turn on atlas-embed's Metal backend so the on-device embedder runs on the
 # Apple-Silicon GPU. Feature is additive over the base path dep in `[dependencies]`.
 atlas-embed = { path = "../crates/atlas-embed", features = ["metal"] }
