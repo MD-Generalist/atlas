@@ -480,6 +480,17 @@ pub async fn fs_duplicate(path: String) -> Result<String, String> {
     .map_err(|e| e.to_string())?
 }
 
+/// Split a `$TERMINAL` value into the program and its arguments
+/// (`"wezterm start"` → `wezterm`, `["start"]`). Whitespace-split, not
+/// shell-parsed: a program path containing spaces is not supported.
+/// `None` when the value is blank.
+#[cfg(any(target_os = "linux", test))]
+fn parse_terminal_env(value: &str) -> Option<(&str, Vec<&str>)> {
+    let mut parts = value.split_whitespace();
+    let bin = parts.next()?;
+    Some((bin, parts.collect()))
+}
+
 /// Open a folder in the system terminal.
 /// Supported on macOS and Linux.
 #[tauri::command]
@@ -507,30 +518,19 @@ pub async fn fs_open_in_terminal(path: String) -> Result<(), String> {
             };
             let dir_str = target_dir.to_string_lossy();
 
-            // Check $TERMINAL first before falling back to the default list.
-            if let Ok(terminal_env) = std::env::var("TERMINAL") {
-                let trimmed = terminal_env.trim();
-                if !trimmed.is_empty() {
-                    let mut parts = trimmed.split_whitespace();
-                    if let Some(bin) = parts.next() {
-                        let args: Vec<&str> = parts.collect();
-                        if Command::new(bin)
-                            .args(&args)
-                            .current_dir(target_dir)
-                            .spawn()
-                            .is_ok()
-                        {
-                            return Ok(());
-                        }
-                        if !args.is_empty()
-                            && Command::new(trimmed)
-                                .current_dir(target_dir)
-                                .spawn()
-                                .is_ok()
-                        {
-                            return Ok(());
-                        }
-                    }
+            // The user's own choice, when the environment names one, before guessing.
+            if let Some((bin, args)) = std::env::var("TERMINAL")
+                .ok()
+                .as_deref()
+                .and_then(parse_terminal_env)
+            {
+                if Command::new(bin)
+                    .args(&args)
+                    .current_dir(target_dir)
+                    .spawn()
+                    .is_ok()
+                {
+                    return Ok(());
                 }
             }
 
@@ -781,5 +781,25 @@ mod asset_grant_tests {
                 "{bad}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod terminal_env_tests {
+    use super::parse_terminal_env;
+
+    #[test]
+    fn terminal_env_splits_program_from_arguments() {
+        assert_eq!(parse_terminal_env("foot"), Some(("foot", vec![])));
+        assert_eq!(
+            parse_terminal_env("  wezterm start  "),
+            Some(("wezterm", vec!["start"]))
+        );
+        assert_eq!(
+            parse_terminal_env("foot --app-id=term"),
+            Some(("foot", vec!["--app-id=term"]))
+        );
+        assert_eq!(parse_terminal_env(""), None);
+        assert_eq!(parse_terminal_env("   "), None);
     }
 }
