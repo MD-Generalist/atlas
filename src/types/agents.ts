@@ -89,9 +89,11 @@ export interface Usage {
   /** Reasoning / thinking output, when the agent reports it apart from
    *  `output_tokens` (the native engine does). Informational. */
   reasoning_tokens?: number;
-  /** Cumulative cost in USD as the AGENT reported it; 0 when it reported none
+  /** Cumulative cost as the AGENT reported it; 0 when it reported none
    *  (every ACP adapter today) — the renderer estimates from pricing then. */
   cost?: number;
+  /** ISO 4217 code `cost` is in; null/absent means USD. */
+  currency?: string | null;
 }
 
 /** One ACP-advertised session mode (e.g. Codex's read-only / auto / full-access). */
@@ -301,6 +303,8 @@ export type AgentDelta =
       used: number;
       size: number;
       cost: number;
+      /** ISO 4217 code `cost` is in; null/absent means USD. */
+      currency?: string | null;
     }
   | {
       kind: "compaction";

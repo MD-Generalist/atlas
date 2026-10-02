@@ -1,80 +1,56 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { fmtCost } from "./usage-format";
 
-// A cost is USD wherever it is read. The bug this guards — issue 333 — was a
-// cost formatted through the *system* locale behind a hand-written `$`, which
-// printed `$15,00` on a `tr-TR` machine and put the sign after the symbol
-// (`$-15.00`) anywhere.
+// A money amount is two facts: the currency it is in, which belongs to the data,
+// and how a number reads, which belongs to the reader. Issue 333 was the two
+// mixed up — locale digits behind a pasted `$`, so `$15,00` in tr-TR and
+// `$1.234,50` where a de-DE reader expects `1.234,50 $`.
 //
-// Node resolves its default locale once, at startup, from the environment — so
-// a test cannot change it and re-run the same code to watch the digits move.
-// What can be pinned is the decision itself: the formatter must ask for a
-// named locale and never for the ambient default. If someone reverts to
-// `n.toLocaleString(undefined, …)`, the recorded locale comes back `undefined`
-// and this fails on every machine, whatever locale CI happens to run under.
+// Node fixes its default locale at startup, so a test cannot switch it. What
+// holds in every locale: the output is exactly what `Intl` gives for that
+// currency in the reader's locale, the currency is the one asked for, and
+// the en-US layout is pinned wherever the suite happens to run in en-US.
+const reader = (currency: string, opts: Intl.NumberFormatOptions = {}) =>
+  new Intl.NumberFormat(undefined, { style: "currency", currency, ...opts });
+
+const inEnUS = new Intl.NumberFormat().resolvedOptions().locale === "en-US";
+
 describe("fmtCost", () => {
-  beforeEach(() => {
-    vi.resetModules();
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it("never formats through the system locale", async () => {
-    const locales: Intl.LocalesArgument[] = [];
-    const realFormat = Intl.NumberFormat;
-    // `Intl.LocalesArgument` is wider than what the constructors accept, and a
-    // `Locale` never reaches this code path — narrow at the call instead.
-    const narrow = (l: Intl.LocalesArgument) => l as string | string[] | undefined;
-
-    vi.spyOn(Number.prototype, "toLocaleString").mockImplementation(function (
-      this: number,
-      requested?: string | string[] | Intl.LocalesArgument,
-      options?: Intl.NumberFormatOptions,
-    ) {
-      locales.push(requested);
-      return realFormat(narrow(requested), options).format(this);
-    });
-
-    const ctor = Intl.NumberFormat;
-    Intl.NumberFormat = function NumberFormat(
-      locale?: string | string[] | Intl.LocalesArgument,
-      options?: Intl.NumberFormatOptions,
-    ) {
-      locales.push(locale);
-      return new ctor(narrow(locale), options);
-    } as unknown as typeof Intl.NumberFormat;
-
-    try {
-      // A fresh import, because the formatter is built once at module scope.
-      const { fmtCost: fresh } = await import("./usage-format");
-      fresh(1234.5);
-    } finally {
-      Intl.NumberFormat = ctor;
+  it("lays the amount out in the reader's locale, symbol placed by Intl", () => {
+    for (const n of [15, -15, 0, 1234.5, 1234567.891]) {
+      expect(fmtCost(n)).toBe(reader("USD").format(n));
     }
-
-    expect(locales).not.toContain(undefined);
-    expect(locales).toContain("en-US");
   });
 
-  it("reads as USD in a comma-decimal locale, with the sign before the symbol", () => {
-    // What `$15.00` and `-$15.00` are on a `tr-TR` machine now that the digits
-    // are pinned: the locale can no longer turn the fraction into `,00`, and
-    // `Intl` places a negative sign ahead of `$` rather than behind it.
+  it("formats in the currency it is given, with that currency's own digits", () => {
+    expect(fmtCost(2.5, "EUR")).toBe(reader("EUR").format(2.5));
+    expect(fmtCost(2.5, "EUR")).toContain("€");
+    // JPY has no minor unit, so no fraction digits — not USD's two.
+    expect(fmtCost(1234.5, "JPY")).toBe(reader("JPY").format(1234.5));
+  });
+
+  it("takes an explicit number of fraction digits for sub-cent amounts", () => {
+    expect(fmtCost(0.00123, "USD", 4)).toBe(
+      reader("USD", { minimumFractionDigits: 4, maximumFractionDigits: 4 }).format(0.00123),
+    );
+  });
+
+  it("shows a code Intl rejects after the number instead of throwing", () => {
+    // The code came from an agent; the amount is still worth showing.
+    expect(() => fmtCost(1.5, "NOT-A-CODE")).not.toThrow();
+    expect(fmtCost(1.5, "NOT-A-CODE")).toMatch(/ NOT-A-CODE$/);
+  });
+
+  it.runIf(inEnUS)("reads as it always has in en-US, with the sign before the symbol", () => {
     expect(fmtCost(15)).toBe("$15.00");
     expect(fmtCost(-15)).toBe("-$15.00");
-  });
-
-  it("keeps two fraction digits and groups thousands", () => {
     expect(fmtCost(0)).toBe("$0.00");
     expect(fmtCost(0.005)).toBe("$0.01");
+    expect(fmtCost(0.0001)).toBe("$0.00");
     expect(fmtCost(1234.5)).toBe("$1,234.50");
     expect(fmtCost(1234567.891)).toBe("$1,234,567.89");
-  });
-
-  it("rounds a cost too small to show to zero, as it always has", () => {
-    expect(fmtCost(0.0001)).toBe("$0.00");
+    expect(fmtCost(2.5, "EUR")).toBe("€2.50");
+    expect(fmtCost(3, "USD", 0)).toBe("$3");
   });
 });

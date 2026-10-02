@@ -214,9 +214,14 @@ impl OutboundMiddleware<SessionDeltaEnvelope> for AnalyticsMiddleware {
                 st.with_turn(sid, |a| a.note_tool_call(salt, tool_call));
             }
             SessionDelta::UsageUpdated { usage } => st.with_turn(sid, |a| a.note_usage(usage)),
-            SessionDelta::ContextUsage { used, size, cost } => {
-                st.with_turn(sid, |a| a.note_context(*used, *size, *cost))
-            }
+            SessionDelta::ContextUsage {
+                used,
+                size,
+                cost,
+                currency,
+            } => st.with_turn(sid, |a| {
+                a.note_context(*used, *size, *cost, currency.as_deref())
+            }),
             SessionDelta::PermissionRequest { .. } => st.with_turn(
                 sid,
                 super::agent_analytics::TurnAcc::note_permission_request,

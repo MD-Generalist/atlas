@@ -216,9 +216,13 @@ pub struct Usage {
     /// `output_tokens`. Informational; nothing prices it separately yet.
     #[serde(default)]
     pub reasoning_tokens: u64,
-    /// Estimated cumulative cost in USD (native agent; 0 when unknown).
+    /// Cumulative cost as the agent reported it; 0 when unknown.
     #[serde(default)]
     pub cost: f64,
+    /// ISO 4217 code `cost` is in, as ACP's `Cost.currency` gives it. `None`
+    /// when the agent named none, which means USD.
+    #[serde(default)]
+    pub currency: Option<String>,
 }
 
 /// One rolling quota window, as the native engine's account report gives it.
