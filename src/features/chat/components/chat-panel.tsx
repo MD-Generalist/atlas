@@ -1,4 +1,8 @@
 import { lazy, Suspense, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  clearAgentQuestion,
+  notifyAgentSignInRequired,
+} from "@/features/notifications/lib/agent-notifier";
 import { copyText } from "@/lib/clipboard";
 import { matchesAction } from "@/features/keybindings/lib/use-scoped-hotkeys";
 import { useChatStore } from "../stores/chat-store";
@@ -705,6 +709,8 @@ export const ChatPanel = memo(function ChatPanel({ tabId }: ChatPanelProps) {
                 // every subsequent bind failure for this tab+agent.
                 onDismissed: () => reportedBindFailures.delete(key),
               });
+              // The dialog is up; if the user is away it is also a banner.
+              notifyAgentSignInRequired(tabId, at);
             } else if (action === "silent") {
               // The composer is already showing why (`AiGrantBar`, and "No
               // models" in the picker). A toast would be a third copy of a
@@ -1446,7 +1452,10 @@ export const ChatPanel = memo(function ChatPanel({ tabId }: ChatPanelProps) {
             <SessionElicitation
               key={pendingElicitation.requestId}
               pending={pendingElicitation}
-              onClose={() => clearElicitation(tabId)}
+              onClose={() => {
+                clearAgentQuestion(tabId, pendingElicitation.requestId);
+                clearElicitation(tabId);
+              }}
             />
           )}
           {/* Bottom fade lives in the transcript; the centered floating

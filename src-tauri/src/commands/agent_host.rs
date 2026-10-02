@@ -2,7 +2,7 @@
 //!
 //! [`AgentHost`] is what `commands/agents.rs` talks to. It owns the ported
 //! [`AgentManager`], the [`DeltaProjector`] that turns thread events into the
-//! frozen wire, and the two pieces of bookkeeping the ported stack deliberately
+//! session-delta wire, and the two pieces of bookkeeping the ported stack deliberately
 //! does not do:
 //!
 //! 1. **Identity.** The frontend has always addressed an agent by a per-spawn

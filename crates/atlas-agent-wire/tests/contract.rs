@@ -1,11 +1,13 @@
-//! The wire is what `docs/agents/delta-wire-contract.md` says it is.
+//! The authority on the session-delta wire's shapes (the TS mirror is
+//! `tests/wire-shape-contract.test.ts`).
 //!
-//! The contract doc is not a description of this code — it is the agreement the
-//! Timeline, the capture record, analytics, transcripts, memory ingest and the
-//! whole chat UI were written against, and the port's top risk is this enum
-//! drifting away from it (research §D12-1). So the test reads the document and
-//! compares it to the real serialisation, in both directions: a variant or
-//! field that exists in one and not the other fails here.
+//! The wire is additive-only: the Timeline, the capture record, analytics,
+//! transcripts, memory ingest and the whole chat UI pattern-match its concrete
+//! variants and fields. Adding an optional field or variant means updating this
+//! file in the same change as its consumers; renaming, removing or re-meaning
+//! one is a breaking change that updates every consumer at once. This test
+//! spells the contract out and compares it to the real serialisation, in both
+//! directions: a variant or field that exists in one and not the other fails.
 //!
 //! Three layers, each closing a way the previous version could pass while the
 //! wire drifted:
@@ -16,7 +18,7 @@
 //! - [`golden`] pins every sample's full JSON, so a field changing *type*
 //!   (`u64` → `String`, `f64` → integer, an object becoming an array) fails,
 //!   not just a field being renamed.
-//! - [`expected`] is the frozen table of kinds and field names.
+//! - [`expected`] is the table of kinds and field names.
 //!
 //! What still needs a human: a new variant's arm must be matched by a new
 //! sample, golden and table row. The count check in
@@ -126,8 +128,8 @@ fn contract_kind(delta: &SessionDelta) -> &'static str {
     }
 }
 
-/// Where the prose version of the contract would live. It is cited as frozen
-/// in `CLAUDE.md`, but is not in the repository at the time of writing.
+/// Where a prose version of the contract would live. It was once cited as the
+/// authority, but is a git-ignored working note, not in the repository.
 const CONTRACT_DOC: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../docs/agents/delta-wire-contract.md"
@@ -559,8 +561,8 @@ fn every_variant_serializes_to_its_golden_json() {
 
 /// The document and this test are the same contract, said twice.
 ///
-/// Ignored by default, loudly: `docs/agents/delta-wire-contract.md` is cited
-/// as the frozen contract but does not exist in the repository, so there is
+/// Ignored by default, loudly: `docs/agents/delta-wire-contract.md` is a
+/// git-ignored working note that does not exist in the repository, so there is
 /// nothing to compare against. The earlier version returned early when the
 /// file was missing, which read as a pass. Once the doc is checked in, drop
 /// the `#[ignore]`; `cargo test -- --ignored` runs it meanwhile, and fails

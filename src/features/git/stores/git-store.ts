@@ -13,6 +13,11 @@ export interface AutoFetchStatus {
   lastFetchedAt: number | null;
   /** Why the latest automatic fetch failed; null once one succeeds. */
   lastError: string | null;
+  /** Commits the current branch is behind its upstream, measured right after
+   *  a successful automatic fetch; absent on every other status. */
+  behind?: number | null;
+  /** The upstream head at that moment (see `behind`). */
+  remoteHead?: string | null;
 }
 
 export interface GitFileStatus {

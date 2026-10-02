@@ -1,21 +1,23 @@
-//! The session-delta wire types — FROZEN (`docs/agents/delta-wire-contract.md`).
+//! The session-delta wire types — additive-only.
 //!
 //! These shapes are what `CaptureMiddleware`, the analytics/transcript/memory
-//! middleware and the whole chat UI pattern-match on. They may not drift during
-//! the ACP port; if a stack cannot produce one verbatim, the port stops and
-//! every consumer is updated in the same change (research §D12-1).
+//! middleware and the whole chat UI pattern-match on, by concrete variant and
+//! field. That is why they are not edited casually:
 //!
-//! They live in their own crate for one reason: **both ACP stacks have to
-//! produce them.** The old stack is on `agent-client-protocol` 1.3, the ported
-//! one on 2.0, and the two can never share a Cargo graph — the protocol crate
-//! pins its schema crate exactly (`=1.4.0` / `=1.5.0`). A wire type defined in
-//! either stack is therefore unreachable from the other. Defined here, it is
-//! one type for both, so `CaptureMiddleware` keeps matching on the same enum no
-//! matter which stack produced the event.
+//! - Adding an optional field or a new variant is ordinary work. Do it in the
+//!   same change as its consumers, plus `tests/contract.rs` and
+//!   `tests/wire-shape-contract.test.ts`.
+//! - Renaming or removing a variant or field, or changing what a field means,
+//!   is a breaking change: every consumer (chat store / UI, capture recorder,
+//!   analytics/transcript/memory) is updated in the same change.
 //!
-//! These shapes are the FROZEN wire contract (`docs/agents/delta-wire-contract.md`
-//! and `src/types/agents.ts`). The old `atlas-agents` crate re-exported them;
-//! it is gone, and `atlas-agent-delta` is where they are projected now.
+//! The contract tests are the authority; the TS mirror is `src/types/agents.ts`.
+//!
+//! They live in their own crate because the protocol crates pin their schema
+//! crate exactly, so a wire type defined in one stack was unreachable from
+//! another (the old 1.3 stack and the 2.0 port coexisted for a day). It stays
+//! separate so the wire names no protocol version; `atlas-agent-delta` is where
+//! thread events are projected onto it.
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -190,7 +192,7 @@ pub struct Message {
     /// snapshots so a reopened conversation shows what was attached; before
     /// this field existed they were flattened to the text `` `Image` ``.
     /// Omitted when empty, so every message without one serializes exactly as
-    /// it did before — the frozen delta stream never sends user messages.
+    /// it did before — the delta stream never sends user messages.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub images: Vec<MessageImage>,
     pub timestamp: DateTime<Utc>,

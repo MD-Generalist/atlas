@@ -94,10 +94,10 @@ export interface AppSettings {
    *  (ADR-0014). Off: new sessions are not offered the tools and every call
    *  in a running one is refused. Default ON. */
   agentOrgAccess: boolean;
-  /** Terminal notifications master switch: a command finishing (failed, or
-   *  longer than `terminalNotifyMinDurationMs`) or wanting input raises an
-   *  in-app notification, a toast when the terminal is off screen, and a
-   *  native notification when Atlas is not the front app. */
+  /** "Command finished" — a successful command longer than
+   *  `terminalNotifyMinDurationMs` raises a notification. (Once the terminal
+   *  master switch; `notificationsEnabled` is the master now, and this is the
+   *  per-kind switch the catalog names for `terminal-done`.) */
   terminalNotifications: boolean;
   /** A successful command shorter than this never notifies. */
   terminalNotifyMinDurationMs: number;
@@ -105,33 +105,44 @@ export interface AppSettings {
   terminalNotifyOnFailure: boolean;
   /** Notify when a command wants input (password prompt, bell, OSC 9/777). */
   terminalNotifyOnAttention: boolean;
-  /** Also raise a macOS notification when the window is not focused. */
+  /** Legacy (pre-tier) terminal OS-banner switch. Read once by the migration
+   *  into the `notify*Native` tier keys; nothing reads it afterwards. */
   terminalNotifyNative: boolean;
-  /** Play a short chime with the notification. */
+  /** Legacy (pre-tier) terminal sound switch — migrated like the one above. */
   terminalNotifySound: boolean;
+  /** Notifications master switch: off silences every kind except the
+   *  not-switchable ones (Atlas signed out). */
+  notificationsEnabled: boolean;
+  /** Per urgency tier (`NotificationTier`): allow the OS banner (still only
+   *  when away) and allow sound. Every catalog kind follows its tier. */
+  notifyNeedsYouNative: boolean;
+  notifyNeedsYouSound: boolean;
+  notifyOutcomeNative: boolean;
+  notifyOutcomeSound: boolean;
+  notifyWarningNative: boolean;
+  notifyWarningSound: boolean;
+  notifyTeamNative: boolean;
+  notifyTeamSound: boolean;
+  /** An agent turn that finished faster than this stays quiet. 0 = off.
+   *  Failures and requests for the user ignore it. */
+  notifyAgentMinDurationMs: number;
+  /** Allow once / Deny on permission banners (ATL-381 reads this). */
+  notifyPermissionActions: boolean;
+  /** The legacy terminal and agent choices have been folded into the keys
+   *  above (`migrateNotificationSettings`). */
+  notificationsMigrated: boolean;
+  /** Notification kind ids switched off in Settings (one switch per kind that
+   *  is not `locked`). Unknown ids are ignored. */
+  notifyDisabledKinds: string[];
+  /** The earlier per-kind switches have been folded into `notifyDisabledKinds`
+   *  (`migrateNotificationSettings`). */
+  notifyKindsMigrated: boolean;
 }
 
-/** The terminal notifier's view of settings — flat keys on the wire (the
- *  Rust side writes top-level `[settings]` keys only), grouped here. */
-export interface TerminalNotificationPrefs {
-  enabled: boolean;
-  minDurationMs: number;
-  onFailure: boolean;
-  onAttention: boolean;
-  native: boolean;
-  sound: boolean;
-}
-
-export function terminalNotificationPrefs(s: AppSettings): TerminalNotificationPrefs {
-  return {
-    enabled: s.terminalNotifications,
-    minDurationMs: s.terminalNotifyMinDurationMs,
-    onFailure: s.terminalNotifyOnFailure,
-    onAttention: s.terminalNotifyOnAttention,
-    native: s.terminalNotifyNative,
-    sound: s.terminalNotifySound,
-  };
-}
+/** Settings keys holding a plain on/off — the tier banner and sound switches name these. */
+export type BooleanSettingKey = {
+  [K in keyof AppSettings]: AppSettings[K] extends boolean ? K : never;
+}[keyof AppSettings];
 
 export const DEFAULT_SETTINGS: AppSettings = {
   autoAddAtlasGitignore: true,
@@ -161,4 +172,18 @@ export const DEFAULT_SETTINGS: AppSettings = {
   terminalNotifyOnAttention: true,
   terminalNotifyNative: true,
   terminalNotifySound: false,
+  notificationsEnabled: true,
+  notifyNeedsYouNative: true,
+  notifyNeedsYouSound: true,
+  notifyOutcomeNative: true,
+  notifyOutcomeSound: true,
+  notifyWarningNative: false,
+  notifyWarningSound: false,
+  notifyTeamNative: true,
+  notifyTeamSound: true,
+  notifyAgentMinDurationMs: 0,
+  notifyPermissionActions: true,
+  notificationsMigrated: false,
+  notifyDisabledKinds: [],
+  notifyKindsMigrated: false,
 };
