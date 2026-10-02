@@ -128,6 +128,9 @@ pub enum SessionDelta {
         used: u64,
         size: u64,
         cost: f64,
+        /// ISO 4217 code `cost` is in; `None` means USD, as on `Usage`.
+        #[serde(default)]
+        currency: Option<String>,
     },
     /// Context compaction is running (`active = true`) or just finished.
     Compaction {

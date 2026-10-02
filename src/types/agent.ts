@@ -297,7 +297,7 @@ export interface ChatSession {
   /** Latest ACP context-window gauge (Claude Code / Codex) from `context_usage`
    *  deltas — `used`/`size` tokens + cost. Snapshotted onto the trailing
    *  assistant message at turn end (ACP agents have no per-turn in/out split). */
-  contextUsage?: { used: number; size: number; cost: number };
+  contextUsage?: { used: number; size: number; cost: number; currency?: string | null };
   /** True while the native agent is compacting its context window. */
   compacting?: boolean;
   /** The account quota the native engine reports (`rate_limits` deltas).
@@ -414,7 +414,7 @@ export interface ChatMessage {
    *  assistant message at turn end. These agents can't report a per-turn
    *  input/output split, so the card shows this `used`/`size` context gauge in
    *  the same slot the native agent uses for `usage`. */
-  contextUsage?: { used: number; size: number; cost: number };
+  contextUsage?: { used: number; size: number; cost: number; currency?: string | null };
   /** Adaptive per-turn footer, frozen onto the trailing assistant message at
    *  turn_finished (mirrors `usage` — never set mid-stream). Drives the
    *  TurnSummaryCard's files-read/modified accordion + action buttons. */

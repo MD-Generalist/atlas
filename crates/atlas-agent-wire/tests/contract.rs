@@ -69,7 +69,7 @@ fn expected() -> BTreeMap<String, BTreeSet<String>> {
         ),
         ("title_updated", &["title"]),
         ("config_options_updated", &["config_options"]),
-        ("context_usage", &["used", "size", "cost"]),
+        ("context_usage", &["used", "size", "cost", "currency"]),
         ("compaction", &["active"]),
         ("compression_saved", &["saved_tokens"]),
         ("rate_limits", &["primary", "secondary", "plan_type"]),
@@ -240,6 +240,7 @@ fn samples() -> Vec<SessionDelta> {
                 cache_read_tokens: 2,
                 reasoning_tokens: 3,
                 cost: 0.5,
+                currency: Some("EUR".into()),
             },
         },
         SessionDelta::ElicitationRequested {
@@ -259,6 +260,7 @@ fn samples() -> Vec<SessionDelta> {
             used: 100,
             size: 200_000,
             cost: 0.25,
+            currency: None,
         },
         SessionDelta::Compaction { active: true },
         SessionDelta::CompressionSaved { saved_tokens: 42 },
@@ -434,6 +436,7 @@ fn golden() -> BTreeMap<&'static str, serde_json::Value> {
                     "cache_read_tokens": 2,
                     "reasoning_tokens": 3,
                     "cost": 0.5,
+                    "currency": "EUR",
                 },
             }),
         ),
@@ -458,7 +461,7 @@ fn golden() -> BTreeMap<&'static str, serde_json::Value> {
         ),
         (
             "context_usage",
-            json!({ "kind": "context_usage", "used": 100, "size": 200_000, "cost": 0.25 }),
+            json!({ "kind": "context_usage", "used": 100, "size": 200_000, "cost": 0.25, "currency": null }),
         ),
         (
             "compaction",

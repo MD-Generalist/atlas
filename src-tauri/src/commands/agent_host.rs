@@ -1294,6 +1294,7 @@ impl AgentHost {
                 cache_read_tokens: usage.cache_read_tokens,
                 reasoning_tokens: usage.reasoning_tokens,
                 cost: thread.cost().map(|cost| cost.amount).unwrap_or(0.0),
+                currency: thread.cost().map(|cost| cost.currency.to_string()),
             })
             .unwrap_or_default();
         let snapshot = SessionSnapshot {
