@@ -329,6 +329,11 @@ pub struct AppSettings {
     /// What switching agents does to a chat with a conversation in it.
     #[serde(default)]
     pub agent_switch_behavior: AgentSwitchBehavior,
+    /// Before switching agents on a chat with a conversation, send the agent
+    /// being left `/remember` (when it advertises that command) and wait for
+    /// it. Off by default: it costs the user a turn.
+    #[serde(default)]
+    pub remember_before_switch: bool,
     /// Inline Git blame in the code editor. Default ON; when off the editor
     /// doesn't even load the extension (no blame IPC).
     #[serde(default = "default_true")]
@@ -488,6 +493,7 @@ impl Default for AppSettings {
             legacy_atlas_theme: None,
             adaptive_suggestions: AdaptiveSuggestions::default(),
             agent_switch_behavior: AgentSwitchBehavior::default(),
+            remember_before_switch: false,
             git_blame_inline: true,
             git_auto_fetch: true,
             auto_update: true,
@@ -637,6 +643,13 @@ const SETTINGS_DOCS: &[(&str, &str)] = &[
          # switches in place and starts over. (default: \"reset\")",
     ),
     (
+        "rememberBeforeSwitch",
+        "# Before switching agents on a chat with a conversation, send the agent\n\
+         # being left /remember (when it offers that command) and wait for it\n\
+         # to save what it learned to shared memory. Costs one turn per switch.\n\
+         # (default: false)",
+    ),
+    (
         "gitBlameInline",
         "# Inline git blame — a dim author/age/summary annotation trailing the\n\
          # active line in the editor. (default: true)",
@@ -724,13 +737,13 @@ const SETTINGS_DOCS: &[(&str, &str)] = &[
     ),
     (
         "notificationsEnabled",
-        "# Notifications master switch. Off silences every notification except
+        "# Notifications master switch. Off silences every notification except\n\
          # sign-in problems, which always show. (default: true)",
     ),
     (
         "notifyNeedsYouNative",
-        "# OS banner for notifications that need you — a permission request, a
-         # question, a terminal asking for input. Shown only when you are away.
+        "# OS banner for notifications that need you — a permission request, a\n\
+         # question, a terminal asking for input. Shown only when you are away.\n\
          # (default: true)",
     ),
     (
@@ -739,7 +752,7 @@ const SETTINGS_DOCS: &[(&str, &str)] = &[
     ),
     (
         "notifyOutcomeNative",
-        "# OS banner when an agent turn or terminal command finishes or fails.
+        "# OS banner when an agent turn or terminal command finishes or fails.\n\
          # Shown only when you are away. (default: true)",
     ),
     (
@@ -748,7 +761,7 @@ const SETTINGS_DOCS: &[(&str, &str)] = &[
     ),
     (
         "notifyWarningNative",
-        "# OS banner for warnings — context nearly full, rate limited, retrying,
+        "# OS banner for warnings — context nearly full, rate limited, retrying,\n\
          # agent stopped. (default: false)",
     ),
     (
@@ -757,7 +770,7 @@ const SETTINGS_DOCS: &[(&str, &str)] = &[
     ),
     (
         "notifyTeamNative",
-        "# OS banner for Chat direct messages and @mentions. Shown only when you
+        "# OS banner for Chat direct messages and @mentions. Shown only when you\n\
          # are away. (default: true)",
     ),
     (
@@ -766,12 +779,12 @@ const SETTINGS_DOCS: &[(&str, &str)] = &[
     ),
     (
         "notifyPermissionActions",
-        "# Show Allow once / Deny buttons on permission banners. Off: the banner
+        "# Show Allow once / Deny buttons on permission banners. Off: the banner\n\
          # only opens the session. (default: true)",
     ),
     (
         "notificationsMigrated",
-        "# Set once Atlas has folded your earlier terminal and agent notification
+        "# Set once Atlas has folded your earlier terminal and agent notification\n\
          # choices into the keys above. Leave it alone. (default: false)",
     ),
     (
@@ -1072,6 +1085,7 @@ pub struct SettingsPatch {
     pub app_icon: Option<String>,
     pub adaptive_suggestions: Option<AdaptiveSuggestions>,
     pub agent_switch_behavior: Option<AgentSwitchBehavior>,
+    pub remember_before_switch: Option<bool>,
     pub git_blame_inline: Option<bool>,
     pub git_auto_fetch: Option<bool>,
     pub auto_update: Option<bool>,
@@ -1147,6 +1161,9 @@ impl SettingsPatch {
         }
         if let Some(v) = self.agent_switch_behavior {
             settings.agent_switch_behavior = v;
+        }
+        if let Some(v) = self.remember_before_switch {
+            settings.remember_before_switch = v;
         }
         if let Some(v) = self.git_blame_inline {
             settings.git_blame_inline = v;
@@ -1265,6 +1282,7 @@ impl SettingsPatch {
         set_bool!(auto_update, "autoUpdate");
         set_bool!(curated_plugin_sync, "curatedPluginSync");
         set_bool!(instruction_sync, "instructionSync");
+        set_bool!(remember_before_switch, "rememberBeforeSwitch");
         set_bool!(enter_to_send, "enterToSend");
         set_bool!(agent_ui_navigation, "agentUiNavigation");
         set_bool!(agent_org_access, "agentOrgAccess");
@@ -2701,6 +2719,7 @@ someFutureKey = \"left alone\"
             app_icon: Some("light".to_string()),
             adaptive_suggestions: Some(AdaptiveSuggestions::Off),
             agent_switch_behavior: Some(AgentSwitchBehavior::Handoff),
+            remember_before_switch: Some(!defaults.remember_before_switch),
             git_blame_inline: Some(!defaults.git_blame_inline),
             git_auto_fetch: Some(!defaults.git_auto_fetch),
             auto_update: Some(!defaults.auto_update),
@@ -3192,6 +3211,21 @@ red = "#ee0000"
 
         assert_eq!(fs::read_to_string(&path).unwrap(), "schemaVersion = 1\n");
         assert!(temp_files_beside(&path).is_empty());
+    }
+
+    /// A comment line that misses its `\n\` continuation keeps the source's
+    /// indentation, so the generated `config.toml` shows it pushed right of the
+    /// rest. Valid TOML, so nothing else notices.
+    #[test]
+    fn every_settings_docs_line_starts_with_a_hash() {
+        for (key, comment) in SETTINGS_DOCS {
+            for line in comment.lines() {
+                assert!(
+                    line.starts_with('#'),
+                    "`{key}` has a comment line not starting with `#`: {line:?}"
+                );
+            }
+        }
     }
 
     /// The generated file is the schema documentation now — the skill points
