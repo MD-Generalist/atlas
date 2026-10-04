@@ -9,11 +9,11 @@ on:
       version:
         description: 'Release version (leave empty to detect or read from package.json)'
         required: false
-        default: '0.3.4'
+        default: ''
       tag:
         description: 'Release tag name (leave empty to match git tag or alpha-<version>)'
         required: false
-        default: 'alpha-0.3.4'
+        default: ''
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -216,7 +216,10 @@ jobs:
           [ -d "src-tauri/target" ] && SEARCH_DIRS+=("src-tauri/target")
           # Copy standalone tarball
           cp dist/release-linux/*.tar.gz dist/artifacts/
-          # Copy Arch Linux package
+          # Copy Arch Linux package. `!debug` in the PKGBUILD stops makepkg
+          # splitting out an empty debug package; drop one if it ever does, and
+          # keep the plain `cp` so a missing package still fails the job.
+          rm -f dist/release-linux/*-debug-*.pkg.tar.zst
           cp dist/release-linux/*.pkg.tar.zst dist/artifacts/
           # Copy AUR PKGBUILD for convenience
           cp dist/release-linux/aur-tryatlas-bin/PKGBUILD dist/artifacts/PKGBUILD-tryatlas-bin
@@ -230,12 +233,11 @@ jobs:
           if ! ls dist/artifacts/*.rpm >/dev/null 2>&1; then
             find "${SEARCH_DIRS[@]}" -type f -name "*.rpm" -exec cp -t dist/artifacts/ {} +
           fi
-          # Copy AppImage from Tauri bundles
+          # Copy AppImage from Tauri bundles and normalize name to tryatlas package convention
           find "${SEARCH_DIRS[@]}" -type f -name "*.AppImage" -exec cp -t dist/artifacts/ {} +
-          # Provide both Atlas and tryatlas AppImage aliases
           for appimage in dist/artifacts/*Atlas*.AppImage; do
             if [ -f "$appimage" ]; then
-              cp "$appimage" "${appimage//Atlas/tryatlas}"
+              mv "$appimage" "${appimage//Atlas/tryatlas}"
             fi
           done
 
