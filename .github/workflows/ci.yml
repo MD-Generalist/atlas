@@ -57,17 +57,19 @@ env:
   #
   # Cache budget: GitHub gives the repo 10 GB, and it sat at ~9.7 GB before
   # sccache. Going over is not an error, it is least-recently-used eviction,
-  # i.e. the caches quietly thrash each other. So only pushes to `main` and the
-  # version branches write — the same scope rust-cache's `save-if` uses below.
-  # A pull request reads its base branch's entries and writes none: a PR that
-  # edits the engine recompiles what it touched on each push, which is the
-  # price of not letting every open PR park its own copy of the engine in the
-  # budget. Keys are content hashes of each rustc invocation, so jobs on the
-  # same OS that compile a crate identically share one entry rather than
-  # storing it per job. To purge everything sccache wrote, change
+  # i.e. the caches quietly thrash each other. So only `main` and the version
+  # branches write, from a push or a manual run (`cache-write` in the `changes`
+  # job decides, and each Rust job's SCCACHE_GHA_RW_MODE and rust-cache
+  # `save-if` follow it). A manual run on any other branch reads but writes
+  # nothing: its entries would be scoped to that branch, which no pull request
+  # can restore from. A pull request reads its base branch's entries and writes
+  # none: a PR that edits the engine recompiles what it touched on each push,
+  # which is the price of not letting every open PR park its own copy of the
+  # engine in the budget. Keys are content hashes of each rustc invocation, so
+  # jobs on the same OS that compile a crate identically share one entry
+  # rather than storing it per job. To purge everything sccache wrote, change
   # SCCACHE_GHA_VERSION.
   SCCACHE_GHA_ENABLED: 'true'
-  SCCACHE_GHA_RW_MODE: ${{ github.event_name == 'push' && 'READ_WRITE' || 'READ_ONLY' }}
 
 # Every job runs on aarch64: the Linux jobs on `ubuntu-24.04-arm`, the app
 # job on `macos-latest` (Apple Silicon). The team develops on Apple Silicon, so
@@ -100,6 +102,7 @@ jobs:
       app: ${{ steps.plan.outputs.app }}
       engine-dialect: ${{ steps.plan.outputs.engine-dialect }}
       crates: ${{ steps.plan.outputs.crates }}
+      cache-write: ${{ steps.cache.outputs.write }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -116,6 +119,23 @@ jobs:
         # RUSTUP_TOOLCHAIN overrides rust-toolchain.toml, which would otherwise
         # make rustup download the pinned toolchain just to read manifests.
         run: node scripts/ci-affected.mjs --github
+      # Which runs may write caches (see "Cache budget" above). A push already
+      # only reaches `main` and the version branches; a manual run can be on
+      # any branch, and expressions have no regex, hence a step.
+      - name: Cache policy
+        id: cache
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref_name }}
+        run: |
+          write=false
+          if [ "$EVENT" = push ]; then
+            write=true
+          elif [ "$EVENT" = workflow_dispatch ] &&
+            { [ "$REF" = main ] || [[ "$REF" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; }; then
+            write=true
+          fi
+          echo "write=$write" >> "$GITHUB_OUTPUT"
 
   frontend:
     name: frontend
@@ -177,6 +197,8 @@ jobs:
       # Set per job, never workflow-wide: with no sccache on PATH every cargo
       # invocation fails, so only a job that runs sccache-action may set it.
       RUSTC_WRAPPER: sccache
+      # Per job because workflow-level `env` cannot read `needs`.
+      SCCACHE_GHA_RW_MODE: ${{ needs.changes.outputs.cache-write == 'true' && 'READ_WRITE' || 'READ_ONLY' }}
     steps:
       - uses: actions/checkout@v5
       # The version rust-toolchain.toml pins, with its components (clippy
@@ -189,12 +211,12 @@ jobs:
       # cargo.
       - uses: mozilla-actions/sccache-action@v0.0.11
       # One cargo workspace since #38: the lockfile and the target dir both
-      # live at the repo root, so that is what the cache keys off. Saved from
-      # pushes only, for the cache budget (see SCCACHE_GHA_RW_MODE).
+      # live at the repo root, so that is what the cache keys off. Saved only
+      # when `cache-write` says so, for the cache budget (see the workflow env).
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: .
-          save-if: ${{ github.event_name == 'push' }}
+          save-if: ${{ needs.changes.outputs.cache-write == 'true' }}
       - name: Configure git identity for test repos
         run: |
           git config --global user.name "CI"
@@ -235,6 +257,7 @@ jobs:
     runs-on: ubuntu-24.04-arm
     env:
       RUSTC_WRAPPER: sccache # see the app job
+      SCCACHE_GHA_RW_MODE: ${{ needs.changes.outputs.cache-write == 'true' && 'READ_WRITE' || 'READ_ONLY' }}
     steps:
       - uses: actions/checkout@v5
       # What Tauri links against on Linux; the same set release-linux.yml
@@ -252,7 +275,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: .
-          save-if: ${{ github.event_name == 'push' }}
+          save-if: ${{ needs.changes.outputs.cache-write == 'true' }}
       - name: Clippy (workspace lint table)
         working-directory: src-tauri
         run: cargo clippy --locked --all-targets
@@ -280,6 +303,7 @@ jobs:
     runs-on: ubuntu-24.04-arm
     env:
       RUSTC_WRAPPER: sccache # see the app job
+      SCCACHE_GHA_RW_MODE: ${{ needs.changes.outputs.cache-write == 'true' && 'READ_WRITE' || 'READ_ONLY' }}
     steps:
       - uses: actions/checkout@v5
       - name: Install the pinned Rust toolchain # see the app job
@@ -288,7 +312,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: .
-          save-if: ${{ github.event_name == 'push' }}
+          save-if: ${{ needs.changes.outputs.cache-write == 'true' }}
       # Some of the vendored suites build scratch git repositories; same reason
       # as in `crates`.
       - name: Configure git identity for test repos
@@ -337,6 +361,7 @@ jobs:
     runs-on: ubuntu-24.04-arm
     env:
       RUSTC_WRAPPER: sccache # see the app job
+      SCCACHE_GHA_RW_MODE: ${{ needs.changes.outputs.cache-write == 'true' && 'READ_WRITE' || 'READ_ONLY' }}
     strategy:
       # Report every failing crate in one run instead of stopping at the first.
       fail-fast: false
@@ -353,7 +378,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: ${{ matrix.crate == 'atlas-kb-server' && 'crates/atlas-kb-server' || '.' }}
-          save-if: ${{ github.event_name == 'push' }}
+          save-if: ${{ needs.changes.outputs.cache-write == 'true' }}
       # Several suites build real git repositories in a tempdir, and `git
       # commit` refuses to run without an identity. Set for every crate so
       # adding such a test to another crate doesn't fail mysteriously.

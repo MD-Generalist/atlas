@@ -24,12 +24,15 @@ import { readCrateMatrix } from "../scripts/ci-affected.mjs";
  * a second pass with different arguments re-lints the whole ported engine
  * for nothing) and the sccache wiring (a `RUSTC_WRAPPER` with no sccache on
  * PATH fails every cargo call; incremental compilation on makes every sccache
- * lookup a miss without an error).
+ * lookup a miss without an error) and the cache budget (an entry saved from a
+ * ref nothing restores from only evicts entries that something does). The
+ * last describe holds release-linux.yml to the same sccache wiring.
  */
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const CRATES_DIR = path.join(REPO_ROOT, "crates");
 const WORKFLOW = path.join(REPO_ROOT, ".github", "workflows", "ci.yml");
+const RELEASE_LINUX = path.join(REPO_ROOT, ".github", "workflows", "release-linux.yml");
 
 /** Crate directories that are real Cargo packages. */
 function cratesOnDisk(): string[] {
@@ -40,8 +43,8 @@ function cratesOnDisk(): string[] {
 }
 
 /** The workflow's jobs, keyed by job id, each as its raw text block. */
-function jobBlocks(): Map<string, string> {
-  const src = readFileSync(WORKFLOW, "utf8");
+function jobBlocks(workflow = WORKFLOW): Map<string, string> {
+  const src = readFileSync(workflow, "utf8");
   const body = src.slice(src.search(/^jobs:\s*$/m));
   const blocks = new Map<string, string>();
   const heads = [...body.matchAll(/^ {2}([a-z][a-z0-9_-]*):\s*$/gm)];
@@ -178,5 +181,67 @@ describe("CI's Rust jobs", () => {
 
   it("keeps incremental compilation off, which sccache requires", () => {
     expect(src).toMatch(/^ {2}CARGO_INCREMENTAL:\s*0\s*$/m);
+  });
+
+  it("writes caches only where the `changes` job's cache-write allows", () => {
+    // A manual run can be on any branch, and what it saves is scoped to that
+    // branch: no pull request restores it, yet it evicts what they do.
+    const header = src.slice(0, src.search(/^jobs:\s*$/m));
+    expect(header).not.toMatch(/^\s*SCCACHE_GHA_RW_MODE:/m);
+    expect(jobs.get("changes")).toMatch(/^ {6}cache-write: \$\{\{ steps\.cache\.outputs\.write \}\}$/m);
+    const rustJobs = [...jobs].filter(([, block]) => /Swatinem\/rust-cache@/.test(block));
+    expect(rustJobs.length).toBeGreaterThanOrEqual(4);
+    for (const [id, block] of rustJobs) {
+      const saveIf = block.match(/^\s*save-if:\s*(.*)$/m)?.[1];
+      expect({ id, saveIf }).toEqual({
+        id,
+        saveIf: "${{ needs.changes.outputs.cache-write == 'true' }}",
+      });
+      const rwMode = block.match(/^\s*SCCACHE_GHA_RW_MODE:\s*(.*)$/m)?.[1];
+      expect({ id, rwMode }).toEqual({
+        id,
+        rwMode: "${{ needs.changes.outputs.cache-write == 'true' && 'READ_WRITE' || 'READ_ONLY' }}",
+      });
+    }
+  });
+});
+
+describe("release-linux's Rust build", () => {
+  const src = readFileSync(RELEASE_LINUX, "utf8");
+  const header = src.slice(0, src.search(/^jobs:\s*$/m));
+  const jobs = [...jobBlocks(RELEASE_LINUX)];
+
+  it("has the single job that makes a workflow-wide RUSTC_WRAPPER safe", () => {
+    // ci.yml forbids it workflow-wide; here it is fine only while one job,
+    // which installs sccache first, is all there is.
+    expect(header).toMatch(/^ {2}RUSTC_WRAPPER:\s*sccache\s*$/m);
+    expect(jobs.map(([id]) => id)).toEqual(["build-linux"]);
+  });
+
+  it("installs sccache before anything runs cargo", () => {
+    const steps = stepsOf(jobs[0][1]);
+    const sccache = steps.findIndex((s) => s.uses?.startsWith("mozilla-actions/sccache-action@"));
+    const firstCargo = steps.findIndex(
+      (s) =>
+        s.uses?.startsWith("Swatinem/rust-cache@") ||
+        /\bcargo |build:app/.test(s.run ?? ""),
+    );
+    expect(sccache).toBeGreaterThanOrEqual(0);
+    expect(firstCargo).toBeGreaterThan(sccache);
+  });
+
+  it("keeps incremental compilation off, which sccache requires", () => {
+    expect(header).toMatch(/^ {2}CARGO_INCREMENTAL:\s*0\s*$/m);
+  });
+
+  it("writes caches only from a manual run on the default branch", () => {
+    // A release is a tag push, and no later release can restore a tag's
+    // entries; the default branch's are what a tag run reads.
+    const rwMode = header.match(/^ {2}SCCACHE_GHA_RW_MODE:\s*(.*)$/m)?.[1] ?? "";
+    expect(rwMode).toContain("github.event_name == 'workflow_dispatch'");
+    expect(rwMode).toContain("github.event.repository.default_branch");
+    expect(jobs[0][1]).toMatch(
+      /^\s*save-if: \$\{\{ env\.SCCACHE_GHA_RW_MODE == 'READ_WRITE' \}\}$/m,
+    );
   });
 });
