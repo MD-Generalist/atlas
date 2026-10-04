@@ -159,6 +159,10 @@ pub fn notify_settings_changed(app: &AppHandle, settings: &AppSettings, generati
     {
         state.apply_setting(app, settings.instruction_sync);
     }
+    // 7. re-sync the keep-awake manager with the live setting.
+    if let Some(keep_awake) = app.try_state::<Arc<crate::keep_awake::KeepAwakeManager>>() {
+        keep_awake.set_enabled(settings.keep_awake_while_running);
+    }
 }
 
 /// The gate for the vendored engine's curated-plugin sync

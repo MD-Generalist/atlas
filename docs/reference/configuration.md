@@ -237,6 +237,7 @@ wrote; `toml_edit` just preserves whatever comments are already there.
 | `agentSwitchBehavior` | `"new-tab"` \| `"handoff"` \| `"reset"` | `"reset"` | exactly one of these three strings. An empty chat always switches in place and a running one always gets a new tab, whatever this says |
 | `gitBlameInline` | boolean | `true` | — |
 | `gitAutoFetch` | boolean | `true` | — |
+| `keepAwakeWhileRunning` | boolean | `false` | no effect on Windows |
 | `autoUpdate` | boolean | `true` | — |
 | `curatedPluginSync` | boolean | `false` | — |
 | `instructionSync` | boolean | `false` | — . See [Mirrored instructions](#mirrored-instructions-instructionsync) |
