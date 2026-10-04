@@ -214,9 +214,14 @@ impl OutboundMiddleware<SessionDeltaEnvelope> for AnalyticsMiddleware {
                 st.with_turn(sid, |a| a.note_tool_call(salt, tool_call));
             }
             SessionDelta::UsageUpdated { usage } => st.with_turn(sid, |a| a.note_usage(usage)),
-            SessionDelta::ContextUsage { used, size, cost } => {
-                st.with_turn(sid, |a| a.note_context(*used, *size, *cost))
-            }
+            SessionDelta::ContextUsage {
+                used,
+                size,
+                cost,
+                currency,
+            } => st.with_turn(sid, |a| {
+                a.note_context(*used, *size, *cost, currency.as_deref())
+            }),
             SessionDelta::PermissionRequest { .. } => st.with_turn(
                 sid,
                 super::agent_analytics::TurnAcc::note_permission_request,
@@ -2214,7 +2219,7 @@ impl atlas_native_agent::engine::auth::AtlasTokenSource for AccountTokenSource {
 
 /// Where an agent update is, as the webview hears it on `atlas:agents`
 /// (`{kind: "agent_update", plugin_id, version, phase, error?}`). Not a
-/// session delta — that wire is frozen, and an update belongs to a plugin,
+/// session delta — that wire is per-session, and an update belongs to a plugin,
 /// not to one session.
 #[derive(Clone, Copy)]
 pub(crate) enum AgentUpdatePhase<'a> {

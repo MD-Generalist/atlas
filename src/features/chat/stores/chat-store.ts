@@ -2408,6 +2408,7 @@ function applyDeltaToDraft(s: ChatDraft, env: AgentDelta): void {
         used: env.used,
         size: env.size,
         cost: env.cost,
+        currency: env.currency,
       };
       // Persist keyed by the stable transcript id so the gauge survives a
       // session switch (messages reload from disk) and an app restart (store

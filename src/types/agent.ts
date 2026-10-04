@@ -297,7 +297,7 @@ export interface ChatSession {
   /** Latest ACP context-window gauge (Claude Code / Codex) from `context_usage`
    *  deltas — `used`/`size` tokens + cost. Snapshotted onto the trailing
    *  assistant message at turn end (ACP agents have no per-turn in/out split). */
-  contextUsage?: { used: number; size: number; cost: number };
+  contextUsage?: { used: number; size: number; cost: number; currency?: string | null };
   /** True while the native agent is compacting its context window. */
   compacting?: boolean;
   /** The account quota the native engine reports (`rate_limits` deltas).
@@ -414,7 +414,7 @@ export interface ChatMessage {
    *  assistant message at turn end. These agents can't report a per-turn
    *  input/output split, so the card shows this `used`/`size` context gauge in
    *  the same slot the native agent uses for `usage`. */
-  contextUsage?: { used: number; size: number; cost: number };
+  contextUsage?: { used: number; size: number; cost: number; currency?: string | null };
   /** Adaptive per-turn footer, frozen onto the trailing assistant message at
    *  turn_finished (mirrors `usage` — never set mid-stream). Drives the
    *  TurnSummaryCard's files-read/modified accordion + action buttons. */
@@ -470,8 +470,8 @@ export interface ToolCallDisplay {
   /**
    * Epoch ms this call was FIRST SEEN by the store, stamped client-side.
    *
-   * Not a wire field: the session-delta wire is frozen, and it carries no start
-   * time (`duration` is only ever `null` — see `toChatToolCall`). A `tool_call`
+   * Not a wire field: the session-delta wire carries no start
+   * time today (an additive field would be the way to add one; `duration` is only ever `null` — see `toChatToolCall`). A `tool_call`
    * delta is pushed the moment the agent announces the call, so first-sight is
    * the start to within one IPC hop, which is what the live elapsed figure on a
    * running block needs and all it needs.

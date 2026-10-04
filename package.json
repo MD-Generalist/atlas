@@ -1,6 +1,6 @@
 {
   "name": "atlas",
-  "version": "0.3.4",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "types": "dist/types/index.d.ts",
@@ -27,6 +27,7 @@
     "icons:render": "node scripts/app-icons.mjs",
     "icons:check": "node scripts/app-icons.mjs --check",
     "test:rust": "bash scripts/test-rust.sh",
+    "ci:local": "bun scripts/ci-local.mjs",
     "test:watch": "vitest",
     "typecheck": "bun run --parallel typecheck:app typecheck:test",
     "typecheck:app": "tsc --noEmit -p tsconfig.json",

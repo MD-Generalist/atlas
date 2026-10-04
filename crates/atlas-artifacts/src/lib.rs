@@ -72,17 +72,30 @@ pub trait TokenSource: Send + Sync + 'static {
 pub const DEFAULT_INGEST_BASE: &str = "https://ingest.tryatlas.cc";
 
 pub fn ingest_base() -> String {
-    std::env::var("ATLAS_INGEST_URL")
-        .ok()
-        .or_else(|| option_env!("ATLAS_INGEST_URL").map(str::to_string))
-        .unwrap_or_else(|| DEFAULT_INGEST_BASE.to_string())
+    resolve_base(
+        std::env::var("ATLAS_INGEST_URL").ok(),
+        option_env!("ATLAS_INGEST_URL"),
+        DEFAULT_INGEST_BASE,
+    )
+}
+
+/// The override ladder — runtime, then compile-time, then the default — with
+/// the environment already read. Pure so the tests never touch the process
+/// environment: `set_var` from parallel test threads races every other read.
+fn resolve_base(runtime: Option<String>, compiled: Option<&str>, default: &str) -> String {
+    runtime
+        .or_else(|| compiled.map(str::to_string))
+        .unwrap_or_else(|| default.to_string())
         .trim_end_matches('/')
         .to_string()
 }
 
 /// `ingest_base()` with the scheme rewritten for a WebSocket dial.
 fn ws_base() -> String {
-    let base = ingest_base();
+    ws_base_for(ingest_base())
+}
+
+fn ws_base_for(base: String) -> String {
     if let Some(rest) = base.strip_prefix("https://") {
         format!("wss://{rest}")
     } else if let Some(rest) = base.strip_prefix("http://") {
@@ -114,12 +127,11 @@ pub fn socket_url_at(ws_base: &str, org_id: &str, project_id: &str) -> String {
 pub const DEFAULT_WEB_BASE: &str = "https://app.tryatlas.cc";
 
 pub fn web_base() -> String {
-    std::env::var("ATLAS_WEB_URL")
-        .ok()
-        .or_else(|| option_env!("ATLAS_WEB_URL").map(str::to_string))
-        .unwrap_or_else(|| DEFAULT_WEB_BASE.to_string())
-        .trim_end_matches('/')
-        .to_string()
+    resolve_base(
+        std::env::var("ATLAS_WEB_URL").ok(),
+        option_env!("ATLAS_WEB_URL"),
+        DEFAULT_WEB_BASE,
+    )
 }
 
 /// The web app's address for one Session — the link a teammate can open.
@@ -129,10 +141,11 @@ pub fn web_base() -> String {
 /// link missing any of them lands on an empty timeline rather than an error,
 /// which is worse than not offering the link at all.
 pub fn session_web_url(org_id: &str, project_id: &str, session_id: &str) -> String {
-    format!(
-        "{}/timeline?org={org_id}&workspace={project_id}&session={session_id}",
-        web_base()
-    )
+    session_web_url_at(&web_base(), org_id, project_id, session_id)
+}
+
+fn session_web_url_at(web_base: &str, org_id: &str, project_id: &str, session_id: &str) -> String {
+    format!("{web_base}/timeline?org={org_id}&workspace={project_id}&session={session_id}")
 }
 
 #[cfg(test)]
@@ -152,11 +165,10 @@ mod tests {
     fn the_websocket_scheme_follows_the_http_one() {
         // A dev pointing at a plaintext local ingest must not get `wss://`,
         // and production must never get `ws://`.
-        std::env::set_var("ATLAS_INGEST_URL", "http://localhost:8787");
-        assert!(ws_base().starts_with("ws://"), "{}", ws_base());
-        std::env::set_var("ATLAS_INGEST_URL", "https://ingest.example.invalid");
-        assert!(ws_base().starts_with("wss://"), "{}", ws_base());
-        std::env::remove_var("ATLAS_INGEST_URL");
+        let plain = ws_base_for("http://localhost:8787".into());
+        assert!(plain.starts_with("ws://"), "{plain}");
+        let tls = ws_base_for("https://ingest.example.invalid".into());
+        assert!(tls.starts_with("wss://"), "{tls}");
     }
 
     #[test]
@@ -164,7 +176,7 @@ mod tests {
         // The web route reads `org`, `workspace` and `session` from the query.
         // Dropping any one lands the reader on an empty board, which is a worse
         // outcome than not offering a link.
-        let url = session_web_url("org_1", "ws_2", "ses_3");
+        let url = session_web_url_at(DEFAULT_WEB_BASE, "org_1", "ws_2", "ses_3");
         assert!(
             url.starts_with("https://app.tryatlas.cc/timeline?"),
             "{url}"
@@ -183,8 +195,23 @@ mod tests {
 
     #[test]
     fn a_trailing_slash_does_not_double_up_in_a_path() {
-        std::env::set_var("ATLAS_INGEST_URL", "https://ingest.example.invalid/");
-        assert_eq!(ingest_base(), "https://ingest.example.invalid");
-        std::env::remove_var("ATLAS_INGEST_URL");
+        let base = resolve_base(
+            Some("https://ingest.example.invalid/".into()),
+            None,
+            DEFAULT_INGEST_BASE,
+        );
+        assert_eq!(base, "https://ingest.example.invalid");
+    }
+
+    #[test]
+    fn the_runtime_override_wins_over_the_compiled_one() {
+        let base = resolve_base(
+            Some("http://localhost:8787".into()),
+            Some("https://compiled.example.invalid"),
+            DEFAULT_INGEST_BASE,
+        );
+        assert_eq!(base, "http://localhost:8787");
+        let base = resolve_base(None, None, DEFAULT_INGEST_BASE);
+        assert_eq!(base, DEFAULT_INGEST_BASE);
     }
 }

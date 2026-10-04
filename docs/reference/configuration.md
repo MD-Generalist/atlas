@@ -101,6 +101,12 @@ uiScale = 1.0
 # Exactly "agent" or "off", nothing else. (default: "agent")
 adaptiveSuggestions = "agent"
 
+# What picking another agent does to a chat that has a conversation:
+# "new-tab" keeps it and opens the new agent in a new tab, "handoff"
+# switches in place and attaches it to the next message, "reset"
+# switches in place and starts over. (default: "reset")
+agentSwitchBehavior = "reset"
+
 # updaterIgnoredVersion: a release you chose to skip in the update
 # prompt. Absent unless one was ignored — TOML has no null, so "unset"
 # means the key simply isn't here. Delete the line to clear it; never
@@ -124,10 +130,9 @@ agentUiNavigation = true
 # call is refused. (default: true)
 agentOrgAccess = true
 
-# Terminal notifications: a command that fails, runs longer than
-# terminalNotifyMinDurationMs, or asks for input raises an in-app
-# notification, a toast when its terminal is off screen and a macOS
-# notification when Atlas is in the background. (default: true)
+# Notify when a command succeeds after running longer than
+# terminalNotifyMinDurationMs. (The master switch for all notifications
+# is notificationsEnabled.) (default: true)
 terminalNotifications = true
 
 # A successful command shorter than this many milliseconds never
@@ -147,6 +152,61 @@ terminalNotifyNative = true
 
 # Play a short chime with terminal notifications. (default: false)
 terminalNotifySound = false
+
+# Notifications master switch. Off silences every notification except
+# sign-in problems, which always show. (default: true)
+notificationsEnabled = true
+
+# OS banner for notifications that need you — a permission request, a
+# question, a terminal asking for input. Shown only when you are away.
+# (default: true)
+notifyNeedsYouNative = true
+
+# Sound for notifications that need you. (default: true)
+notifyNeedsYouSound = true
+
+# OS banner when an agent turn or terminal command finishes or fails.
+# Shown only when you are away. (default: true)
+notifyOutcomeNative = true
+
+# Sound for finished / failed notifications. (default: true)
+notifyOutcomeSound = true
+
+# OS banner for warnings — context nearly full, rate limited, retrying,
+# agent stopped. (default: false)
+notifyWarningNative = false
+
+# Sound for warnings. (default: false)
+notifyWarningSound = false
+
+# OS banner for Chat direct messages and @mentions. Shown only when you
+# are away. (default: true)
+notifyTeamNative = true
+
+# Sound for Chat notifications. (default: true)
+notifyTeamSound = true
+
+# Show Allow once / Deny buttons on permission banners. Off: the banner
+# only opens the session. (default: true)
+notifyPermissionActions = true
+
+# Set once Atlas has folded your earlier terminal and agent notification
+# choices into the keys above. Leave it alone. (default: false)
+notificationsMigrated = false
+
+# Notification kinds you switched off in Settings > Notifications, by id,
+# e.g. ["terminal-done", "git-behind"]. Unknown ids are ignored; a kind
+# that must always show (sign-in lost) cannot be silenced. (default: [])
+notifyDisabledKinds = []
+
+# Set once Atlas has folded your earlier per-kind notification switches
+# into notifyDisabledKinds. Leave it alone. (default: false)
+notifyKindsMigrated = false
+
+# An agent turn that finished faster than this many milliseconds stays
+# quiet; failures and requests for you are never held back. 0 turns it
+# off. Must be between 0 and 3600000. (default: 0)
+notifyAgentMinDurationMs = 0
 ```
 
 Note `updaterIgnoredVersion`: a key that serializes to nothing still gets its
@@ -174,6 +234,7 @@ wrote; `toml_edit` just preserves whatever comments are already there.
 | `iconTheme` | string | `"material-icon-theme"` | a plain id (letters, digits, `.`, `-`, `_`) — it names a directory under `~/.config/atlas/icon-themes/`. `"minimal"` keeps Atlas's lucide icons. See `docs/reference/icon-themes.md` |
 | `appIcon` | string | `"dark"` | a plain id (letters, digits, `-`, `_`) from `src-tauri/icons/app-icons/app-icons.json` — today `"dark"` or `"light"`. An id this Atlas does not ship shows the default without rewriting the file. macOS only: `"dark"` is the bundle's own Liquid Glass icon; any other replaces the Dock icon and the bundle's Finder/Launchpad icon, re-applied at every launch |
 | `adaptiveSuggestions` | `"agent"` \| `"off"` | `"agent"` | exactly one of these two strings |
+| `agentSwitchBehavior` | `"new-tab"` \| `"handoff"` \| `"reset"` | `"reset"` | exactly one of these three strings. An empty chat always switches in place and a running one always gets a new tab, whatever this says |
 | `gitBlameInline` | boolean | `true` | — |
 | `gitAutoFetch` | boolean | `true` | — |
 | `autoUpdate` | boolean | `true` | — |
@@ -188,6 +249,20 @@ wrote; `toml_edit` just preserves whatever comments are already there.
 | `terminalNotifyOnAttention` | boolean | `true` | — |
 | `terminalNotifyNative` | boolean | `true` | — |
 | `terminalNotifySound` | boolean | `false` | — |
+| `notificationsEnabled` | boolean | `true` | — |
+| `notifyNeedsYouNative` | boolean | `true` | — |
+| `notifyNeedsYouSound` | boolean | `true` | — |
+| `notifyOutcomeNative` | boolean | `true` | — |
+| `notifyOutcomeSound` | boolean | `true` | — |
+| `notifyWarningNative` | boolean | `false` | — |
+| `notifyWarningSound` | boolean | `false` | — |
+| `notifyTeamNative` | boolean | `true` | — |
+| `notifyTeamSound` | boolean | `true` | — |
+| `notifyPermissionActions` | boolean | `true` | — |
+| `notificationsMigrated` | boolean | `false` | — |
+| `notifyDisabledKinds` | array of strings | `[]` | — |
+| `notifyKindsMigrated` | boolean | `false` | — |
+| `notifyAgentMinDurationMs` | integer | `0` | 0 ≤ n ≤ 3600000 |
 
 Any other key under `[settings]` is left on disk untouched and reported as an
 `unknownKeys` entry in `get_atlas_config_info` — never treated as an error,

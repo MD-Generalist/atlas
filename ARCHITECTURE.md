@@ -72,7 +72,7 @@ src/features/<feature>/
 
 | Subsystem | Store holds (UI only) | Real state lives in |
 |---|---|---|
-| Chat | queues, draft text, scroll position (`chat/stores/chat-store.ts`) | the ported thread behind `AgentConnection` — message log, tool calls, run status, projected to the frozen wire and streamed over `atlas:agents` |
+| Chat | queues, draft text, scroll position (`chat/stores/chat-store.ts`) | the ported thread behind `AgentConnection` — message log, tool calls, run status, projected to the session-delta wire and streamed over `atlas:agents` |
 | Editor | open-file metadata, dirty flags (`editor/stores/editor-store.ts`) | CodeMirror owns the document text |
 | Terminal | split/pane layout (`terminal/stores/terminal-store.ts`) | `atlas-terminal`'s PTY session owns the byte buffer |
 
@@ -176,11 +176,11 @@ Three layers sit between the connection and the IPC surface:
 - **`AgentHost`** (`src-tauri/src/commands/agent_host.rs`) is what `commands/agents.rs` talks to. It holds the three things the ported stack deliberately does not do: the **identity map** between the frontend's per-spawn `AgentId`/`SessionKey` and the manager's own keys, the **history** row kept current in the thread-metadata store, and cheap **session metadata** (`snapshot_meta`) on the send path.
 - **`DeltaProjector`** (`crates/atlas-agent-delta`) turns thread events into the wire the rest of Atlas consumes.
 
-### The frozen wire
+### The session-delta wire
 
 Every delta travels an ordered `OutboundPipeline` (`atlas-bus`) of independent middleware: `BroadcastMiddleware` (the `atlas:agents` window event), `CaptureMiddleware` (Timeline + the permanent checkpoint record), `AnalyticsMiddleware`, `TranscriptMiddleware`, `MemoryIngestMiddleware`.
 
-The `SessionDelta` shapes those consumers pattern-match live in **`crates/atlas-agent-wire`** and are **frozen**. `crates/atlas-agent-wire/tests/contract.rs` is the enforcement: it spells the contract out itself and fails if the enum drifts from it. (It also cross-checks `docs/agents/delta-wire-contract.md` when that file is present — the prose contract is a working note and is git-ignored, which is exactly why the test does not rely on it.) The thread model and the wire disagree about what a "message" is — the thread keeps one entry per assistant message with interleaved text and thought chunks; the wire emits one message per contiguous run of a kind — and reconciling that gap is precisely `atlas-agent-delta`'s job.
+The `SessionDelta` shapes those consumers pattern-match live in **`crates/atlas-agent-wire`** and are **additive-only**: consumers match concrete variants and fields, so adding an optional field or variant is ordinary work (same change as its consumers, plus the contract tests), while renaming or removing one, or changing a field's meaning, is a breaking change that updates every consumer at once. `crates/atlas-agent-wire/tests/contract.rs` (Rust) and `tests/wire-shape-contract.test.ts` (TS) are the authority: they spell the contract out and fail if the wire drifts from it. (`docs/agents/delta-wire-contract.md` is a git-ignored working note; the tests do not rely on it.) The thread model and the wire disagree about what a "message" is — the thread keeps one entry per assistant message with interleaved text and thought chunks; the wire emits one message per contiguous run of a kind — and reconciling that gap is precisely `atlas-agent-delta`'s job.
 
 ### Atlas's tool servers
 
@@ -216,8 +216,8 @@ All wired in as `path` dependencies from `src-tauri/Cargo.toml`, and all members
 | `atlas-agent-servers` | Port of Zed's `agent_servers`: transport to an external ACP agent and the launcher that starts one. Where the port's reliability lives — connect, initialize, cancel, retry — plus `host_env.rs`'s PATH resolution. |
 | `atlas-agent-store` | Port of Zed's agent store: where an external agent comes from and how its command line is resolved. Backs the Marketplace and the installed-agents map. |
 | `atlas-agent-manager` | Who is connected, and which sessions are open on them. Ported from Zed's `AgentConnectionStore`, with the session ownership Zed spreads across its per-agent view folded in. |
-| `atlas-agent-delta` | Projects ported-thread events into the frozen `SessionDelta` wire. Reconciles the thread's one-entry-per-message model with the wire's one-message-per-contiguous-run model. |
-| `atlas-agent-wire` | The frozen session-delta wire shapes, enforced by `tests/contract.rs`. |
+| `atlas-agent-delta` | Projects ported-thread events into the `SessionDelta` wire. Reconciles the thread's one-entry-per-message model with the wire's one-message-per-contiguous-run model. |
+| `atlas-agent-wire` | The additive-only session-delta wire shapes, enforced by `tests/contract.rs`. |
 | `atlas-native-agent` | The vendored engine (`vendor/atlas-engine`) on the `AgentConnection` seam — the native agent as just another connection. Its agent id is the literal `"atlas-agent"`: a storage key every thread row resolves through, so renaming it is a data migration (ADR-0011). |
 | `atlas-agent-transcript` | Where an agent keeps its record of a conversation, and how to read Atlas's own text back out of one. The Claude JSONL replay it used to hold is gone. |
 | `atlas-thread-metadata` | The app-owned thread-metadata store (`threads.db`) — Atlas's only source for the sidebar and history. Metadata only, never transcript content. Ported from Zed's `ThreadMetadataStore`. See ADR-0001. |
@@ -317,8 +317,8 @@ atlas/
 │   ├── atlas-agent-servers        external ACP transport + launcher + host env
 │   ├── atlas-agent-store          where an agent comes from (Marketplace)
 │   ├── atlas-agent-manager        connections and their open sessions
-│   ├── atlas-agent-delta          thread events → frozen SessionDelta wire
-│   ├── atlas-agent-wire           the frozen wire shapes (contract-tested)
+│   ├── atlas-agent-delta          thread events → SessionDelta wire
+│   ├── atlas-agent-wire           the session-delta wire shapes (contract-tested)
 │   ├── atlas-agent-transcript     an agent's own record of a conversation
 │   ├── atlas-native-agent         the vendored engine on the AgentConnection seam
 │   ├── atlas-thread-metadata      app-owned session history (threads.db)

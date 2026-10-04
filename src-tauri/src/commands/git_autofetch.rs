@@ -116,6 +116,13 @@ pub struct AutoFetchStatus {
     pub last_fetched_at: Option<i64>,
     /// Why the most recent automatic attempt failed; `None` once one succeeds.
     pub last_error: Option<String>,
+    /// How many commits the current branch is behind its upstream, measured
+    /// right after a successful automatic fetch. `None` everywhere else (a
+    /// failure, a manual fetch, the `set_active` snapshot, or no upstream).
+    pub behind: Option<u32>,
+    /// The upstream branch's head commit at that same moment — lets the
+    /// frontend tell "still behind the same commit" from a new remote head.
+    pub remote_head: Option<String>,
 }
 
 #[derive(Default)]
@@ -135,6 +142,8 @@ impl Inner {
             project: path.to_string_lossy().into_owned(),
             last_fetched_at: rec.last_success.map(epoch_ms),
             last_error: rec.last_error,
+            behind: None,
+            remote_head: None,
         }
     }
 }
@@ -264,6 +273,25 @@ fn fetch(path: &Path) -> Result<(), GitErrorPayload> {
     .map(|_| ())
 }
 
+/// Behind-count and head of the current branch's upstream, or `None` when the
+/// branch has no upstream (git exits 128) or the repo is unreadable.
+fn upstream_position(path: &Path) -> Option<(u32, String)> {
+    let read = |args: &[&str]| {
+        GitCommand::new(path, args)
+            .read_only()
+            .success_codes(&[0, 128])
+            .run()
+            .ok()
+            .filter(|o| o.exit_code == 0)
+            .map(|o| o.stdout.trim().to_string())
+    };
+    let behind = read(&["rev-list", "--count", "HEAD..@{upstream}"])?
+        .parse()
+        .ok()?;
+    let head = read(&["rev-parse", "@{upstream}"])?;
+    Some((behind, head))
+}
+
 /// Fetch `path` in the background if `trigger` makes it due. Returns at once.
 fn maybe_fetch(app: &AppHandle, path: PathBuf, trigger: Trigger) {
     if !enabled(app) || !path.join(".git").exists() {
@@ -276,11 +304,21 @@ fn maybe_fetch(app: &AppHandle, path: PathBuf, trigger: Trigger) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let fetch_path = path.clone();
-        let result = tokio::task::spawn_blocking(move || fetch(&fetch_path)).await;
+        let result = tokio::task::spawn_blocking(move || {
+            fetch(&fetch_path).map(|()| upstream_position(&fetch_path))
+        })
+        .await;
         drop(guard);
         let state = app.state::<GitAutoFetchState>();
         let status = match result {
-            Ok(Ok(())) => state.record_success(&path, SystemTime::now()),
+            Ok(Ok(position)) => {
+                let mut status = state.record_success(&path, SystemTime::now());
+                if let Some((behind, head)) = position {
+                    status.behind = Some(behind);
+                    status.remote_head = Some(head);
+                }
+                status
+            }
             Ok(Err(e)) => {
                 tracing::debug!(
                     "git auto-fetch failed for {}: {}",

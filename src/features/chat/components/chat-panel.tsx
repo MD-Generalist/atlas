@@ -1,4 +1,8 @@
 import { lazy, Suspense, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  clearAgentQuestion,
+  notifyAgentSignInRequired,
+} from "@/features/notifications/lib/agent-notifier";
 import { copyText } from "@/lib/clipboard";
 import { matchesAction } from "@/features/keybindings/lib/use-scoped-hotkeys";
 import { useChatStore } from "../stores/chat-store";
@@ -155,7 +159,7 @@ import { logEvent } from "@/features/log/lib/log";
 import { cn } from "@/lib/utils";
 import { useAppStore } from "@/features/app/stores/app-store";
 import { loadCachedAcpModels } from "../lib/acp-models-cache";
-import { resolveEffectiveMode } from "../lib/resume-mode";
+import { resolveEffectiveMode, applyModeOnResume } from "../lib/resume-mode";
 
 interface ChatPanelProps {
   tabId: string;
@@ -164,13 +168,26 @@ interface ChatPanelProps {
 // Once-per-app-session guard for the background Codex pre-warm (below).
 let acpPrewarmStarted = false;
 
+// Rebinds in flight, per tab. Restart and Send both call the rebind, and a
+// queued message drains the moment the tab is bound; a second caller that
+// arrives while one is running joins it instead of respawning again.
+const rebindsInFlight = new Map<string, Promise<boolean>>();
+
 /** Rebind a session whose agent process died: respawn the plugin (its spawn
  *  cache was reset on disconnect) and RESUME the same session id where the
  *  transcript kind supports it (Claude JSONL, the native engine's own) — falling
  *  back to a fresh session if the resume fails. Never runs unprompted: only
  *  the next Send or the explicit Restart affordance calls this (no silent
  *  auto-restart loops). */
-async function rebindDisconnectedSession(tabId: string): Promise<boolean> {
+function rebindDisconnectedSession(tabId: string): Promise<boolean> {
+  const running = rebindsInFlight.get(tabId);
+  if (running) return running;
+  const rebind = respawnAndRebind(tabId).finally(() => rebindsInFlight.delete(tabId));
+  rebindsInFlight.set(tabId, rebind);
+  return rebind;
+}
+
+async function respawnAndRebind(tabId: string): Promise<boolean> {
   const cs = useChatStore.getState();
   const sess = cs.sessions[tabId];
   if (!sess) return false;
@@ -196,6 +213,23 @@ async function rebindDisconnectedSession(tabId: string): Promise<boolean> {
     } else {
       key = (await agents.newSession(agent.agent_id, cwd)).key;
     }
+    // The respawned agent starts on its OWN default, and a bind does not
+    // reset `acpModeExplicit`/`acpCurrentMode` — so without this the pill kept
+    // showing the user's pick while the agent enforced its default. That is the
+    // half of issue 289's second bug `resume-mode.ts` exists to prevent, on
+    // the one resume path that was left out of it. Awaited BEFORE
+    // `setAcpBinding`, as the session/new path does: binding is what flushes a
+    // queued send (a tab that never bound goes from no `acpSessionId` to one),
+    // so the first turn after a restart cannot run under a mode the user never
+    // picked. Snapshot failure is not a rebind failure: the session exists, so
+    // warn and leave the agent on its own default.
+    try {
+      await applyModeOnResume(tabId, key, await agents.snapshotMeta(key));
+    } catch (err) {
+      console.warn("mode restore after agent restart failed:", err);
+    }
+    // Bind and clear the flag in the same tick, so a send the bind releases
+    // never sees the tab still disconnected.
     const actions = useChatStore.getState().actions;
     actions.setAcpBinding(tabId, agent.agent_id, key.session_id, cwd);
     actions.setDisconnected(tabId, false);
@@ -675,6 +709,8 @@ export const ChatPanel = memo(function ChatPanel({ tabId }: ChatPanelProps) {
                 // every subsequent bind failure for this tab+agent.
                 onDismissed: () => reportedBindFailures.delete(key),
               });
+              // The dialog is up; if the user is away it is also a banner.
+              notifyAgentSignInRequired(tabId, at);
             } else if (action === "silent") {
               // The composer is already showing why (`AiGrantBar`, and "No
               // models" in the picker). A toast would be a third copy of a
@@ -1416,7 +1452,10 @@ export const ChatPanel = memo(function ChatPanel({ tabId }: ChatPanelProps) {
             <SessionElicitation
               key={pendingElicitation.requestId}
               pending={pendingElicitation}
-              onClose={() => clearElicitation(tabId)}
+              onClose={() => {
+                clearAgentQuestion(tabId, pendingElicitation.requestId);
+                clearElicitation(tabId);
+              }}
             />
           )}
           {/* Bottom fade lives in the transcript; the centered floating

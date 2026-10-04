@@ -1,0 +1,481 @@
+#!/usr/bin/env bun
+/**
+ * Runs what GitHub CI would run, on this machine, so a green run here means a
+ * green run there.
+ *
+ *   bun run ci:local                     the jobs CI would run for this branch
+ *   bun run ci:local --base origin/0.4.0 …planned against a different base
+ *   bun run ci:local --all               every job
+ *   bun run ci:local frontend atlas-git  just these jobs (names as CI shows them)
+ *   bun run ci:local --list              the jobs, without running anything
+ *   bun run ci:local --linux             CI's Linux jobs in a Linux container
+ *   bun run ci:local --shell             a shell in that container
+ *
+ * The jobs and their commands are read out of `.github/workflows/ci.yml` at
+ * run time, never copied: every `run:` step of every job, with the crate
+ * matrix expanded from `.github/ci-crates.json` and its `if: matrix.<flag>`
+ * conditions applied. Which jobs to run comes from the same planner CI's
+ * `changes` job uses (`scripts/ci-affected.mjs`), diffing the working tree
+ * against the merge base with this branch's upstream. `frontend` always runs,
+ * as in CI.
+ *
+ * That is the difference from `bun run test:rust`, which is a quick subset:
+ * it skips clippy and atlas-kb-server, and tests every crate in one cargo
+ * invocation, where cargo unifies features across crates. Here each crate is
+ * tested and linted from its own directory with CI's exact flags. Over 200 CI
+ * runs, clippy was the largest single cause of failed jobs, and no local gate
+ * ran it.
+ *
+ * Deliberately NOT replicated:
+ *   - steps that change this machine (`git config --global`, `sudo apt-get`).
+ *     CI sets a throwaway git identity; yours is used instead.
+ *   - job `env:`. CI's `RUSTC_WRAPPER=sccache`, `CARGO_INCREMENTAL=0` and
+ *     `CARGO_PROFILE_DEV_DEBUG` are cache tuning for throwaway runners;
+ *     applying them here would rebuild your whole target/ under a second
+ *     profile and lose incremental builds.
+ *   - the OS, unless asked. Every job runs on this machine by default. A job
+ *     CI runs on macOS (the app) is skipped on any other OS, and so is the
+ *     app's Linux compile check (OS_BOUND) except on Linux; under `--linux`
+ *     it runs in the container.
+ *
+ * `--linux` runs the jobs CI runs on Ubuntu in a container instead, built from
+ * scripts/ci-linux/Dockerfile. It is the only local way to exercise Linux-only
+ * code, the engine's bubblewrap sandbox above all, from a Mac or Windows.
+ * Opt-in because the first run is a cold build: the container's target dir
+ * cannot share the host's. It lives in per-checkout volumes, and so do the
+ * cargo registry and a Linux `node_modules`, so later runs are incremental.
+ *
+ *   - Any Docker-compatible runtime: `docker` by default, ATLAS_CI_DOCKER to
+ *     name another (`podman`). OrbStack, Docker Desktop and Colima all serve
+ *     the `docker` CLI. On Windows, clone inside WSL2 and run from there;
+ *     bind mounts from an NTFS checkout are too slow for a build.
+ *   - The image is built for this machine's architecture, never emulated
+ *     (emulation is 5-10x slower). CI is arm64; on an x86-64 host the result
+ *     transfers except for arch-specific code, and that run is the only x86
+ *     coverage the project gets, since release-linux.yml ships x86-64 builds
+ *     that no CI job tests.
+ *   - Inside the container, `sudo apt-get` steps are skipped (the image has
+ *     what they install) and `git config --global` runs, since its HOME is a
+ *     volume, not yours.
+ *   - bubblewrap needs the container's seccomp, AppArmor and /proc masks
+ *     relaxed (see sandboxOpts). Without them the engine's sandbox fails as
+ *     it would on a runner without bwrap installed.
+ */
+
+import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import {
+  REPO_ROOT,
+  changedFiles,
+  dialectPackages,
+  loadWorkspace,
+  plan,
+  readCrateMatrix,
+} from "./ci-affected.mjs";
+
+if (typeof Bun === "undefined") {
+  console.error("ci-local: run this with bun (`bun run ci:local`); it parses ci.yml with Bun.YAML");
+  process.exit(2);
+}
+
+/** Jobs that plan or gate other jobs rather than check anything. */
+const NOT_CHECKS = new Set(["changes", "ci-ok"]);
+/** Jobs that compile for their runner's OS. Anywhere else they would repeat
+ *  the macOS `app` job's check under the wrong `cfg`, so they run only there. */
+const OS_BOUND = new Set(["app-linux"]);
+const HOST_OS = { darwin: "macos", win32: "windows" }[process.platform] ?? process.platform;
+/** A step matching this changes the machine it runs on; see the docblock. */
+const MUTATES_MACHINE = /\bsudo\b|git config --global/;
+
+const ciYmlText = readFileSync(path.join(REPO_ROOT, ".github", "workflows", "ci.yml"), "utf8");
+const ciYml = Bun.YAML.parse(ciYmlText);
+
+/** `if: matrix.flag`, `if: !matrix.flag`, optionally inside `${{ }}`. */
+function matrixCondition(cond, entry) {
+  const c = cond
+    .trim()
+    .replace(/^\$\{\{/, "")
+    .replace(/\}\}$/, "")
+    .trim();
+  const negated = c.startsWith("!");
+  const m = /^matrix\.([\w-]+)$/.exec(c.replace(/^!\s*/, ""));
+  if (!m) throw new Error(`ci-local: cannot evaluate step condition \`${cond}\``);
+  return Boolean(entry[m[1]]) !== negated;
+}
+
+/** Every checking job in ci.yml, crate matrix expanded, as runnable steps. */
+function ciJobs() {
+  const jobs = [];
+  for (const [id, job] of Object.entries(ciYml.jobs)) {
+    if (NOT_CHECKS.has(id)) continue;
+    const entries = job.strategy?.matrix?.include ? readCrateMatrix() : [null];
+    for (const entry of entries) {
+      const steps = [];
+      for (const step of job.steps) {
+        if (!step.run) continue;
+        if (step.if && !(entry && matrixCondition(step.if, entry))) continue;
+        const cwd = (step["working-directory"] ?? ".").replace("${{ matrix.crate }}", entry?.crate);
+        if (cwd.includes("${{") || step.run.includes("${{")) {
+          throw new Error(
+            `ci-local: step "${step.name}" in ${id} needs an expression ci-local can't evaluate`,
+          );
+        }
+        steps.push({ name: step.name ?? step.run.split("\n")[0], run: step.run, cwd });
+      }
+      const runsOn = String(job["runs-on"]);
+      const os = runsOn.startsWith("ubuntu")
+        ? "linux"
+        : runsOn.startsWith("macos")
+          ? "macos"
+          : runsOn;
+      jobs.push({
+        id,
+        name: entry ? entry.crate : (job.name ?? id),
+        crate: entry?.crate,
+        os,
+        arch: /-arm\b/.test(runsOn) ? "arm64" : "x64",
+        steps,
+      });
+    }
+  }
+  return jobs;
+}
+
+function git(args) {
+  return execFileSync("git", args, { cwd: REPO_ROOT, encoding: "utf8" }).trim();
+}
+
+/** The job names CI would run for this working tree, or null for all. */
+function plannedNames(argv) {
+  if (argv.includes("--all")) return { names: null, why: "--all" };
+  const i = argv.indexOf("--base");
+  let base = i >= 0 ? argv[i + 1] : undefined;
+  if (!base) {
+    try {
+      base = git(["merge-base", "HEAD", "@{upstream}"]);
+    } catch {
+      return { names: null, why: "this branch has no upstream to diff against" };
+    }
+  }
+  const crates = readCrateMatrix();
+  const p = plan(changedFiles(base, undefined), {
+    workspace: loadWorkspace(),
+    crates,
+    dialect: dialectPackages(ciYmlText),
+  });
+  const names = new Set(["frontend", ...p.crates.map((c) => c.crate)]);
+  if (p.app) names.add(ciYml.jobs.app.name).add(ciYml.jobs["app-linux"].name);
+  if (p.engineDialect) names.add(ciYml.jobs["engine-dialect"].name);
+  return { names, why: `${p.reason} since ${base.slice(0, 12)}` };
+}
+
+/** The `[tools]` pins in mise.toml, which CI installs exactly. */
+function misePins() {
+  return Object.fromEntries(
+    [
+      ...readFileSync(path.join(REPO_ROOT, "mise.toml"), "utf8").matchAll(/^(\w+) = "([^"]+)"/gm),
+    ].map((m) => [m[1], m[2]]),
+  );
+}
+
+/** Warn, don't fail: a version mismatch is a reason a result may not transfer. */
+function checkVersions() {
+  const tools = misePins();
+  const have = (cmd) => spawnSync(cmd, ["--version"], { encoding: "utf8" }).stdout?.trim() ?? "";
+  const bun = have("bun");
+  const node = have("node").replace(/^v/, "");
+  const warn = [];
+  if (tools.bun && bun !== tools.bun)
+    warn.push(`bun ${bun || "missing"}, mise.toml pins ${tools.bun}`);
+  if (tools.node && !(node === tools.node || node.startsWith(`${tools.node}.`))) {
+    warn.push(`node ${node || "missing"}, mise.toml pins ${tools.node}`);
+  }
+  for (const w of warn) console.warn(`ci-local: warning: ${w} (\`mise install\` fixes it)`);
+}
+
+const DOCKER = process.env.ATLAS_CI_DOCKER || "docker";
+const IMAGE_DIR = path.join(REPO_ROOT, "scripts", "ci-linux");
+
+/**
+ * What bubblewrap needs from the container: seccomp off so it can create a
+ * user namespace, /proc unmasked so it can mount a fresh one (Podman spells
+ * that `unmask=ALL`), and AppArmor off, since Docker's default profile on
+ * Ubuntu and Debian hosts denies mount. On OrbStack the first two are each
+ * required; with any one missing bwrap fails before running anything.
+ */
+function sandboxOpts(podman) {
+  return [
+    "seccomp=unconfined",
+    "apparmor=unconfined",
+    podman ? "unmask=ALL" : "systempaths=unconfined",
+  ].flatMap((o) => ["--security-opt", o]);
+}
+
+function docker(args) {
+  return spawnSync(DOCKER, args, { encoding: "utf8" });
+}
+
+/** The image for the current pins, built on first use. Returns its tag. */
+function ensureImage() {
+  const rust = /^channel\s*=\s*"([^"]+)"/m.exec(
+    readFileSync(path.join(REPO_ROOT, "rust-toolchain.toml"), "utf8"),
+  )?.[1];
+  const { bun, node } = misePins();
+  const args = { RUST_VERSION: rust, BUN_VERSION: bun, NODE_VERSION: node };
+  const hash = createHash("sha256");
+  for (const f of ["Dockerfile", "entrypoint.sh"])
+    hash.update(readFileSync(path.join(IMAGE_DIR, f)));
+  hash.update(JSON.stringify(args));
+  const tag = `atlas-ci-linux:${hash.digest("hex").slice(0, 12)}`;
+  if (docker(["image", "inspect", tag]).status === 0) return tag;
+
+  console.log(
+    `ci-local: building ${tag} (Rust ${rust}, Bun ${bun}, Node ${node}); once per pin change`,
+  );
+  const built = spawnSync(
+    DOCKER,
+    [
+      "build",
+      "-t",
+      tag,
+      "--label",
+      "atlas.ci-linux=1",
+      ...Object.entries(args).flatMap(([k, v]) => ["--build-arg", `${k}=${v}`]),
+      IMAGE_DIR,
+    ],
+    { stdio: "inherit" },
+  );
+  if (built.status !== 0) {
+    console.error("ci-local: building the Linux image failed");
+    process.exit(1);
+  }
+  const stale = docker([
+    "image",
+    "ls",
+    "--filter",
+    "label=atlas.ci-linux=1",
+    "--format",
+    "{{.Repository}}:{{.Tag}}",
+  ])
+    .stdout.split("\n")
+    .filter((t) => t && t !== tag);
+  if (stale.length) {
+    console.log(
+      `ci-local: older images from previous pins remain: ${DOCKER} image rm ${stale.join(" ")}`,
+    );
+  }
+  return tag;
+}
+
+/** Everything a `docker run` for this checkout needs; exits if no runtime. */
+function containerContext() {
+  const r = docker(["info", "--format", "{{json .}}"]);
+  if (r.error || r.status !== 0) {
+    console.error(
+      `ci-local: --linux needs a running Docker-compatible runtime (\`${DOCKER}\`; ATLAS_CI_DOCKER names another).\n${(r.stderr || r.error?.message || "").trim()}`,
+    );
+    process.exit(2);
+  }
+  // `docker info` and `podman info` answer in different shapes.
+  const info = JSON.parse(r.stdout);
+  const podman = Boolean(info.host);
+  const arch = /^(aarch64|arm64)$/.test(info.Architecture ?? info.host?.arch) ? "arm64" : "x64";
+  const rootless =
+    info.host?.security?.rootless === true ||
+    (info.SecurityOptions ?? []).some((o) => o.includes("rootless"));
+  // Rootless: root in the container is already the host user, and any other
+  // uid would map to a subuid that owns nothing in the checkout.
+  const uid = rootless ? 0 : (process.getuid?.() ?? 0);
+  const gid = rootless ? 0 : (process.getgid?.() ?? 0);
+
+  // Same path inside as out, so paths in errors are the ones on this machine.
+  // A Windows path means nothing in a Linux container.
+  const root = process.platform === "win32" ? "/repo" : REPO_ROOT;
+  // A worktree's .git is a file pointing at the main checkout's git dir.
+  const gitCommon = path.resolve(REPO_ROOT, git(["rev-parse", "--git-common-dir"]));
+  const mounts = [`${REPO_ROOT}:${root}`];
+  if (root === REPO_ROOT && !gitCommon.startsWith(REPO_ROOT + path.sep)) {
+    mounts.push(`${gitCommon}:${gitCommon}`);
+  }
+  // Per checkout: the target dir, cargo registry and Bun cache; a Linux
+  // node_modules (the host's holds this OS's binaries); and dist/, so a Linux
+  // `bun run build` doesn't rewrite the host's.
+  const vol = `atlas-ci-${createHash("sha256").update(REPO_ROOT).digest("hex").slice(0, 8)}`;
+  mounts.push(
+    `${vol}-cache:/cache`,
+    `${vol}-node-modules:${root}/node_modules`,
+    `${vol}-dist:${root}/dist`,
+  );
+
+  return {
+    root,
+    arch,
+    image: ensureImage(),
+    opts: [
+      ...sandboxOpts(podman),
+      ...mounts.flatMap((m) => ["-v", m]),
+      "-e",
+      `ATLAS_UID=${uid}`,
+      "-e",
+      `ATLAS_GID=${gid}`,
+      "-e",
+      `ATLAS_OWNED=${root}/node_modules ${root}/dist`,
+    ],
+  };
+}
+
+function containerRun(ctx, cwd, command, { interactive = false } = {}) {
+  const tty = interactive || (process.stdout.isTTY && process.stdin.isTTY);
+  return spawnSync(
+    DOCKER,
+    [
+      "run",
+      "--rm",
+      "--init",
+      ...(interactive ? ["-it"] : tty ? ["-t"] : []),
+      ...ctx.opts,
+      "-w",
+      path.posix.join(ctx.root, cwd),
+      ctx.image,
+      ...command,
+    ],
+    { stdio: "inherit" },
+  );
+}
+
+/** Where a job runs: in the container, on this machine, or not at all. */
+function placement(job, linux) {
+  if (job.os === "linux" && linux) return "container";
+  if ((job.os === "macos" || OS_BOUND.has(job.id)) && job.os !== HOST_OS) return "skip";
+  return "native";
+}
+
+function main(argv) {
+  const linux = argv.includes("--linux");
+  if (argv.includes("--shell")) {
+    const ctx = containerContext();
+    process.exit(containerRun(ctx, ".", ["bash"], { interactive: true }).status ?? 1);
+  }
+
+  const all = ciJobs();
+  const picked = argv.filter((a, i) => !a.startsWith("--") && argv[i - 1] !== "--base");
+  let jobs;
+  if (picked.length) {
+    const unknown = picked.filter((n) => !all.some((j) => j.name === n || j.id === n));
+    if (unknown.length) {
+      console.error(
+        `ci-local: no such job: ${unknown.join(", ")}. Jobs: ${all.map((j) => j.name).join(", ")}`,
+      );
+      process.exit(2);
+    }
+    jobs = all.filter((j) => picked.includes(j.name) || picked.includes(j.id));
+    console.log(`ci-local: ${jobs.length} job(s) by name`);
+  } else {
+    const { names, why } = plannedNames(argv);
+    jobs = names ? all.filter((j) => names.has(j.name)) : all;
+    console.log(`ci-local: ${jobs.length} of ${all.length} jobs (${why})`);
+  }
+  // Fastest feedback first: the frontend takes about a minute, the app longest.
+  const rank = { frontend: 0, crates: 1, "engine-dialect": 2, "app-linux": 3, app: 4 };
+  jobs.sort((a, b) => (rank[a.id] ?? 1) - (rank[b.id] ?? 1));
+
+  for (const j of jobs) j.where = placement(j, linux);
+
+  if (argv.includes("--list")) {
+    for (const j of jobs) {
+      const where = {
+        container: "  (Linux container)",
+        skip: `  (skipped: CI runs it on ${j.os})`,
+        native: "",
+      }[j.where];
+      console.log(`\n${j.name}${where}`);
+      for (const s of j.steps) {
+        const skip = skipReason(j, s) ? `  (skipped: ${skipReason(j, s)})` : "";
+        console.log(`  [${s.cwd}] ${s.run.replace(/\s*\n\s*/g, "; ")}${skip}`);
+      }
+    }
+    return;
+  }
+
+  const native = jobs.some((j) => j.where === "native");
+  const ctx = jobs.some((j) => j.where === "container") ? containerContext() : null;
+  if (native) checkVersions();
+  if (ctx) {
+    const ciArch = jobs.find((j) => j.where === "container").arch;
+    if (ctx.arch !== ciArch) {
+      console.log(
+        `ci-local: the container is ${ctx.arch} and CI's Linux jobs are ${ciArch}; results transfer except for arch-specific code.`,
+      );
+    }
+  }
+  const env = { ...process.env };
+  // As in scripts/test-rust.sh: apple-sys needs the active macOS SDK.
+  if (native && process.platform === "darwin" && !env.SDKROOT) {
+    env.SDKROOT = execFileSync("xcrun", ["--show-sdk-path"], { encoding: "utf8" }).trim();
+  }
+
+  const results = [];
+  for (const job of jobs) {
+    if (job.where === "skip") {
+      console.log(`\n── ${job.name}: skipped (CI runs it on ${job.os})`);
+      results.push({ job: job.name, skipped: true, secs: 0 });
+      continue;
+    }
+    const started = Date.now();
+    let failed = null;
+    for (const step of job.steps) {
+      const skip = skipReason(job, step);
+      if (skip) {
+        console.log(`\n── ${job.name} › ${step.name}: skipped (${skip})`);
+        continue;
+      }
+      console.log(
+        `\n── ${job.name} › ${step.name}${job.where === "container" ? " (container)" : ""}\n   [${step.cwd}] ${step.run.replace(/\s*\n\s*/g, " ")}`,
+      );
+      const command = ["bash", "-eo", "pipefail", "-c", step.run];
+      const r =
+        job.where === "container"
+          ? containerRun(ctx, step.cwd, command)
+          : spawnSync(command[0], command.slice(1), {
+              cwd: path.join(REPO_ROOT, step.cwd),
+              env,
+              stdio: "inherit",
+            });
+      if (r.status !== 0) {
+        failed = step.name;
+        break;
+      }
+    }
+    results.push({ job: job.name, failed, secs: Math.round((Date.now() - started) / 1000) });
+  }
+
+  console.log("\nci-local summary");
+  for (const r of results) {
+    const status = r.skipped ? "skip" : r.failed ? "FAIL" : "ok  ";
+    console.log(
+      `  ${status}  ${r.job.padEnd(32)} ${String(r.secs).padStart(5)}s${r.failed ? `  (${r.failed})` : ""}`,
+    );
+  }
+  const failures = results.filter((r) => r.failed).length;
+  if (
+    process.platform !== "linux" &&
+    jobs.some((j) => j.where === "native" && j.os === "linux" && j.id !== "frontend")
+  ) {
+    console.log(
+      "\n  Rust jobs ran on this OS; CI runs them on Linux, so Linux-only paths (the engine sandbox) were not exercised. `--linux` runs them in a Linux container.",
+    );
+  }
+  process.exit(failures ? 1 : 0);
+}
+
+/** Why a step doesn't run where this job runs, or null if it does. */
+function skipReason(job, step) {
+  if (job.where === "container") {
+    return /\bsudo\b/.test(step.run) ? "the image already has what it installs" : null;
+  }
+  return MUTATES_MACHINE.test(step.run) ? "changes this machine" : null;
+}
+
+main(process.argv.slice(2));

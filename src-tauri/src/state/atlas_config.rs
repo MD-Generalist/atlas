@@ -225,6 +225,29 @@ impl Default for AdaptiveSuggestions {
     }
 }
 
+/// What picking another agent does to a chat that already has a conversation.
+/// A session is paired to one agent, so every option starts a new session; they
+/// differ in what happens to the one on screen. An empty chat always just
+/// switches in place, and a running one always gets a new tab.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AgentSwitchBehavior {
+    /// Keep the conversation and open the new agent in a new tab.
+    NewTab,
+    /// Switch in the same tab and attach the conversation to the composer as a
+    /// past-session mention, so the new agent receives it with the next message.
+    Handoff,
+    /// Switch in the same tab and start over; the conversation stays in history.
+    /// The default, and how switching always worked before this setting existed.
+    Reset,
+}
+
+impl Default for AgentSwitchBehavior {
+    fn default() -> Self {
+        Self::Reset
+    }
+}
+
 /// User-facing toggles surfaced in Settings → General. Moved out of
 /// `state.json`'s `AppState.settings` (issue #64) into its own validated,
 /// human-editable `config.toml`.
@@ -303,6 +326,9 @@ pub struct AppSettings {
     /// `<next_steps>` block; "off" disables it.
     #[serde(default)]
     pub adaptive_suggestions: AdaptiveSuggestions,
+    /// What switching agents does to a chat with a conversation in it.
+    #[serde(default)]
+    pub agent_switch_behavior: AgentSwitchBehavior,
     /// Inline Git blame in the code editor. Default ON; when off the editor
     /// doesn't even load the extension (no blame IPC).
     #[serde(default = "default_true")]
@@ -343,10 +369,9 @@ pub struct AppSettings {
     /// Default ON.
     #[serde(default = "default_true")]
     pub agent_org_access: bool,
-    /// Terminal notifications master switch. A command that fails, runs
-    /// longer than `terminal_notify_min_duration_ms`, or asks for input raises
-    /// an in-app notification, a toast when its terminal is off screen and a
-    /// native notification when Atlas is not the front app.
+    /// "Command finished": a successful command longer than
+    /// `terminal_notify_min_duration_ms` notifies. (Once the terminal master
+    /// switch; `notifications_enabled` is the master now.)
     #[serde(default = "default_true")]
     pub terminal_notifications: bool,
     /// A successful command shorter than this never notifies (milliseconds).
@@ -358,12 +383,55 @@ pub struct AppSettings {
     /// Notify when a command wants input (password prompt, bell, OSC 9/777).
     #[serde(default = "default_true")]
     pub terminal_notify_on_attention: bool,
-    /// Also raise a macOS notification when the window is not focused.
+    /// Legacy terminal OS-banner switch; folded into the `notify_*_native`
+    /// tier keys once (`notificationsMigrated`), unused afterwards.
     #[serde(default = "default_true")]
     pub terminal_notify_native: bool,
-    /// Play a short chime with the notification.
+    /// Legacy terminal sound switch — migrated like the one above.
     #[serde(default)]
     pub terminal_notify_sound: bool,
+    /// Notifications master switch: off silences every kind except sign-in problems.
+    #[serde(default = "default_true")]
+    pub notifications_enabled: bool,
+    /// OS banner for "needs you" notifications (permission, question, sign-in, terminal input).
+    #[serde(default = "default_true")]
+    pub notify_needs_you_native: bool,
+    /// Sound for "needs you" notifications.
+    #[serde(default = "default_true")]
+    pub notify_needs_you_sound: bool,
+    /// OS banner for outcome notifications (a turn or command finished or failed).
+    #[serde(default = "default_true")]
+    pub notify_outcome_native: bool,
+    /// Sound for outcome notifications.
+    #[serde(default = "default_true")]
+    pub notify_outcome_sound: bool,
+    /// OS banner for warnings (context nearly full, rate limit, retrying, agent stopped).
+    #[serde(default)]
+    pub notify_warning_native: bool,
+    /// Sound for warnings.
+    #[serde(default)]
+    pub notify_warning_sound: bool,
+    /// OS banner for team notifications (Chat DMs and @mentions).
+    #[serde(default = "default_true")]
+    pub notify_team_native: bool,
+    /// Sound for team notifications.
+    #[serde(default = "default_true")]
+    pub notify_team_sound: bool,
+    /// Show Allow once / Deny on permission banners.
+    #[serde(default = "default_true")]
+    pub notify_permission_actions: bool,
+    /// Set once the legacy terminal and agent notification choices have been folded into the keys above. Not user-facing.
+    #[serde(default)]
+    pub notifications_migrated: bool,
+    /// Notification kinds the user switched off in Settings (kind ids from the frontend catalog). Unknown ids are ignored; a kind that cannot be silenced ignores its entry.
+    #[serde(default)]
+    pub notify_disabled_kinds: Vec<String>,
+    /// Set once the per-kind switches that predate `notifyDisabledKinds` have been folded into it. Not user-facing.
+    #[serde(default)]
+    pub notify_kinds_migrated: bool,
+    /// An agent turn that finished faster than this stays quiet (milliseconds); 0 = off.
+    #[serde(default)]
+    pub notify_agent_min_duration_ms: u32,
 }
 
 fn default_true() -> bool {
@@ -412,6 +480,7 @@ impl Default for AppSettings {
             legacy_code_editor_theme: None,
             legacy_atlas_theme: None,
             adaptive_suggestions: AdaptiveSuggestions::default(),
+            agent_switch_behavior: AgentSwitchBehavior::default(),
             git_blame_inline: true,
             git_auto_fetch: true,
             auto_update: true,
@@ -426,6 +495,20 @@ impl Default for AppSettings {
             terminal_notify_on_attention: true,
             terminal_notify_native: true,
             terminal_notify_sound: false,
+            notifications_enabled: true,
+            notify_needs_you_native: true,
+            notify_needs_you_sound: true,
+            notify_outcome_native: true,
+            notify_outcome_sound: true,
+            notify_warning_native: false,
+            notify_warning_sound: false,
+            notify_team_native: true,
+            notify_team_sound: true,
+            notify_permission_actions: true,
+            notifications_migrated: false,
+            notify_disabled_kinds: Vec::new(),
+            notify_kinds_migrated: false,
+            notify_agent_min_duration_ms: 0,
         }
     }
 }
@@ -539,6 +622,13 @@ const SETTINGS_DOCS: &[(&str, &str)] = &[
          # Exactly \"agent\" or \"off\", nothing else. (default: \"agent\")",
     ),
     (
+        "agentSwitchBehavior",
+        "# What picking another agent does to a chat that has a conversation:\n\
+         # \"new-tab\" keeps it and opens the new agent in a new tab, \"handoff\"\n\
+         # switches in place and attaches it to the next message, \"reset\"\n\
+         # switches in place and starts over. (default: \"reset\")",
+    ),
+    (
         "gitBlameInline",
         "# Inline git blame — a dim author/age/summary annotation trailing the\n\
          # active line in the editor. (default: true)",
@@ -590,10 +680,9 @@ const SETTINGS_DOCS: &[(&str, &str)] = &[
     ),
     (
         "terminalNotifications",
-        "# Terminal notifications: a command that fails, runs longer than\n\
-         # terminalNotifyMinDurationMs, or asks for input raises an in-app\n\
-         # notification, a toast when its terminal is off screen and a macOS\n\
-         # notification when Atlas is in the background. (default: true)",
+        "# Notify when a command succeeds after running longer than\n\
+         # terminalNotifyMinDurationMs. (The master switch for all notifications\n\
+         # is notificationsEnabled.) (default: true)",
     ),
     (
         "terminalNotifyMinDurationMs",
@@ -617,6 +706,75 @@ const SETTINGS_DOCS: &[(&str, &str)] = &[
     (
         "terminalNotifySound",
         "# Play a short chime with terminal notifications. (default: false)",
+    ),
+    (
+        "notificationsEnabled",
+        "# Notifications master switch. Off silences every notification except
+         # sign-in problems, which always show. (default: true)",
+    ),
+    (
+        "notifyNeedsYouNative",
+        "# OS banner for notifications that need you — a permission request, a
+         # question, a terminal asking for input. Shown only when you are away.
+         # (default: true)",
+    ),
+    (
+        "notifyNeedsYouSound",
+        "# Sound for notifications that need you. (default: true)",
+    ),
+    (
+        "notifyOutcomeNative",
+        "# OS banner when an agent turn or terminal command finishes or fails.
+         # Shown only when you are away. (default: true)",
+    ),
+    (
+        "notifyOutcomeSound",
+        "# Sound for finished / failed notifications. (default: true)",
+    ),
+    (
+        "notifyWarningNative",
+        "# OS banner for warnings — context nearly full, rate limited, retrying,
+         # agent stopped. (default: false)",
+    ),
+    (
+        "notifyWarningSound",
+        "# Sound for warnings. (default: false)",
+    ),
+    (
+        "notifyTeamNative",
+        "# OS banner for Chat direct messages and @mentions. Shown only when you
+         # are away. (default: true)",
+    ),
+    (
+        "notifyTeamSound",
+        "# Sound for Chat notifications. (default: true)",
+    ),
+    (
+        "notifyPermissionActions",
+        "# Show Allow once / Deny buttons on permission banners. Off: the banner
+         # only opens the session. (default: true)",
+    ),
+    (
+        "notificationsMigrated",
+        "# Set once Atlas has folded your earlier terminal and agent notification
+         # choices into the keys above. Leave it alone. (default: false)",
+    ),
+    (
+        "notifyDisabledKinds",
+        "# Notification kinds you switched off in Settings > Notifications, by id,\n\
+         # e.g. [\"terminal-done\", \"git-behind\"]. Unknown ids are ignored; a kind\n\
+         # that must always show (sign-in lost) cannot be silenced. (default: [])",
+    ),
+    (
+        "notifyKindsMigrated",
+        "# Set once Atlas has folded your earlier per-kind notification switches\n\
+         # into notifyDisabledKinds. Leave it alone. (default: false)",
+    ),
+    (
+        "notifyAgentMinDurationMs",
+        "# An agent turn that finished faster than this many milliseconds stays\n\
+         # quiet; failures and requests for you are never held back. 0 turns it\n\
+         # off. Must be between 0 and 3600000. (default: 0)",
     ),
 ];
 
@@ -654,6 +812,15 @@ pub fn validate(settings: &AppSettings) -> Result<(), ValidationIssue> {
             message: format!(
                 "must be between 0 and {MAX_TERMINAL_NOTIFY_MS}, got {}",
                 settings.terminal_notify_min_duration_ms
+            ),
+        });
+    }
+    if settings.notify_agent_min_duration_ms > MAX_TERMINAL_NOTIFY_MS {
+        return Err(ValidationIssue {
+            key: "notifyAgentMinDurationMs",
+            message: format!(
+                "must be between 0 and {MAX_TERMINAL_NOTIFY_MS}, got {}",
+                settings.notify_agent_min_duration_ms
             ),
         });
     }
@@ -889,6 +1056,7 @@ pub struct SettingsPatch {
     pub icon_theme: Option<String>,
     pub app_icon: Option<String>,
     pub adaptive_suggestions: Option<AdaptiveSuggestions>,
+    pub agent_switch_behavior: Option<AgentSwitchBehavior>,
     pub git_blame_inline: Option<bool>,
     pub git_auto_fetch: Option<bool>,
     pub auto_update: Option<bool>,
@@ -904,6 +1072,20 @@ pub struct SettingsPatch {
     pub terminal_notify_on_attention: Option<bool>,
     pub terminal_notify_native: Option<bool>,
     pub terminal_notify_sound: Option<bool>,
+    pub notifications_enabled: Option<bool>,
+    pub notify_needs_you_native: Option<bool>,
+    pub notify_needs_you_sound: Option<bool>,
+    pub notify_outcome_native: Option<bool>,
+    pub notify_outcome_sound: Option<bool>,
+    pub notify_warning_native: Option<bool>,
+    pub notify_warning_sound: Option<bool>,
+    pub notify_team_native: Option<bool>,
+    pub notify_team_sound: Option<bool>,
+    pub notify_permission_actions: Option<bool>,
+    pub notifications_migrated: Option<bool>,
+    pub notify_disabled_kinds: Option<Vec<String>>,
+    pub notify_kinds_migrated: Option<bool>,
+    pub notify_agent_min_duration_ms: Option<u32>,
 }
 
 impl SettingsPatch {
@@ -947,6 +1129,9 @@ impl SettingsPatch {
         if let Some(v) = self.adaptive_suggestions {
             settings.adaptive_suggestions = v;
         }
+        if let Some(v) = self.agent_switch_behavior {
+            settings.agent_switch_behavior = v;
+        }
         if let Some(v) = self.git_blame_inline {
             settings.git_blame_inline = v;
         }
@@ -989,6 +1174,48 @@ impl SettingsPatch {
         if let Some(v) = self.terminal_notify_sound {
             settings.terminal_notify_sound = v;
         }
+        if let Some(v) = self.notifications_enabled {
+            settings.notifications_enabled = v;
+        }
+        if let Some(v) = self.notify_needs_you_native {
+            settings.notify_needs_you_native = v;
+        }
+        if let Some(v) = self.notify_needs_you_sound {
+            settings.notify_needs_you_sound = v;
+        }
+        if let Some(v) = self.notify_outcome_native {
+            settings.notify_outcome_native = v;
+        }
+        if let Some(v) = self.notify_outcome_sound {
+            settings.notify_outcome_sound = v;
+        }
+        if let Some(v) = self.notify_warning_native {
+            settings.notify_warning_native = v;
+        }
+        if let Some(v) = self.notify_warning_sound {
+            settings.notify_warning_sound = v;
+        }
+        if let Some(v) = self.notify_team_native {
+            settings.notify_team_native = v;
+        }
+        if let Some(v) = self.notify_team_sound {
+            settings.notify_team_sound = v;
+        }
+        if let Some(v) = self.notify_permission_actions {
+            settings.notify_permission_actions = v;
+        }
+        if let Some(v) = self.notifications_migrated {
+            settings.notifications_migrated = v;
+        }
+        if let Some(v) = &self.notify_disabled_kinds {
+            settings.notify_disabled_kinds = v.clone();
+        }
+        if let Some(v) = self.notify_kinds_migrated {
+            settings.notify_kinds_migrated = v;
+        }
+        if let Some(v) = self.notify_agent_min_duration_ms {
+            settings.notify_agent_min_duration_ms = v;
+        }
     }
 
     /// Mutate only the touched keys of `doc["settings"]` — everything else
@@ -1026,6 +1253,28 @@ impl SettingsPatch {
         set_bool!(terminal_notify_on_attention, "terminalNotifyOnAttention");
         set_bool!(terminal_notify_native, "terminalNotifyNative");
         set_bool!(terminal_notify_sound, "terminalNotifySound");
+        set_bool!(notifications_enabled, "notificationsEnabled");
+        set_bool!(notify_needs_you_native, "notifyNeedsYouNative");
+        set_bool!(notify_needs_you_sound, "notifyNeedsYouSound");
+        set_bool!(notify_outcome_native, "notifyOutcomeNative");
+        set_bool!(notify_outcome_sound, "notifyOutcomeSound");
+        set_bool!(notify_warning_native, "notifyWarningNative");
+        set_bool!(notify_warning_sound, "notifyWarningSound");
+        set_bool!(notify_team_native, "notifyTeamNative");
+        set_bool!(notify_team_sound, "notifyTeamSound");
+        set_bool!(notify_permission_actions, "notifyPermissionActions");
+        set_bool!(notifications_migrated, "notificationsMigrated");
+        set_bool!(notify_kinds_migrated, "notifyKindsMigrated");
+        if let Some(v) = &self.notify_disabled_kinds {
+            let mut arr = toml_edit::Array::new();
+            for kind in v {
+                arr.push(kind.as_str());
+            }
+            table["notifyDisabledKinds"] = toml_edit::value(arr);
+        }
+        if let Some(v) = self.notify_agent_min_duration_ms {
+            table["notifyAgentMinDurationMs"] = toml_edit::value(i64::from(v));
+        }
         if let Some(v) = self.terminal_notify_min_duration_ms {
             table["terminalNotifyMinDurationMs"] = toml_edit::value(i64::from(v));
         }
@@ -1061,6 +1310,14 @@ impl SettingsPatch {
                 AdaptiveSuggestions::Off => "off",
             };
             table["adaptiveSuggestions"] = toml_edit::value(s);
+        }
+        if let Some(v) = self.agent_switch_behavior {
+            let s = match v {
+                AgentSwitchBehavior::NewTab => "new-tab",
+                AgentSwitchBehavior::Handoff => "handoff",
+                AgentSwitchBehavior::Reset => "reset",
+            };
+            table["agentSwitchBehavior"] = toml_edit::value(s);
         }
         if let Some(inner) = &self.updater_ignored_version {
             match inner {
@@ -2423,6 +2680,7 @@ someFutureKey = \"left alone\"
             icon_theme: Some(atlas_icon_theme::MINIMAL_ICON_THEME_ID.to_string()),
             app_icon: Some("light".to_string()),
             adaptive_suggestions: Some(AdaptiveSuggestions::Off),
+            agent_switch_behavior: Some(AgentSwitchBehavior::Handoff),
             git_blame_inline: Some(!defaults.git_blame_inline),
             git_auto_fetch: Some(!defaults.git_auto_fetch),
             auto_update: Some(!defaults.auto_update),
@@ -2437,6 +2695,23 @@ someFutureKey = \"left alone\"
             terminal_notify_on_attention: Some(!defaults.terminal_notify_on_attention),
             terminal_notify_native: Some(!defaults.terminal_notify_native),
             terminal_notify_sound: Some(!defaults.terminal_notify_sound),
+            notifications_enabled: Some(!defaults.notifications_enabled),
+            notify_needs_you_native: Some(!defaults.notify_needs_you_native),
+            notify_needs_you_sound: Some(!defaults.notify_needs_you_sound),
+            notify_outcome_native: Some(!defaults.notify_outcome_native),
+            notify_outcome_sound: Some(!defaults.notify_outcome_sound),
+            notify_warning_native: Some(!defaults.notify_warning_native),
+            notify_warning_sound: Some(!defaults.notify_warning_sound),
+            notify_team_native: Some(!defaults.notify_team_native),
+            notify_team_sound: Some(!defaults.notify_team_sound),
+            notify_permission_actions: Some(!defaults.notify_permission_actions),
+            notifications_migrated: Some(!defaults.notifications_migrated),
+            notify_disabled_kinds: Some(vec![
+                "terminal-done".to_string(),
+                "git-behind".to_string(),
+            ]),
+            notify_kinds_migrated: Some(!defaults.notify_kinds_migrated),
+            notify_agent_min_duration_ms: Some(defaults.notify_agent_min_duration_ms + 1),
         };
         let mut expected = defaults.clone();
         patch.apply_to(&mut expected);

@@ -1,0 +1,9 @@
+# The one Rust version for every machine: local checkouts, CI and the release
+# workflows. CI used to float on `stable`, so a new Rust release
+# brought new clippy lints into CI the day it shipped while every local run
+# still used the old compiler — green here, red there, nothing changed. Bump
+# this deliberately, fixing whatever the new clippy flags in the same change.
+[toolchain]
+channel = "1.99.0"
+components = ["clippy", "rustfmt"]
+profile = "minimal"

@@ -2,7 +2,7 @@
 //!
 //! [`AgentHost`] is what `commands/agents.rs` talks to. It owns the ported
 //! [`AgentManager`], the [`DeltaProjector`] that turns thread events into the
-//! frozen wire, and the two pieces of bookkeeping the ported stack deliberately
+//! session-delta wire, and the two pieces of bookkeeping the ported stack deliberately
 //! does not do:
 //!
 //! 1. **Identity.** The frontend has always addressed an agent by a per-spawn
@@ -1294,6 +1294,7 @@ impl AgentHost {
                 cache_read_tokens: usage.cache_read_tokens,
                 reasoning_tokens: usage.reasoning_tokens,
                 cost: thread.cost().map(|cost| cost.amount).unwrap_or(0.0),
+                currency: thread.cost().map(|cost| cost.currency.to_string()),
             })
             .unwrap_or_default();
         let snapshot = SessionSnapshot {

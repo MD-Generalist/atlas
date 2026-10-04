@@ -155,7 +155,8 @@ persisted.
 - **Tokens** — `turn_input_tokens`, `turn_output_tokens`, `turn_cost_usd` for the
   native agent; `context_used`, `context_size`, `context_pct` for ACP agents, which
   cannot report a token split. `token_source` (`usage` / `context` / `none`) says
-  which. Absent rather than zero when unknown.
+  which. Absent rather than zero when unknown. `turn_cost_usd` is only ever a USD
+  amount: a cost an agent reports in another currency is left out, not converted.
 - **Session shape** — `permission_requests`, `permissions_resolved`, `retries`,
   `compactions`, `compression_saved_tokens`, `assistant_messages`, `plan_updates`,
   `mode_changes`, `model_id`

@@ -861,14 +861,13 @@ include_local = false
             .expect("environment provider");
 
         let snapshot = provider.snapshot().await.expect("environments");
-        let environment_ids: Vec<_> = snapshot
+        let has_local = snapshot
             .environments
             .into_iter()
-            .map(|(id, _environment)| id)
-            .collect();
+            .any(|(id, _environment)| id == LOCAL_ENVIRONMENT_ID);
 
         assert!(!snapshot.include_local);
-        assert!(!environment_ids.contains(&LOCAL_ENVIRONMENT_ID.to_string()));
+        assert!(!has_local);
         assert_eq!(snapshot.default, EnvironmentDefault::Disabled);
     }
 
@@ -880,14 +879,13 @@ include_local = false
             .expect("environment provider");
 
         let snapshot = provider.snapshot().await.expect("environments");
-        let environment_ids: Vec<_> = snapshot
+        let has_local = snapshot
             .environments
             .into_iter()
-            .map(|(id, _environment)| id)
-            .collect();
+            .any(|(id, _environment)| id == LOCAL_ENVIRONMENT_ID);
 
         assert!(snapshot.include_local);
-        assert!(!environment_ids.contains(&LOCAL_ENVIRONMENT_ID.to_string()));
+        assert!(!has_local);
         assert_eq!(
             snapshot.default,
             EnvironmentDefault::EnvironmentId(LOCAL_ENVIRONMENT_ID.to_string())
