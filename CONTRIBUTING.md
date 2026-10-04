@@ -160,6 +160,8 @@ someone/fix-x ──────────────┘
 
 PR straight into `main` only when the change has no version-branch dependency and doesn't need to wait for the next release — a doc fix or a one-line hotfix, say. When in doubt, target the version branch.
 
+**An issue is closed when its fix merges into the version branch**, not when it reaches `main`. GitHub only auto-closes `Fixes #N` on merges into the default branch, and releases go out when they're ready rather than on a schedule, so waiting for `main` would leave fixed issues looking open for weeks — and invite a second PR for the same fix. The maintainer who merges closes the issue by hand, with a comment naming the PR and the branch. If an open issue looks unclaimed, check the version branch's open and merged PRs before starting on it.
+
 Releases are tagged `alpha-X.Y.Z`, with occasional `exp-X.Y.Z-X.Y.Z` snapshots.
 
 ### Versioning
