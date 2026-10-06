@@ -48,6 +48,14 @@ describe("presentAuthor", () => {
     );
   });
 
+  it("treats a blank name as no name at all", () => {
+    const p = presentAuthor(
+      { author_id: "whk_1", author_kind: "webhook", author_name: "  ", author_via: "Deploy bot" },
+      person,
+    );
+    expect(p).toMatchObject({ name: "Deploy bot", via: null });
+  });
+
   it("treats a kind this build does not know as a person lookup", () => {
     expect(presentAuthor({ author_id: "u_ada", author_kind: "other" }, person).badge).toBe(false);
   });

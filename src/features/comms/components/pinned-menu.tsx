@@ -5,7 +5,7 @@ import { timeAgo } from "@/lib/time-ago";
 import { Hint } from "@/ui/tooltip";
 import { CommsAvatar, IntegrationAvatar } from "./comms-avatar";
 import { comms } from "../lib/comms-api";
-import { authorLabel, isWebhookMessage } from "../lib/message-author";
+import { authorLabel, isWebhookMessage, presentAuthor } from "../lib/message-author";
 import { toPlainText } from "../lib/to-plain-text";
 import type { ChatPin, OrgMemberProfile } from "../types";
 
@@ -71,7 +71,11 @@ export function PinnedMenu({
     if (!q) return rows;
     return rows.filter((p) => {
       const body = p.message ? (searchable.get(p.message.id) ?? "") : "";
-      const name = p.message ? (members.get(p.message.author_id)?.name?.toLowerCase() ?? "") : "";
+      // An integration is found by the name it posted under, not by a
+      // member lookup its `whk_…` id can never satisfy.
+      const name = p.message
+        ? authorLabel(p.message, (id) => members.get(id)?.name ?? "").toLowerCase()
+        : "";
       return body.includes(q) || name.includes(q);
     });
   }, [rows, query, members, searchable]);
@@ -138,7 +142,7 @@ export function PinnedMenu({
                         {msg && isWebhookMessage(msg) ? (
                           <IntegrationAvatar
                             id={msg.author_id}
-                            name={msg.author_name ?? "Integration"}
+                            name={presentAuthor(msg, () => "").name}
                             size={16}
                           />
                         ) : (

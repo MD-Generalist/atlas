@@ -37,8 +37,11 @@ export function presentAuthor(
   if (!isWebhookMessage(m)) {
     return { name: personName(m.author_id), via: null, title: null, badge: false };
   }
-  const hook = m.author_via ?? m.author_name ?? "Integration";
-  const name = m.author_name ?? hook;
+  // Blank is absent: an override of "" or "  " must not draw a nameless line.
+  const via = m.author_via?.trim() || null;
+  const own = m.author_name?.trim() || null;
+  const hook = via ?? own ?? "Integration";
+  const name = own ?? hook;
   return {
     name,
     via: name === hook ? null : hook,
