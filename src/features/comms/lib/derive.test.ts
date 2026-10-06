@@ -231,6 +231,9 @@ describe("memberName", () => {
 
   it("never returns an empty label", () => {
     expect(memberName("", "")).toBe("Unknown");
+    // A payload missing both fields must not throw out of the roster build.
+    expect(memberName(undefined, undefined)).toBe("Unknown");
+    expect(memberName(null, null)).toBe("Unknown");
   });
 });
 
@@ -245,6 +248,15 @@ describe("initials", () => {
     expect(initials("wren@acme.dev")).toBe("WR");
   });
 
+  it("treats any punctuation in the local part as a word break", () => {
+    expect(initials("sam+qa@acme.dev")).toBe("SQ");
+    expect(initials("o'brien@acme.dev")).toBe("OB");
+  });
+
+  it("falls back to the domain when the local part has no letters", () => {
+    expect(initials("_@acme.dev")).toBe("AD");
+    expect(initials("@acme")).toBe("AC");
+  });
   it("is ? only when there is nothing to draw", () => {
     expect(initials("  ")).toBe("?");
   });

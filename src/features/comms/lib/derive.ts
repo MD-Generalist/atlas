@@ -149,19 +149,26 @@ export function dmCounterpart(
  * the roster becomes `OrgMemberProfile`s, so every `member.name` reader (DM and
  * contact rows, bylines, mentions, typing hints) gets a real label.
  */
-export function memberName(name: string | null | undefined, email: string): string {
-  return name?.trim() || email.trim() || "Unknown";
+export function memberName(
+  name: string | null | undefined,
+  email: string | null | undefined,
+): string {
+  return name?.trim() || email?.trim() || "Unknown";
 }
 
 /**
  * Avatar initials. A label that is an email (see `memberName`) is read by its
- * local part with `.`/`_`/`-` as word breaks — `j.okonkwo@acme.dev` is "JO",
- * as the web's `initialsOf` draws it — not "J." off the raw address.
+ * local part with any punctuation as a word break — `j.okonkwo@acme.dev` is
+ * "JO", as the web's `initialsOf` draws it, and `o'brien@acme.dev` is "OB" —
+ * not "J." or "O'" off the raw address. A local part with no letters or
+ * digits in it (`_@acme.dev`) falls back to the domain rather than to "?".
  */
 export function initials(name: string): string {
   let source = name.trim();
   if (!/\s/.test(source) && source.includes("@")) {
-    source = source.slice(0, source.indexOf("@")).replace(/[._-]/g, " ");
+    const at = source.indexOf("@");
+    const words = (s: string) => s.replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+    source = words(source.slice(0, at)) || words(source.slice(at + 1));
   }
   const parts = source.split(/\s+/).filter(Boolean);
   if (parts.length === 0) return "?";
