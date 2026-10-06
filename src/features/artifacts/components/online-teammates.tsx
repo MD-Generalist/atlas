@@ -1,5 +1,5 @@
 /**
- * Who else is here — an overlapping stack of faces, each with the online dot,
+ * Who else is here — a row of faces, each with the online dot,
  * in the Timeline's header.
  *
  * The web Timeline shows the same thing on every face it draws; the desktop
@@ -77,12 +77,12 @@ export const OnlineTeammates = memo(function OnlineTeammates({
         tabIndex={0}
         className="flex shrink-0 items-center gap-1 rounded-full outline-none focus-visible:ring-1 focus-visible:ring-[var(--ring)]"
       >
-        <span className="flex items-center -space-x-1">
+        {/* Side by side, not overlapped: every face carries its dot in the
+         *  bottom-right corner, and an overlapping stack would bury each dot
+         *  under the next face — the one thing this row exists to show. */}
+        <span className="flex items-center gap-0.5">
           {shown.map((m) => (
-            <span
-              key={m.userId}
-              className="relative inline-flex rounded-full ring-1 ring-[var(--background)]"
-            >
+            <span key={m.userId} className="relative inline-flex rounded-full">
               <AccountAvatar user={avatarUser(m)} size={FACE_PX} />
               <OnlineDot px={6} />
             </span>
