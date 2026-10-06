@@ -1521,7 +1521,8 @@ export const ChatPanel = memo(function ChatPanel({ tabId }: ChatPanelProps) {
       )}
 
       {/* Cloud comments: the resolver runs for the pane's lifetime (it is what
-          decides whether the header button exists); the panel only on demand. */}
+          decides whether the header button exists); the panel only on demand,
+          as a docked flex column that narrows the conversation beside it. */}
       <ChatCommentsController tabId={tabId} />
       {commentsPanelOpen && (
         <Suspense fallback={null}>

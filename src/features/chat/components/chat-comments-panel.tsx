@@ -1,6 +1,7 @@
 /**
- * The thread list for a live chat: the Timeline's comments panel in the
- * right-hand overlay slot the Bash and Plans panels use.
+ * The thread list for a live chat: the Timeline's comments panel, docked to
+ * the right of the conversation. Unlike the Bash and Plans overlays it takes
+ * layout space — the transcript reflows narrower beside it.
  *
  * Navigation goes through the transcript's own jump (`atlas:chat-jump`),
  * addressed by message index as every other jump is, plus the row ids to
@@ -118,29 +119,22 @@ export function ChatCommentsPanel({ tabId, onClose }: { tabId: string; onClose: 
 
   if (!comments) return null;
 
+  // A flex column beside the conversation, not an overlay: comments are read
+  // AGAINST the transcript (and a jump lands in it), so covering the right
+  // edge of the very messages being discussed defeated the panel. Capped at
+  // half the pane so a wide saved width on a narrow window still leaves the
+  // conversation — and its composer — usable.
   return (
-    <>
+    <div
+      style={{ width: bashPanel.width }}
+      className="relative h-full max-w-[50%] shrink-0 flex flex-col border-l border-[var(--border)] bg-[var(--sidebar)] animate-slide-in-right"
+    >
       <div
-        className="absolute inset-0 z-20 scrim-soft animate-fade-in"
-        onClick={onClose}
+        onMouseDown={onResizeStart}
+        className="absolute left-0 top-0 bottom-0 z-10 w-1 cursor-col-resize hover:bg-[var(--atlas-border-strong)]"
         aria-hidden
       />
-      <div
-        style={{ width: bashPanel.width }}
-        className="absolute right-0 top-0 bottom-0 z-30 flex flex-col border-l border-[var(--border)] bg-[var(--sidebar)] shadow-md animate-slide-in-right"
-      >
-        <div
-          onMouseDown={onResizeStart}
-          className="absolute left-0 top-0 bottom-0 z-10 w-1 cursor-col-resize hover:bg-[var(--atlas-border-strong)]"
-          aria-hidden
-        />
-        <CommentsPanelBase
-          anchors={anchors}
-          comments={comments}
-          onJump={onJump}
-          onClose={onClose}
-        />
-      </div>
-    </>
+      <CommentsPanelBase anchors={anchors} comments={comments} onJump={onJump} onClose={onClose} />
+    </div>
   );
 }
