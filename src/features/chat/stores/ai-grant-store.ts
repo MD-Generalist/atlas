@@ -200,6 +200,10 @@ export function useActiveGatewayOrgId(): string | null {
  * not exist; and a bar declaring "no AI grants" over an agent visibly working
  * reads as Atlas contradicting itself. The lock and the bar both land the
  * moment the turn ends, which is the first point a send could be refused.
+ *
+ * Called with `turnRunning: false` it is also the hold on the tab's send
+ * queue (`drain-gate.ts`): a message queued during that deferred turn waits
+ * with the lock instead of draining into the refusal at the turn's end.
  */
 export function grantLocksComposer(
   noGrant: boolean,

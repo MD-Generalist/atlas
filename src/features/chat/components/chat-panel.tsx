@@ -118,6 +118,7 @@ const HEADER_INSET = 46;
 import { PermissionModal } from "./permission-modal";
 import { ChatCommentsController } from "./chat-comments-controller";
 import { useCommentCount } from "../stores/chat-comments-store";
+import { grantLocksComposer, useNoAiGrant } from "../stores/ai-grant-store";
 import { SessionElicitation } from "./session-elicitation";
 
 // Both panels are modal-style and never visible on first paint. Lazy so
@@ -950,6 +951,11 @@ export const ChatPanel = memo(function ChatPanel({ tabId }: ChatPanelProps) {
   const prevStatusRef = useRef<string | null>(null);
   const prevAcpRef = useRef<string | undefined>(undefined);
   const prevResumingRef = useRef(false);
+  // The no-AI-grant hold on the queue (`drain-gate.ts`): what the composer
+  // lock would be with no turn running.
+  const noAiGrant = useNoAiGrant();
+  const grantHold = grantLocksComposer(noAiGrant, session?.agentType ?? "", false);
+  const prevGrantHoldRef = useRef(grantHold);
   const handleSendRef = useRef<
     | ((
         content: string,
@@ -1034,6 +1040,8 @@ export const ChatPanel = memo(function ChatPanel({ tabId }: ChatPanelProps) {
     const curResuming = !!session?.resumePending || !!session?.unrestoredModeId;
     const prevResuming = prevResumingRef.current;
     prevResumingRef.current = curResuming;
+    const prevGrantHold = prevGrantHoldRef.current;
+    prevGrantHoldRef.current = grantHold;
     // The gate lives in `drain-gate.ts` with its own test: a queue drains
     // only into a BOUND session. The bind-failure branch above parks the held
     // message back in the queue and drops the status to idle, and reading
@@ -1047,6 +1055,8 @@ export const ChatPanel = memo(function ChatPanel({ tabId }: ChatPanelProps) {
       curAcp,
       prevResuming,
       curResuming,
+      prevGrantHold,
+      curGrantHold: grantHold,
     });
     if (justBound || justResumed) {
       // The first message held while the session was starting goes out
@@ -1082,6 +1092,7 @@ export const ChatPanel = memo(function ChatPanel({ tabId }: ChatPanelProps) {
     session?.acpSessionId,
     session?.resumePending,
     session?.unrestoredModeId,
+    grantHold,
     tabId,
   ]);
 
@@ -1262,6 +1273,16 @@ export const ChatPanel = memo(function ChatPanel({ tabId }: ChatPanelProps) {
     // effect sends it once the user has picked a mode. The composer already
     // refuses; this catches every other sender (chips, handoffs).
     if (bound?.unrestoredModeId) {
+      useChatStore.getState().actions.enqueueMessage(tabId, actualContent);
+      return;
+    }
+    // The same for the no-AI-grant hold: the composer is locked, but a
+    // next-step chip or a handoff is not the composer. Park it with the rest
+    // of the held queue rather than send it to a gateway that will refuse it;
+    // the hold's release drains it (`drain-gate.ts`). Not mid-turn — an answer
+    // to the running turn's own question belongs to the turn already admitted,
+    // and a message held for the bind (`recorded`) already has its bubble.
+    if (grantHold && !opts?.recorded && !isBusyAgentStatus(bound?.status)) {
       useChatStore.getState().actions.enqueueMessage(tabId, actualContent);
       return;
     }
