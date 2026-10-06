@@ -13,7 +13,7 @@
 // reads "Today" and "Yesterday" on whatever day the video is recorded.
 
 /** The cast. `uzayer` is the signed-in user on the desktop. */
-export type PersonKey = "uzayer" | "zuhayer" | "priya";
+export type PersonKey = "uzayer" | "zuhayer";
 
 /** The agents that appear on the record. */
 export type AgentKey = "claude-code" | "codex" | "atlas-agent";

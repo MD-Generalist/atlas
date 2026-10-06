@@ -106,6 +106,13 @@ export function sendDelta(delta: AgentDelta): Promise<void> {
   return emit("atlas:agents", delta);
 }
 
+/** Name a session as the agent would (`title_updated`): a seeded chat opens titled, not "New chat". */
+export function sendTitle(sessionId: string, title: string): Promise<void> {
+  const s = latest(sessionId);
+  if (!s) return Promise.resolve();
+  return sendDelta({ kind: "title_updated", ...at(s), title });
+}
+
 function sessionOrThrow(key: SessionKey): FakeSession {
   const s = sessions.get(key.session_id);
   if (!s) throw new Error(`session ${key.session_id} not found`);

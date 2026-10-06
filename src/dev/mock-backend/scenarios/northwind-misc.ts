@@ -72,9 +72,12 @@ import type { AgentCatalog, AgentCatalogEntry } from "@/types/agent-catalog";
 import type { NativeModelsRefresh } from "@/types/agents";
 import type { MockHandlers, MockResponses, TypedHandlers } from "../types";
 import type { AgentKey, MemoryContent } from "./northwind-content-types";
+import { NORTHWIND_FILES } from "../fixtures/northwind-repo";
 import { CONTENT } from "./northwind-content";
+import { lineStats } from "./northwind-timeline";
 import {
   addMemory,
+  CODEX_INSTALLED,
   HOME,
   iso,
   LOAD,
@@ -219,8 +222,8 @@ function sessionSummary(sessionId: string): SessionSummary {
     toolCallCount: tools.length,
     checkpointCount: s.steps.filter((step) => step.kind === "checkpoint").length,
     branches: [c.branch],
-    insertions: edits.reduce((n, step) => n + (step.insertions ?? 0), 0),
-    deletions: edits.reduce((n, step) => n + (step.deletions ?? 0), 0),
+    insertions: edits.reduce((n, step) => n + lineStats(step).insertions, 0),
+    deletions: edits.reduce((n, step) => n + lineStats(step).deletions, 0),
     filesTouched: new Set(edits.map((step) => step.path)).size,
     totalTokens: c.agent === "atlas-agent" ? c.tokens.input + c.tokens.output : 0,
     inputTokens: c.agent === "atlas-agent" ? c.tokens.input : 0,
@@ -257,42 +260,44 @@ const priced = (model: string, t: Spend): number => {
 
 /** What the store-front looked like being built, oldest first: the backfill's titles. */
 const BACKFILL_TITLES = [
-  "Scaffold the Bun server and static routes",
+  "Scaffold the Bun server and the page routes",
   "Add the product grid",
-  "Seed the catalog with twelve products",
-  "Product detail page with an image gallery",
-  "Cart drawer with quantity steppers",
-  "Persist the cart in localStorage",
+  "Seed the catalog",
   "Store prices as integer cents",
-  "Format prices for display",
+  "Format prices with formatCents",
+  "Cart API with a cookie per shopper",
+  "Cart page with quantity inputs",
   "Set up bun test",
   "Write cart tests",
   "Checkout form layout",
-  "Validate email and postcode on checkout",
-  "Order confirmation page",
-  "Fix rounding in order totals",
+  "Validate name, email and address on checkout",
+  "Recompute order totals on the server",
+  "Order confirmation message",
   "Add a free shipping threshold",
   "Explain the order flow end to end",
-  "Responsive header and nav",
-  "Add a footer with store links",
+  "Header with the cart count",
+  "Free shipping banner",
   "Tidy styles.css into sections",
-  "Add a /api/health route",
-  "Lazy-load product images",
+  "JSON 404 for unknown API paths",
   "Empty-cart state",
   "Keyboard focus styles for buttons",
   "Rename OrderBook methods",
   "Add a README with setup steps",
-  "Show stock counts on the product page",
   "Move the API routes into src/server/api.ts",
+  "Escape product names in HTML",
+  "Write API tests with a cookie per shopper",
+  "Add the MIT license",
   "Explain how the cart total is computed",
 ];
 
-/** Agent × model for one backfill session, weighted like a Claude Code user. */
+/**
+ * Agent × model for one backfill session, weighted like a Claude Code user.
+ * Never Codex: Uzayer installs it on camera in video 9.
+ */
 function pickAgent(r: number): { agent: AgentKey; model: string } {
-  if (r < 0.45) return { agent: "claude-code", model: "claude-opus-4" };
-  if (r < 0.65) return { agent: "claude-code", model: "claude-sonnet-4" };
-  if (r < 0.85) return { agent: "atlas-agent", model: "claude-sonnet-4" };
-  return { agent: "codex", model: "gpt-5" };
+  if (r < 0.55) return { agent: "claude-code", model: "claude-opus-4" };
+  if (r < 0.8) return { agent: "claude-code", model: "claude-sonnet-4" };
+  return { agent: "atlas-agent", model: "claude-sonnet-4" };
 }
 
 /**
@@ -717,6 +722,8 @@ function installAgent(id: string): null {
   return null;
 }
 
+if (CODEX_INSTALLED) installAgent("codex-acp");
+
 function uninstallAgent(id: string): null {
   const entry = registry.find((candidate) => candidate.id === id);
   if (entry) entry.installed = false;
@@ -1024,29 +1031,12 @@ interface NwSkill {
   body: string;
 }
 
-const RELEASE_NOTES_BODY = `# release-notes
-
-Write the release notes for northwind-shop from the commits since the last tag.
-
-## Steps
-
-1. List the commits since the last tag:
-
-   \`\`\`bash
-   git log --no-merges --pretty='%h %s' $(git describe --tags --abbrev=0)..HEAD
-   \`\`\`
-
-2. Group them under three headings, in this order:
-   - **New** — things a shopper can do that they couldn't before.
-   - **Fixed** — things that were broken and now work.
-   - **Changed** — things that work differently.
-3. Write every line for shoppers, not developers: say what changed in the
-   store, not which file moved. "Discount codes work in any case" — not
-   "normalise codes in api.ts".
-4. Skip commits that only touch tests, and refactors that change nothing a
-   shopper can see.
-5. End with the version and today's date.
-`;
+/** A project skill's body: its SKILL.md in the repo, without the front matter. */
+const skillBody = (name: string): string =>
+  (NORTHWIND_FILES[`.agents/skills/${name}/SKILL.md`]?.text ?? "").replace(
+    /^---\n[\s\S]*?\n---\n\n/,
+    "",
+  );
 
 let skills: NwSkill[] = [
   {
@@ -1097,19 +1087,14 @@ characters. Add a body only when the why is not obvious from the diff.
     description: "Write release notes for northwind-shop from the commits since the last tag.",
     scope: "project",
     tools: ["claude-code", "codex", "atlas"],
-    body: RELEASE_NOTES_BODY,
+    body: skillBody("release-notes"),
   },
   {
     name: "api-routes",
     description: "How northwind-shop's API routes are laid out, and the rules a new one follows.",
     scope: "project",
     tools: ["claude-code", "atlas"],
-    body: `# api-routes
-
-Every route lives in \`src/server/api.ts\`. Prices are integer cents, and the
-server recomputes every total from the catalog — never trust a price the browser
-sends. Add a test in \`tests/\` for each new route.
-`,
+    body: skillBody("api-routes"),
   },
 ];
 
@@ -1252,7 +1237,7 @@ const LOG_SEEDS: LogSeed[] = [
     3,
     "agent",
     "agent-org-action",
-    "atlas-agent org_sessions: northwind-shop, today",
+    "atlas-agent org_sessions: by Zuhayer Masud",
     {
       agent: "atlas-agent",
       tool: "org_sessions",
@@ -1270,30 +1255,8 @@ const LOG_SEEDS: LogSeed[] = [
       status: "success",
     },
   ],
-  [12, "git", "commit", "Make discount codes case-insensitive", { files: 3 }],
   [
-    40,
-    "agent",
-    "turn",
-    "Make discount codes case-insensitive",
-    {
-      model: "claude-opus-4",
-      tokens: 27_800,
-    },
-  ],
-  [
-    55,
-    "agent",
-    "agent-org-action",
-    "atlas-agent org_session: Show every checkout error at once",
-    {
-      agent: "atlas-agent",
-      tool: "org_session",
-      status: "success",
-    },
-  ],
-  [
-    58,
+    35,
     "agent",
     "agent-org-action",
     "atlas-agent org_members: Northwind",
@@ -1303,10 +1266,21 @@ const LOG_SEEDS: LogSeed[] = [
       status: "success",
     },
   ],
-  [95, "editor", "save", "api.ts", { path: "src/server/api.ts" }],
-  [130, "git", "pull", "main — 2 new commits from Zuhayer"],
+  [154, "git", "commit", "Make discount codes case-insensitive", { files: 2 }],
+  [
+    155,
+    "agent",
+    "turn",
+    "Make discount codes case-insensitive",
+    {
+      model: "claude-opus-4",
+      tokens: 27_800,
+    },
+  ],
+  [158, "editor", "save", "api.ts", { path: "src/server/api.ts" }],
+  [170, "git", "pull", "main: 3 new commits from Zuhayer"],
   [180, "project", "open", PROJECT.name, { path: PROJECT.path }],
-  [182, "system", "index", "Codebase index rebuilt — 24 files", { durationMs: 1_840 }],
+  [182, "system", "index", "Codebase index rebuilt: 24 files", { durationMs: 1_840 }],
 ];
 
 function projectLog(): string {

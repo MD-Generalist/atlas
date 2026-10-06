@@ -89,7 +89,7 @@ function blank(
 }
 
 /** Lines added and removed by an edit, when the content does not say. */
-function lineStats(step: Extract<Step, { kind: "tool" }>): {
+export function lineStats(step: Extract<Step, { kind: "tool" }>): {
   insertions: number;
   deletions: number;
 } {
@@ -355,7 +355,7 @@ let liveTimer: ReturnType<typeof setInterval> | null = null;
  * the board each time (`atlas:capture-changed`, as the capture worker does).
  * The Session keeps its pulsing dot until the last step lands.
  */
-export function streamLiveSession(everyMs = 6_000): void {
+export function streamLiveSession(everyMs = 9_000): void {
   const live = sessions().find((s) => s.live);
   if (!live || liveTimer) return;
   const id = live.content.id;

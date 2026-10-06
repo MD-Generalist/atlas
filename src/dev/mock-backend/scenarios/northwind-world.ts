@@ -31,6 +31,12 @@ const params = new URLSearchParams(typeof location === "undefined" ? "" : locati
 export const VIDEO = params.get("video");
 export const BEFORE_VIDEO_1 = VIDEO === "1";
 
+/**
+ * `?codex=1`: Codex is already installed, as it is after video 9 installs it
+ * on camera. Video 11 needs it; video 9 must start without it.
+ */
+export const CODEX_INSTALLED = params.get("codex") === "1";
+
 // ── The cast ──────────────────────────────────────────────────────────────
 
 export interface Person {
@@ -66,16 +72,6 @@ export const PEOPLE: Record<PersonKey, Person> = {
     role: "member",
     isOwner: false,
     joinedDaysAgo: 8,
-  },
-  priya: {
-    key: "priya",
-    userId: "usr_priya",
-    memberId: "mem_priya",
-    name: "Priya Raman",
-    email: "priya@northwind.dev",
-    role: "member",
-    isOwner: false,
-    joinedDaysAgo: 5,
   },
 };
 
@@ -324,7 +320,7 @@ export function addMessage(message: ChatMessageContent): void {
 }
 
 /** Who is online right now. Zuhayer comes online on the `zuhayerOnline` cue. */
-export const presence = { online: new Set<PersonKey>(["uzayer", "priya"]) };
+export const presence = { online: new Set<PersonKey>(["uzayer"]) };
 
 // ── Memory ────────────────────────────────────────────────────────────────
 

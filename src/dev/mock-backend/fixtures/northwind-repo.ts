@@ -93,25 +93,137 @@ export function northwindFilesAt(has: (key: string) => boolean): Record<string, 
   return out;
 }
 
+/** One contiguous change a commit made to a file: an agent's single Edit (or, without `before`, a Write). */
+export interface NorthwindHunk {
+  before?: string;
+  after: string;
+}
+
+const visibleWith = (line: NorthwindLine, has: Set<string>): boolean =>
+  has.has(line.added) && !(line.removed !== null && has.has(line.removed));
+
+/**
+ * What `commit` did to `path`, as the hunks an agent's Edit calls would show:
+ * each changed run of lines with `context` unchanged lines either side. A file
+ * the commit created is one hunk with no `before`. `order` is every commit key,
+ * oldest first, so "before" means the file as the commits ahead of it left it.
+ *
+ * Session transcripts take their diffs from here, so the tool call a viewer
+ * opens on the Timeline shows the same lines the commit and blame do.
+ */
+export function northwindHunks(
+  order: readonly string[],
+  commit: string,
+  path: string,
+  context = 1,
+): NorthwindHunk[] {
+  const file = NORTHWIND_HISTORY[path];
+  const at = order.indexOf(commit);
+  if (!file || at < 0) return [];
+  const prior = new Set(order.slice(0, at));
+  const upTo = new Set([...prior, commit]);
+  const textOf = (lines: NorthwindLine[], has: Set<string>) =>
+    lines
+      .filter((line) => visibleWith(line, has))
+      .map((line) => line.text)
+      .join("\n");
+  if (file.base === commit) return [{ after: textOf(file.lines, upTo) }];
+  if (!prior.has(file.base)) return [];
+
+  const rows = file.lines.filter((line) => visibleWith(line, prior) || visibleWith(line, upTo));
+  const changed = rows.map((line) => line.added === commit || line.removed === commit);
+  const ranges: [number, number][] = [];
+  changed.forEach((isChanged, i) => {
+    if (!isChanged) return;
+    const start = Math.max(0, i - context);
+    const end = Math.min(rows.length, i + context + 1);
+    const last = ranges[ranges.length - 1];
+    if (last && start <= last[1]) last[1] = Math.max(last[1], end);
+    else ranges.push([start, end]);
+  });
+  return ranges.map(([start, end]) => {
+    const slice = rows.slice(start, end);
+    return { before: textOf(slice, prior), after: textOf(slice, upTo) };
+  });
+}
+
+/** `path` as it read just before `commit` landed (what an agent working toward it would Read). */
+export function northwindTextBefore(
+  order: readonly string[],
+  commit: string,
+  path: string,
+): string {
+  const file = NORTHWIND_HISTORY[path];
+  const prior = new Set(order.slice(0, Math.max(0, order.indexOf(commit))));
+  if (!file || !prior.has(file.base)) return "";
+  return file.lines
+    .filter((line) => visibleWith(line, prior))
+    .map((line) => line.text)
+    .join("\n");
+}
+
+/** A commit's files with their line counts, from the same history git and blame read. */
+export function northwindCommitFiles(
+  order: readonly string[],
+  commit: string,
+): { path: string; status: "A" | "M" | "D"; insertions: number; deletions: number }[] {
+  const out: { path: string; status: "A" | "M" | "D"; insertions: number; deletions: number }[] =
+    [];
+  const upTo = new Set(order.slice(0, order.indexOf(commit) + 1));
+  for (const [path, { base, lines }] of Object.entries(NORTHWIND_HISTORY)) {
+    if (!upTo.has(base)) continue;
+    const insertions = lines.filter((l) => l.added === commit && visibleWith(l, upTo)).length;
+    const deletions = lines.filter((l) => l.removed === commit).length;
+    if (insertions + deletions === 0) continue;
+    out.push({ path, status: base === commit ? "A" : "M", insertions, deletions });
+  }
+  return out;
+}
+
 const SOURCES: Record<string, Source> = {
+  ".agents/skills/api-routes/SKILL.md": {
+    base: "c-init",
+    text: `---
+name: api-routes
+description: How northwind-shop's API routes are laid out, and the rules a new one follows.
+---
+
+# api-routes
+
+Every route lives in \`src/server/api.ts\`. Prices are integer cents, and the
+server recomputes every total from the catalog: never trust a price the browser
+sends. Add a test in \`tests/\` for each new route.
+`,
+  },
   ".agents/skills/release-notes/SKILL.md": {
     base: "c-init",
     text: `---
 name: release-notes
-description: Write release notes for northwind-shop from the commits since the last tag
+description: Write release notes for northwind-shop from the commits since the last tag.
 ---
 
-# Release notes
+# release-notes
+
+Write the release notes for northwind-shop from the commits since the last tag.
+
+## Steps
 
 1. List the commits since the last tag:
 
    \`\`\`bash
-   git log $(git describe --tags --abbrev=0)..HEAD
+   git log --no-merges --pretty='%h %s' $(git describe --tags --abbrev=0)..HEAD
    \`\`\`
 
-2. Group them under **New**, **Fixed** and **Changed**.
-3. Write every line for shoppers, not developers: what changed in the shop, not in the code.
-4. Skip commits that only touch tests, and commits that only refactor.
+2. Group them under three headings, in this order:
+   - **New**: things a shopper can do that they couldn't before.
+   - **Fixed**: things that were broken and now work.
+   - **Changed**: things that work differently.
+3. Write every line for shoppers, not developers: say what changed in the
+   store, not which file moved. "Discount codes work in any case", not
+   "normalize codes in api.ts".
+4. Skip commits that only touch tests, and refactors that change nothing a
+   shopper can see.
+5. End with the version and today's date.
 `,
   },
   ".gitignore": {
@@ -461,8 +573,8 @@ function render(summary: CartSummary): void {
           <tr>
             <td>\${escapeHtml(line.name)}</td>
             <td>\${formatCents(line.unitPrice)}</td>
-            <td><input type="number" min="0" max="10" value="\${line.quantity}" data-qty="\${line.productId}" aria-label="Quantity of \${escapeHtml(line.name)}" /></td>«c-init>c-priya-qty»
-            <td><input type="number" min="0" max="10" step="1" inputmode="numeric" value="\${line.quantity}" data-qty="\${line.productId}" aria-label="Quantity of \${escapeHtml(line.name)}" /></td>«c-priya-qty»
+            <td><input type="number" min="0" max="10" value="\${line.quantity}" data-qty="\${line.productId}" aria-label="Quantity of \${escapeHtml(line.name)}" /></td>«c-init>c-qty»
+            <td><input type="number" min="0" max="10" step="1" inputmode="numeric" value="\${line.quantity}" data-qty="\${line.productId}" aria-label="Quantity of \${escapeHtml(line.name)}" /></td>«c-qty»
             <td>\${formatCents(line.lineTotal)}</td>
             <td><button class="link" data-remove="\${line.productId}">Remove</button></td>
           </tr>\`,
@@ -1001,11 +1113,11 @@ export function apiRoutes(carts = new CartStore(), orders = new OrderBook()) {
 
     "/api/orders": {
       POST: withCart(async (req, cartId) => {
-        const order = orders.place(carts.get(cartId), await req.json());«c-init>c-normalise»
-        const body = await req.json();«c-normalise»
-        // Codes are case-insensitive: normalise once, here, at the boundary.«c-normalise»
-        if (typeof body.discountCode === "string") body.discountCode = body.discountCode.trim().toUpperCase();«c-normalise»
-        const order = orders.place(carts.get(cartId), body);«c-normalise»
+        const order = orders.place(carts.get(cartId), await req.json());«c-init>c-normalize»
+        const body = await req.json();«c-normalize»
+        // Codes are case-insensitive: normalize once, here, at the boundary.«c-normalize»
+        if (typeof body.discountCode === "string") body.discountCode = body.discountCode.trim().toUpperCase();«c-normalize»
+        const order = orders.place(carts.get(cartId), body);«c-normalize»
         carts.clear(cartId);
         return order;
       }),
@@ -1052,17 +1164,17 @@ export function setQuantity(cart: Cart, productId: string, quantity: number): vo
     cart.delete(productId);
     return;
   }
-  if (quantity > MAX_QUANTITY) {«c-priya-qty»
-    throw new CartError(\`You can add at most \${MAX_QUANTITY} of one product\`);«c-priya-qty»
-  }«c-priya-qty»
-  if (Math.min(quantity, MAX_QUANTITY) > product.stock) {«c-stock>c-priya-qty»
-  if (quantity > product.stock) {«c-priya-qty»
+  if (quantity > MAX_QUANTITY) {«c-qty»
+    throw new CartError(\`You can add at most \${MAX_QUANTITY} of one product\`);«c-qty»
+  }«c-qty»
+  if (Math.min(quantity, MAX_QUANTITY) > product.stock) {«c-stock>c-qty»
+  if (quantity > product.stock) {«c-qty»
     throw new CartError(«c-stock»
       product.stock === 0 ? \`\${product.name} is sold out\` : \`Only \${product.stock} \${product.name} left in stock\`,«c-stock»
     );«c-stock»
   }«c-stock»
-  cart.set(productId, Math.min(quantity, MAX_QUANTITY));«c-init>c-priya-qty»
-  cart.set(productId, quantity);«c-priya-qty»
+  cart.set(productId, Math.min(quantity, MAX_QUANTITY));«c-init>c-qty»
+  cart.set(productId, quantity);«c-qty»
 }
 
 export function summarize(cart: Cart): CartSummary {
@@ -1487,12 +1599,12 @@ describe("cart", () => {
     expect(() => setQuantity(cart, "mug", 1.5)).toThrow(CartError);
   });
 
-  test("quantity is capped", () => {«c-init>c-priya-qty»
-  test("more than the cap is refused", () => {«c-priya-qty»
+  test("quantity is capped", () => {«c-init>c-qty»
+  test("more than the cap is refused", () => {«c-qty»
     const cart: Cart = new Map();
-    setQuantity(cart, "mug", 99);«c-init>c-priya-qty»
-    expect(() => setQuantity(cart, "mug", MAX_QUANTITY + 1)).toThrow(CartError);«c-priya-qty»
-    setQuantity(cart, "mug", MAX_QUANTITY);«c-priya-qty»
+    setQuantity(cart, "mug", 99);«c-init>c-qty»
+    expect(() => setQuantity(cart, "mug", MAX_QUANTITY + 1)).toThrow(CartError);«c-qty»
+    setQuantity(cart, "mug", MAX_QUANTITY);«c-qty»
     expect(cart.get("mug")).toBe(MAX_QUANTITY);
   });
 «c-stock»
@@ -1506,12 +1618,12 @@ describe("cart", () => {
   test("sold-out products cannot be added", () => {«c-stock»
     expect(() => addItem(new Map(), "pins")).toThrow("Enamel Pin Set is sold out");«c-stock»
   });«c-stock»
-«c-priya-qty»
-  test("a line holds at most ten of one product", () => {«c-priya-qty»
-    const cart: Cart = new Map([["mug", 9]]);«c-priya-qty»
-    expect(() => addItem(cart, "mug", 2)).toThrow("You can add at most 10 of one product");«c-priya-qty»
-    expect(cart.get("mug")).toBe(9);«c-priya-qty»
-  });«c-priya-qty»
+«c-qty»
+  test("a line holds at most ten of one product", () => {«c-qty»
+    const cart: Cart = new Map([["mug", 9]]);«c-qty»
+    expect(() => addItem(cart, "mug", 2)).toThrow("You can add at most 10 of one product");«c-qty»
+    expect(cart.get("mug")).toBe(9);«c-qty»
+  });«c-qty»
 
   test("summary totals a small order with flat shipping", () => {
     const summary = summarize(new Map([["mug", 1], ["stickers", 2]]));
@@ -1591,12 +1703,12 @@ describe("POST /api/orders with a discount code", () => {
     const { body } = await checkout();
     expect(body.discount).toBe(0);
   });
-«c-normalise»
-  test("codes are case-insensitive", async () => {«c-normalise»
-    const { status, body } = await checkout("  northwind10 ");«c-normalise»
-    expect(status).toBe(200);«c-normalise»
-    expect(body.discount).toBe(250);«c-normalise»
-  });«c-normalise»
+«c-normalize»
+  test("codes are case-insensitive", async () => {«c-normalize»
+    const { status, body } = await checkout("  northwind10 ");«c-normalize»
+    expect(status).toBe(200);«c-normalize»
+    expect(body.discount).toBe(250);«c-normalize»
+  });«c-normalize»
 });
 `,
   },

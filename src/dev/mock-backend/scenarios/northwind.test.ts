@@ -6,6 +6,7 @@ import type { BoardPage, SessionDetail } from "@/features/artifacts/types";
 import type { CommentThreads } from "@/features/artifacts/lib/comments-api";
 import type { CommitSession } from "@/features/git/components/git-manager/history-view";
 import type { CommsSnapshot } from "@/features/comms/lib/comms-api";
+import { northwindFilesAt } from "../fixtures/northwind-repo";
 import { CONTENT } from "./northwind-content";
 import { PROJECT, REMOTE_PROJECT_ID } from "./northwind-world";
 
@@ -52,6 +53,21 @@ describe("northwind content", () => {
     expect(
       CONTENT.commits.find((c) => c.subject === "Validate discount codes on the server")?.sessions,
     ).toHaveLength(2);
+  });
+
+  // A tool call's diff on camera has to be the code the commit and blame show.
+  it("writes every committed edit exactly as the repo has it", () => {
+    const order = CONTENT.commits.map((c) => c.key);
+    for (const s of CONTENT.sessions) {
+      const checkpoint = s.steps.find((step) => step.kind === "checkpoint");
+      if (checkpoint?.kind !== "checkpoint") continue;
+      const upTo = new Set(order.slice(0, order.indexOf(checkpoint.commit) + 1));
+      const files = northwindFilesAt((key) => upTo.has(key));
+      for (const step of s.steps) {
+        if (step.kind !== "tool" || !step.diff || !step.path) continue;
+        expect(files[step.path]?.text, `${s.id} ${step.id}`).toContain(step.diff.after);
+      }
+    }
   });
 
   it("anchors comments, cards and cues on things that exist", () => {

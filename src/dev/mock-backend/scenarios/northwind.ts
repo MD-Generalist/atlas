@@ -1,9 +1,8 @@
 // Northwind: the demo organisation the Atlas Learn videos are recorded in,
 // with no real org to seed. `localhost:1420/?scenario=northwind&record=1`.
 //
-// Uzayer Masud (Owner) is signed in on the desktop; Zuhayer Masud is a Member;
-// Priya Raman ran one session yesterday. `northwind-shop` is bound to Cloud,
-// the Timeline holds a week of their Sessions across Claude Code, Codex and
+// Uzayer Masud (Owner) is signed in on the desktop; Zuhayer Masud is a Member.
+// `northwind-shop` is bound to Cloud, the Timeline holds a week of their Sessions across Claude Code, Codex and
 // Atlas Agent, commits link back to the Sessions that produced them (one to
 // two), #shop has the conversation, and Memory/Policy/Skills are set up for
 // video 11.
@@ -24,7 +23,8 @@
 //               or commit yet; asking Claude Code to "add a discount code field
 //               to checkout" creates both
 //   chat=<id>   the recorded Session the first agent chat opens on (default
-//               s-discount; s-normalise for video 11; `none` for an empty one)
+//               s-discount; s-normalize for video 11; `none` for an empty one)
+//   codex=1     Codex already installed, as after video 9 (video 11 needs it)
 //
 // Live cues, for the moments a teammate does something mid-take. Each is a
 // console action (`__atlasMock.actions.<name>()`) AND a shortcut, because
@@ -178,11 +178,11 @@ export const northwind: Scenario = {
     installNorthwindAgent({
       effects: {
         postShopReport: (args) =>
-          void postAsMe("shop", text(args, "message"), { session: "s-normalise" }),
+          void postAsMe("shop", text(args, "message"), { session: "s-normalize" }),
         postDiscountSession: (args) =>
           void postAsMe("shop", text(args, "message"), { session: "s-discount" }),
         replyToComment: (args) =>
-          commentAs("uzayer", "s-normalise", "e-api", text(args, "reply"), "cm-expired"),
+          commentAs("uzayer", "s-normalize", "e-api", text(args, "reply"), "cm-expired"),
       },
       rememberDecision,
     });

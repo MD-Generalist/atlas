@@ -26,6 +26,7 @@ import {
   setStatus,
   streamText,
   upsertToolCall,
+  sendTitle,
   type AgentModels,
   type NewSessionInfo,
 } from "../fake-agent";
@@ -42,7 +43,9 @@ import {
   rowId,
   session,
   sessionContent,
+  sessions,
   setPending,
+  PEOPLE,
   type PendingChange,
 } from "./northwind-world";
 
@@ -50,6 +53,9 @@ import {
 
 /** A plugin id (`claude-code-ts`, `codex`, `atlas-agent`) as a content agent. */
 export function agentKeyOf(pluginId: string): AgentKey | null {
+  // Registry installs keep their registry id (video 9 installs `codex-acp`).
+  const REGISTRY: Record<string, AgentKey> = { "codex-acp": "codex", "claude-acp": "claude-code" };
+  if (REGISTRY[pluginId]) return REGISTRY[pluginId];
   const type: string = agentTypeFromPluginId(pluginId);
   return type === "claude-code" || type === "codex" || type === "atlas-agent" ? type : null;
 }
@@ -124,7 +130,13 @@ export const chatIdOf = (sessionId: string, stepId: string): string => `nw:${ses
 
 /** What each agent calls its tools, so a row reads the way that agent's would. */
 function toolNameOf(agent: AgentKey, tool: ToolStep["tool"], command?: string): string {
-  if (tool === "memory" || tool === "org") return command ?? tool;
+  // Organisation tools are served by the `atlas_org` MCP server; Atlas Agent
+  // names them `atlas_org.<tool>`, an ACP agent `mcp__atlas_org__<tool>`.
+  if (tool === "org") {
+    const name = command ?? "org";
+    return agent === "atlas-agent" ? `atlas_org.${name}` : `mcp__atlas_org__${name}`;
+  }
+  if (tool === "memory") return command ?? tool;
   const names: Record<AgentKey, Record<string, string>> = {
     "claude-code": { read: "Read", edit: "Edit", write: "Write", bash: "Bash", grep: "Grep" },
     codex: {
@@ -187,9 +199,38 @@ export function toolArgsOf(t: ToolLike): Record<string, unknown> {
   }
 }
 
+/** "live now" / "today" / "yesterday" / "3 days ago", as Atlas Agent words it. */
+function agoOf(ms: number): string {
+  const day = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const days = Math.round((day(new Date()) - day(new Date(ms))) / 86_400_000);
+  return days <= 0 ? "today" : days === 1 ? "yesterday" : `${days} days ago`;
+}
+
+/**
+ * `org_sessions` for an author, read off the Timeline as it stands — so the
+ * list is true in every take, `?video=1` (before the discount-code run) or not.
+ */
+function listSessionsOf(member: string): string {
+  const person = Object.values(PEOPLE).find((p) => p.name === member);
+  const theirs = sessions().filter((s) => s.content.author === person?.key);
+  const live = theirs.filter((s) => s.live).length;
+  const rows = theirs
+    .slice(0, 6)
+    .map(
+      (s) =>
+        `${s.live ? "●" : " "} ${s.content.title} · ${AGENT_LABEL[s.content.agent]}, ${s.live ? "live now" : agoOf(s.lastMs)}`,
+    );
+  return [
+    `${theirs.length} sessions in northwind-shop${live ? ` · ${live} live` : ""}`,
+    ...rows,
+  ].join("\n");
+}
+
 /** What a finished tool call returned, when the content does not say. */
 export function toolResultOf(t: ToolLike): string {
   if (t.result !== undefined) return t.result;
+  if (t.tool === "org" && t.command === "org_sessions" && typeof t.args?.author === "string")
+    return listSessionsOf(t.args.author);
   switch (t.tool) {
     case "edit":
       return `Applied 1 edit to ${t.path}.`;
@@ -397,7 +438,12 @@ async function playBeat(sid: string, agent: AgentKey, beat: Beat): Promise<"wait
         transcriptCall: toolCallOf(
           `nw:run:${++callSeq}`,
           agent,
-          { tool: "org", title: beat.title, args: beat.args, command: beat.title },
+          {
+            tool: "org",
+            title: beat.title,
+            args: beat.args,
+            command: effect === "replyToComment" ? "org_comment_reply" : "org_send",
+          },
           "pending",
         ),
         title: beat.title,
@@ -547,7 +593,7 @@ function findRun(text: string, agent: AgentKey): ScriptedRun | undefined {
 /**
  * Which recorded Session the FIRST agent chat opens on (`?chat=<session id>`,
  * default `s-discount`; `?chat=none` for an empty one). Video 4 keeps "the
- * agent chat tab for that session" open; video 11 starts from `s-normalise`.
+ * agent chat tab for that session" open; video 11 starts from `s-normalize`.
  */
 function openingSession(): string | null {
   const asked = new URLSearchParams(location.search).get("chat");
@@ -580,6 +626,11 @@ export function installNorthwindAgent(runHooks: RunHooks): void {
     if (!content || !session(id) || agentKeyOf(info.pluginId) !== content.agent) return null;
     opening = null;
     bindings.set(info.sessionId, id);
+    // Titled the way Atlas titled it when it ran: the prompt's first 40 characters.
+    const prompt = content.steps.find((step) => step.kind === "prompt");
+    if (prompt?.kind === "prompt") {
+      setTimeout(() => void sendTitle(info.sessionId, prompt.text.slice(0, 40)), 0);
+    }
     return transcriptOf(id);
   });
 
