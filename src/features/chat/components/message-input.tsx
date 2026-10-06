@@ -80,7 +80,7 @@ import { RetryPill } from "./retry-pill";
 import { AiGrantBar } from "./ai-grant-bar";
 import { RemovedAgentBar } from "./removed-agent-bar";
 import { ModeRestoreBar, OPEN_MODE_PICKER_EVENT } from "./mode-restore-bar";
-import { useAiGrantProbe, useNoAiGrant } from "../stores/ai-grant-store";
+import { grantLocksComposer, useAiGrantProbe, useNoAiGrant } from "../stores/ai-grant-store";
 import {
   QUALITY_LADDER,
   aggregateExceedsBudget,
@@ -933,7 +933,10 @@ export function MessageInput({
   // button — the toolbar, and with it the switcher, stays live, so the user can
   // always move to an agent that runs. Verified against the escape hatch: this
   // must never disable the toolbar.
-  const blockedByGrant = noAiGrant && agentType === "atlas-agent";
+  //
+  // Never while a turn runs (`grantLocksComposer`): the lock used to disable
+  // the Stop button of a turn already admitted when the answer turned to no.
+  const blockedByGrant = grantLocksComposer(noAiGrant, agentType, running);
   const disabled = disabledProp || blockedByGrant;
   // A resume could not restore the user's mode (`ModeRestoreBar`): no send
   // until they pick one. Only the send — typing and the mode picker stay live.
@@ -1965,8 +1968,9 @@ export function MessageInput({
             composer — the explanation for the input being locked below.
             Scoped to the native agent for the same reason the lock is: the
             other agents do not use the Atlas gateway, so an org with no grant
-            is not their problem and a bar over a working composer is noise. */}
-        {agentType === "atlas-agent" && <AiGrantBar />}
+            is not their problem and a bar over a working composer is noise.
+            Deferred while a turn runs, with the lock (`grantLocksComposer`). */}
+        {agentType === "atlas-agent" && <AiGrantBar turnRunning={running} />}
 
         {/* The tab's agent was uninstalled — same strip, same reason: the
             input below cannot send until the chat is switched. */}

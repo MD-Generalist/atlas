@@ -38,7 +38,7 @@ const ACTION = COMPOSER_STRIP_ACTION;
 /** Where "Request" goes. The one place that can actually issue a grant. */
 const GRANT_REQUEST_URL = "https://credits.tryatlas.cc/";
 
-export function AiGrantBar() {
+export function AiGrantBar({ turnRunning = false }: { turnRunning?: boolean }) {
   const snapshot = useAuthStore((s) => s.snapshot);
   // `AuthSnapshot` is a discriminated union — the orgs only exist on the
   // signed-in arm, which is also the only arm this bar renders under.
@@ -93,6 +93,9 @@ export function AiGrantBar() {
   }, []);
 
   if (dismissed) return null;
+  // A running turn was admitted before the answer said no; the bar and the
+  // composer lock wait for it to end (`grantLocksComposer` says why).
+  if (turnRunning) return null;
 
   // A local organisation: not a grant that is missing, a link that is. The
   // native agent bills an org the gateway knows, and this one only exists on
