@@ -1,0 +1,551 @@
+// The `northwind` scenario's agent chats: what an agent chat opens on, what
+// the fake agent does when someone presses Enter, and which recorded Session
+// a chat is (so Timeline comments show up beside its tool calls).
+//
+// No real agent runs in the browser. A prompt that matches a `ScriptedRun` in
+// `northwind-content.ts` streams that run — thinking, tool calls that run and
+// finish, words arriving a few at a time, approval cards — through the same
+// `atlas:agents` deltas a real turn uses. A prompt that matches nothing gets a
+// short, plausible answer rather than the default "(mock) You said:" echo.
+
+import { emit } from "@tauri-apps/api/event";
+import type { PermissionOptionRef } from "@/types/acp";
+import { agentTypeFromPluginId } from "@/types/agent";
+import type { SessionMessage, ToolCall } from "@/types/agents";
+import type { AnchorEntry } from "@/features/chat/lib/comment-anchors";
+import type { CommentTarget } from "@/features/chat/components/chat-comments-controller";
+import {
+  finishTurn,
+  playTranscript,
+  raisePermission,
+  setAgentDisplayNames,
+  setAgentModels,
+  setPromptHandler,
+  setSessionSeeder,
+  setStatus,
+  streamText,
+  upsertToolCall,
+  type AgentModels,
+  type NewSessionInfo,
+} from "../fake-agent";
+import { NORTHWIND_FILES } from "../fixtures/northwind-repo";
+import type { AgentKey, Beat, ScriptedRun, Step, ToolStep } from "./northwind-content-types";
+import { CONTENT } from "./northwind-content";
+import {
+  abs,
+  AGENT_LABEL,
+  BEFORE_VIDEO_1,
+  createSession,
+  PROJECT,
+  REMOTE_PROJECT_ID,
+  rowId,
+  session,
+  sessionContent,
+  setPending,
+  type PendingChange,
+} from "./northwind-world";
+
+// ── Agents ────────────────────────────────────────────────────────────────
+
+/** A plugin id (`claude-code-ts`, `codex`, `atlas-agent`) as a content agent. */
+export function agentKeyOf(pluginId: string): AgentKey | null {
+  const type: string = agentTypeFromPluginId(pluginId);
+  return type === "claude-code" || type === "codex" || type === "atlas-agent" ? type : null;
+}
+
+const MODELS: Record<AgentKey, AgentModels> = {
+  "claude-code": {
+    current: "claude-opus-4",
+    available: [
+      { id: "claude-opus-4", name: "Opus 4" },
+      { id: "claude-sonnet-4", name: "Sonnet 4" },
+      { id: "claude-haiku-4", name: "Haiku 4" },
+    ],
+  },
+  codex: {
+    current: "gpt-5",
+    available: [
+      { id: "gpt-5", name: "GPT-5" },
+      { id: "gpt-5-mini", name: "GPT-5 mini" },
+      { id: "o3", name: "o3" },
+    ],
+  },
+  "atlas-agent": {
+    current: "claude-sonnet-4",
+    available: [
+      { id: "claude-sonnet-4", name: "Claude Sonnet 4" },
+      { id: "claude-opus-4", name: "Claude Opus 4" },
+      { id: "gpt-5", name: "GPT-5" },
+    ],
+  },
+};
+
+// ── Steps as a chat transcript ────────────────────────────────────────────
+
+/** The chat-side id of a recorded step: a tool call's id, or a message's. */
+export const chatIdOf = (sessionId: string, stepId: string): string => `nw:${sessionId}:${stepId}`;
+
+/** What each agent calls its tools, so a row reads the way that agent's would. */
+function toolNameOf(agent: AgentKey, tool: ToolStep["tool"], command?: string): string {
+  if (tool === "memory" || tool === "org") return command ?? tool;
+  const names: Record<AgentKey, Record<string, string>> = {
+    "claude-code": { read: "Read", edit: "Edit", write: "Write", bash: "Bash", grep: "Grep" },
+    codex: {
+      read: "read_file",
+      edit: "apply_patch",
+      write: "apply_patch",
+      bash: "shell",
+      grep: "shell",
+    },
+    "atlas-agent": {
+      read: "read_file",
+      edit: "apply_patch",
+      write: "apply_patch",
+      bash: "shell",
+      grep: "grep_files",
+    },
+  };
+  return names[agent][tool];
+}
+
+/** The ACP tool kind, which picks the row's icon. */
+function toolKindOf(tool: ToolStep["tool"]): string {
+  switch (tool) {
+    case "read":
+      return "read";
+    case "edit":
+    case "write":
+      return "edit";
+    case "bash":
+      return "execute";
+    case "grep":
+      return "search";
+    default:
+      return "other";
+  }
+}
+
+type ToolLike = Pick<ToolStep, "tool" | "title" | "path" | "command" | "args" | "result" | "diff">;
+
+/** The arguments a tool call would have carried. */
+export function toolArgsOf(t: ToolLike): Record<string, unknown> {
+  if (t.args) return t.args;
+  switch (t.tool) {
+    case "read":
+      return { file_path: abs(t.path ?? "") };
+    case "edit":
+      return {
+        file_path: abs(t.path ?? ""),
+        old_string: t.diff?.before ?? "",
+        new_string: t.diff?.after ?? "",
+      };
+    case "write":
+      return { file_path: abs(t.path ?? ""), content: t.diff?.after ?? "" };
+    case "bash":
+      return { command: t.command ?? t.title };
+    case "grep":
+      return { pattern: t.command ?? "", path: PROJECT.path };
+    default:
+      return {};
+  }
+}
+
+/** What a finished tool call returned, when the content does not say. */
+export function toolResultOf(t: ToolLike): string {
+  if (t.result !== undefined) return t.result;
+  switch (t.tool) {
+    case "edit":
+      return `Applied 1 edit to ${t.path}.`;
+    case "write":
+      return `Created ${t.path}.`;
+    case "read":
+      return (NORTHWIND_FILES[t.path ?? ""]?.text ?? "").split("\n").slice(0, 12).join("\n");
+    default:
+      return "";
+  }
+}
+
+export function toolCallOf(
+  id: string,
+  agent: AgentKey,
+  t: ToolLike,
+  status: ToolCall["status"] = "completed",
+): ToolCall {
+  const call: ToolCall = {
+    id,
+    tool_name: toolNameOf(agent, t.tool, t.command),
+    title: t.title,
+    kind: toolKindOf(t.tool),
+    status,
+    arguments: toolArgsOf(t),
+    result: status === "completed" ? toolResultOf(t) : null,
+    locations: t.path ? [{ path: abs(t.path) }] : [],
+  };
+  if ((t.tool === "edit" || t.tool === "write") && t.diff && t.path) {
+    call.content_blocks = [
+      t.diff.before === undefined
+        ? { type: "diff", path: abs(t.path), newText: t.diff.after }
+        : { type: "diff", path: abs(t.path), oldText: t.diff.before, newText: t.diff.after },
+    ];
+  }
+  return call;
+}
+
+/**
+ * A recorded Session as the agent chat that produced it: one user message per
+ * prompt, thinking and responses as assistant messages, and each run of
+ * consecutive tool calls as one tool message. Checkpoints are not chat rows.
+ */
+export function transcriptOf(sessionId: string): SessionMessage[] {
+  const state = session(sessionId);
+  const content = state?.content ?? sessionContent(sessionId);
+  if (!content) return [];
+  const base = state?.startMs ?? Date.now();
+  const at = (step: Step) => new Date(base + step.min * 60_000).toISOString();
+  const out: SessionMessage[] = [];
+  let toolRun: SessionMessage | null = null;
+  for (const step of state?.steps ?? content.steps) {
+    const id = chatIdOf(sessionId, step.id);
+    if (step.kind === "tool") {
+      if (!toolRun) {
+        toolRun = {
+          id: `${id}:tools`,
+          role: "assistant",
+          mode: "tool",
+          content: "",
+          tool_calls: [],
+          timestamp: at(step),
+        };
+        out.push(toolRun);
+      }
+      toolRun.tool_calls.push(toolCallOf(id, content.agent, step));
+      continue;
+    }
+    toolRun = null;
+    if (step.kind === "prompt") {
+      out.push({
+        id,
+        role: "user",
+        mode: "text",
+        content: step.text,
+        tool_calls: [],
+        timestamp: at(step),
+      });
+    } else if (step.kind === "thinking") {
+      out.push({
+        id,
+        role: "assistant",
+        mode: "thinking",
+        content: "",
+        thinking: step.text,
+        tool_calls: [],
+        timestamp: at(step),
+      });
+    } else if (step.kind === "response") {
+      out.push({
+        id,
+        role: "assistant",
+        mode: "text",
+        content: step.text,
+        tool_calls: [],
+        model: content.model,
+        timestamp: at(step),
+      });
+    }
+  }
+  return out;
+}
+
+// ── Which chat is which recorded Session ──────────────────────────────────
+
+/** Native chat session id (`sess-N`) → the recorded Session it is. */
+const bindings = new Map<string, string>();
+
+/**
+ * `chat_comment_target`: the recorded rows of the Session behind this chat, so
+ * the chat can place the Timeline's comments on its own tool calls.
+ */
+export function commentTargetFor(nativeSessionId: string): CommentTarget | null {
+  const sessionId = bindings.get(nativeSessionId);
+  const state = sessionId ? session(sessionId) : undefined;
+  if (!sessionId || !state) return null;
+  let turnSeq = 0;
+  const entries: AnchorEntry[] = [];
+  for (const step of state.steps) {
+    if (step.kind === "prompt") turnSeq += 1;
+    if (step.kind === "checkpoint") continue;
+    entries.push({
+      rowId: rowId(sessionId, step.id),
+      kind: step.kind === "tool" ? "tool_call" : step.kind,
+      turnSeq: Math.max(1, turnSeq),
+      // Prompts pair by turn; everything else by the id the chat holds.
+      nativeId: step.kind === "prompt" ? null : chatIdOf(sessionId, step.id),
+      toolName:
+        step.kind === "tool" ? toolNameOf(state.content.agent, step.tool, step.command) : null,
+    });
+  }
+  return { remoteProjectId: REMOTE_PROJECT_ID, sessionId, entries };
+}
+
+// ── Scripted runs ─────────────────────────────────────────────────────────
+
+/** What an approval card's Allow does. Supplied by `northwind.ts`. */
+export type Effects = Record<
+  Extract<Beat, { kind: "approval" }>["effect"],
+  (args: Record<string, unknown>) => void
+>;
+/** What a run's `afterwards` does. Supplied by `northwind.ts`. */
+export interface RunHooks {
+  effects: Effects;
+  rememberDecision: () => void;
+}
+let hooks: RunHooks | null = null;
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const now = () => new Date().toISOString();
+
+/** Approval options as Atlas Agent's org tools offer them. */
+function approvalOptions(chatMessage: boolean): PermissionOptionRef[] {
+  return chatMessage
+    ? [
+        { optionId: "allow", name: "Allow", kind: "allow_once" },
+        { optionId: "decline", name: "Decline", kind: "reject_once" },
+      ]
+    : [
+        { optionId: "allow", name: "Allow", kind: "allow_once" },
+        { optionId: "allow_session", name: "Allow for this session", kind: "allow_always" },
+        { optionId: "decline", name: "Decline", kind: "reject_once" },
+      ];
+}
+
+let callSeq = 0;
+
+/** One tool call: appears running, then finishes with its result. */
+async function runTool(
+  sid: string,
+  agent: AgentKey,
+  id: string,
+  t: ToolLike,
+  ms: number,
+): Promise<void> {
+  const message: SessionMessage = {
+    id: `${id}:tools`,
+    role: "assistant",
+    mode: "tool",
+    content: "",
+    tool_calls: [toolCallOf(id, agent, t, "running")],
+    timestamp: now(),
+  };
+  await playTranscript([message], 0, sid);
+  await sleep(ms);
+  await upsertToolCall(message.id, toolCallOf(id, agent, t, "completed"), sid);
+  await sleep(250);
+}
+
+async function playBeat(sid: string, agent: AgentKey, beat: Beat): Promise<"waiting" | void> {
+  switch (beat.kind) {
+    case "thinking":
+      await streamText(beat.text, { sessionId: sid, mode: "thinking", chunkMs: 14 });
+      return;
+    case "text":
+      await streamText(beat.text, { sessionId: sid });
+      return;
+    case "tool":
+      await runTool(sid, agent, `nw:run:${++callSeq}`, beat, beat.ms ?? 700);
+      return;
+    case "approval": {
+      const effect = beat.effect;
+      await raisePermission({
+        sessionId: sid,
+        transcriptCall: toolCallOf(
+          `nw:run:${++callSeq}`,
+          agent,
+          { tool: "org", title: beat.title, args: beat.args, command: beat.title },
+          "pending",
+        ),
+        title: beat.title,
+        kind: "other",
+        rawInput: beat.args,
+        options: approvalOptions(effect !== "replyToComment"),
+        result: (allowed) => (allowed ? "Done." : "Declined by user."),
+        reply: (_decision, option) => {
+          const allowed = option?.kind === "allow_once" || option?.kind === "allow_always";
+          if (allowed) hooks?.effects[effect](beat.args);
+          return allowed ? beat.allowed : beat.declined;
+        },
+      });
+      // The turn ends when the card is answered (`resolvePermission`).
+      return "waiting";
+    }
+  }
+}
+
+/** Replay a recorded Session's turn: every step after its first prompt. */
+async function replaySteps(sid: string, sessionId: string): Promise<void> {
+  const content = sessionContent(sessionId);
+  if (!content) return;
+  const steps = content.steps.filter((s) => s.kind !== "checkpoint").slice(1);
+  for (const step of steps) {
+    const id = chatIdOf(sessionId, step.id);
+    if (step.kind === "thinking") {
+      await streamText(step.text, { sessionId: sid, mode: "thinking", chunkMs: 14, id });
+    } else if (step.kind === "response") {
+      await streamText(step.text, { sessionId: sid, id });
+    } else if (step.kind === "tool") {
+      const ms =
+        step.tool === "bash" ? 1_500 : step.tool === "read" || step.tool === "grep" ? 450 : 1_000;
+      await runTool(sid, content.agent, id, step, ms);
+    }
+  }
+}
+
+/** The video-1 Session's edits, as uncommitted changes against the repo. */
+function pendingFrom(sessionId: string): PendingChange[] {
+  const content = sessionContent(sessionId);
+  const out = new Map<string, PendingChange>();
+  for (const step of content?.steps ?? []) {
+    if (step.kind !== "tool" || !step.path || !step.diff) continue;
+    if (step.tool !== "edit" && step.tool !== "write") continue;
+    const head = NORTHWIND_FILES[step.path]?.text;
+    if (head === undefined) continue;
+    const prev = out.get(step.path);
+    const before = prev?.before ?? head;
+    // HEAD already holds this change (the repo is written as of after it), so
+    // "before" is HEAD with the edit undone.
+    if (step.diff.before === undefined || !head.includes(step.diff.after)) {
+      out.set(step.path, { path: step.path, before: prev?.before ?? null, after: head });
+      continue;
+    }
+    out.set(step.path, {
+      path: step.path,
+      before: (before ?? head).replace(step.diff.after, step.diff.before),
+      after: head,
+    });
+  }
+  return [...out.values()];
+}
+
+async function finish(run: ScriptedRun, sid: string, startedAt: number): Promise<void> {
+  if (run.afterwards === "discountSession") {
+    const id = run.replay ?? "s-discount";
+    if (BEFORE_VIDEO_1 && !session(id)) {
+      createSession(id, startedAt);
+      setPending(pendingFrom(id), [id]);
+    }
+    bindings.set(sid, id);
+    // What the capture worker emits after a turn: the board and this chat's
+    // comment target both re-read.
+    void emit("atlas:capture-changed", {});
+  } else if (run.afterwards === "rememberDecision") {
+    hooks?.rememberDecision();
+  }
+}
+
+async function play(run: ScriptedRun, sid: string, agent: AgentKey): Promise<void> {
+  const startedAt = Date.now();
+  await setStatus("running", sid);
+  await sleep(450);
+  let waiting = false;
+  if (run.replay) await replaySteps(sid, run.replay);
+  for (const beat of run.beats) {
+    if ((await playBeat(sid, agent, beat)) === "waiting") {
+      waiting = true;
+      break;
+    }
+  }
+  await finish(run, sid, startedAt);
+  if (!waiting) await finishTurn(sid);
+}
+
+/** A prompt nothing scripted: a short answer that would not look odd on camera. */
+async function playFallback(sid: string, agent: AgentKey, text: string): Promise<void> {
+  await setStatus("running", sid);
+  await sleep(500);
+  await runTool(
+    sid,
+    agent,
+    `nw:run:${++callSeq}`,
+    {
+      tool: "read",
+      title: "Read README.md",
+      path: "README.md",
+    },
+    500,
+  );
+  const topic = readablePrompt(text).split(" ").slice(0, 8).join(" ");
+  await streamText(
+    `I've read the project layout. Before I change anything for "${topic}", which part of northwind-shop should I start with: the client pages in \`src/client\`, or the API in \`src/server\`?`,
+    { sessionId: sid },
+  );
+  await finishTurn(sid);
+}
+
+/**
+ * The prompt as a person would read it: what Atlas appends for the agent
+ * (the next-steps block) dropped, and every picked mention — `@member:"Zuhayer
+ * Masud"`, `@conversation:shop`, `@recorded-session:"…"`, `@comment:"…"` —
+ * reduced to its name. So a run matches whether Zuhayer was typed or picked
+ * from the @ picker, which is how the videos do it.
+ */
+export function readablePrompt(text: string): string {
+  return text
+    .split("═══ Atlas next-steps")[0]
+    .replace(/[@#][a-z-]+:"([^"]*)"/g, "$1")
+    .replace(/[@#][a-z-]+:(\S+)/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function findRun(text: string, agent: AgentKey): ScriptedRun | undefined {
+  const lower = readablePrompt(text).toLowerCase();
+  return (
+    CONTENT.runs.find(
+      (run) => (!run.agent || run.agent === agent) && run.match.every((m) => lower.includes(m)),
+    ) ?? CONTENT.runs.find((run) => run.match.every((m) => lower.includes(m)))
+  );
+}
+
+// ── Wiring ────────────────────────────────────────────────────────────────
+
+/**
+ * Which recorded Session the FIRST agent chat opens on (`?chat=<session id>`,
+ * default `s-discount`; `?chat=none` for an empty one). Video 4 keeps "the
+ * agent chat tab for that session" open; video 11 starts from `s-normalise`.
+ */
+function openingSession(): string | null {
+  const asked = new URLSearchParams(location.search).get("chat");
+  if (asked === "none") return null;
+  if (asked) return asked;
+  return BEFORE_VIDEO_1 ? null : "s-discount";
+}
+
+export function installNorthwindAgent(runHooks: RunHooks): void {
+  hooks = runHooks;
+  let opening = openingSession();
+
+  setAgentModels((pluginId) => {
+    const key = agentKeyOf(pluginId);
+    return key ? MODELS[key] : null;
+  });
+  setAgentDisplayNames((pluginId) => {
+    const key = agentKeyOf(pluginId);
+    return key ? AGENT_LABEL[key] : null;
+  });
+
+  setSessionSeeder((info: NewSessionInfo) => {
+    if (!opening) return null;
+    const id = opening;
+    const content = sessionContent(id);
+    if (!content || !session(id) || agentKeyOf(info.pluginId) !== content.agent) return null;
+    opening = null;
+    bindings.set(info.sessionId, id);
+    return transcriptOf(id);
+  });
+
+  setPromptHandler(({ sessionId, pluginId, text }) => {
+    const agent = agentKeyOf(pluginId) ?? "atlas-agent";
+    const run = findRun(text, agent);
+    void (run ? play(run, sessionId, agent) : playFallback(sessionId, agent, text));
+    return true;
+  });
+}
