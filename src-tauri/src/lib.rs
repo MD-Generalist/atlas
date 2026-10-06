@@ -505,6 +505,7 @@ pub fn run() {
             commands::auth::auth_cancel_invitation,
             commands::auth::auth_update_member_role,
             commands::auth::auth_remove_member,
+            commands::auth::auth_leave_org,
             commands::auth::auth_refresh,
             commands::auth::auth_delete_org,
             commands::window::window_zoom,

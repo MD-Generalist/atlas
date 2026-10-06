@@ -594,6 +594,7 @@ export interface IntegrationsResponses {
   auth_cancel_invitation: Unit;
   auth_update_member_role: Unit;
   auth_remove_member: Unit;
+  auth_leave_org: Unit;
   search_github: GithubRepo[];
   clone_github_repo: string;
   list_cloned_repos: ClonedRepo[];
@@ -782,6 +783,30 @@ export const integrationsHandlers: TypedHandlers<IntegrationsResponses> = {
       list.filter((m) => m !== target),
     );
     if (target.userId === "usr_dev" && snapshot.status === "signed-in") {
+      snapshot = { ...snapshot, orgs: currentOrgs().filter((o) => o.id !== id) };
+      broadcast();
+    }
+    return null;
+  },
+  /**
+   * Leaving, with the server's two refusals: the Owner (Acme, where the
+   * account is Owner) and the last admin. Northwind, where the account is a
+   * plain member, is the one to leave — the switcher then drops it.
+   */
+  auth_leave_org: ({ orgId }): null => {
+    const id = String(orgId);
+    const list = roster(id);
+    const me = list.find((m) => m.userId === "usr_dev");
+    if (!me) fail("You're not a member of this organisation.");
+    if (me.isOwner) fail("The organization's owner cannot leave it.");
+    if (me.role === "admin" && list.filter((m) => m.role === "admin").length === 1) {
+      fail("You're the only admin — make someone else an admin first.");
+    }
+    membersByOrg.set(
+      id,
+      list.filter((m) => m !== me),
+    );
+    if (snapshot.status === "signed-in") {
       snapshot = { ...snapshot, orgs: currentOrgs().filter((o) => o.id !== id) };
       broadcast();
     }

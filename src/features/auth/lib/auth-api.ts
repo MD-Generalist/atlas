@@ -200,6 +200,12 @@ export const auth = {
   /** Remove a member. Re-broadcasts the snapshot — this can remove YOU. */
   removeMember: (orgId: string, memberIdOrEmail: string) =>
     invoke<void>("auth_remove_member", { orgId, memberIdOrEmail }),
+  /**
+   * Leave an org yourself. Any member but the Owner; the server also refuses
+   * the last admin. Re-broadcasts the snapshot without the org. Callers go
+   * through `leaveOrgAndData`, which also moves the desktop off the org.
+   */
+  leaveOrg: (orgId: string) => invoke<void>("auth_leave_org", { orgId }),
 };
 
 /**

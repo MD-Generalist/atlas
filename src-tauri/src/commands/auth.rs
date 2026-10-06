@@ -480,6 +480,26 @@ pub async fn auth_remove_member(
     Ok(())
 }
 
+/// Leave an organisation (`org_id` is the SERVER id). Open to every member but
+/// the Owner; the last admin is refused too. Re-broadcasts the snapshot so the
+/// account menu drops the org at once.
+#[tauri::command]
+pub async fn auth_leave_org(
+    org_id: String,
+    app: AppHandle,
+    state: State<'_, AuthState>,
+) -> Result<(), String> {
+    let core = state.core();
+    core.leave_org(&org_id).await.map_err(|e| {
+        e.user_message_denied(
+            "Couldn't leave. The owner can't leave their organisation, and an organisation's \
+             last admin has to make someone else an admin first.",
+        )
+    })?;
+    broadcast(&app, core.snapshot());
+    Ok(())
+}
+
 /// Bring Atlas forward once approval lands, so the human does not have to hunt
 /// for the window they left behind in the browser.
 fn raise(app: &AppHandle) {

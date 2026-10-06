@@ -257,6 +257,56 @@ export async function deleteOrgAndData(id: string): Promise<boolean> {
 }
 
 /**
+ * Leave a synced organisation on the server, then take the desktop off it.
+ *
+ * The server call goes first and its refusal is thrown to the caller (a
+ * user-facing string) with nothing local touched — the Owner and the last
+ * admin are refused, and they are still members.
+ *
+ * Once it has succeeded the org is gone for this account, so nothing that
+ * points at it may stay: every read would 403. With another org to go to, the
+ * desktop switches there first (if this one is active) and then drops the left
+ * org's tracking, exactly as deleting it would — the project files on disk are
+ * not touched. If it is the only org, it cannot be removed; it is unlinked
+ * instead and kept as a local-only org, with team chat and the gateway told
+ * there is no server org any more.
+ */
+export async function leaveOrgAndData(id: string): Promise<void> {
+  const target = useOrgStore.getState().organisations.find((o) => o.id === id);
+  if (!target?.remoteId) throw "This organisation isn't synced, so there's nothing to leave.";
+
+  await auth.leaveOrg(target.remoteId);
+  logEvent({ source: "project", kind: "org-leave", summary: id });
+
+  const others = useOrgStore.getState().organisations.filter((o) => o.id !== id);
+  if (useOrgStore.getState().activeOrganisationId === id && others.length > 0) {
+    // Prefer another synced org: the user is signed in and was just working
+    // with a team, so a team is the less surprising place to land.
+    const next = others.find((o) => o.syncEnabled && o.remoteId) ?? others[0];
+    await switchOrg(next.id);
+  }
+
+  // The switch can be declined (agents still running → "Go back") or be
+  // coalesced into one already in flight. Never purge the org on screen.
+  if (useOrgStore.getState().activeOrganisationId !== id && others.length > 0) {
+    useOrgStore.getState().actions.deleteOrg(id);
+    return;
+  }
+
+  useOrgStore.getState().actions.unlinkOrg(id);
+  if (useOrgStore.getState().activeOrganisationId === id) {
+    // What `switchOrg` does for a local-only target: close the chat socket
+    // and pin "no org" for billing, so neither keeps dialling the org left.
+    commsActions().beginSwitch(null);
+    await invoke("comms_disconnect").catch(() => {});
+    await invoke("auth_set_active_org", { orgId: null }).catch((err) => {
+      console.warn("auth_set_active_org failed:", err);
+    });
+    commsActions().endSwitch();
+  }
+}
+
+/**
  * Pick the project to open when entering an org: its remembered
  * `activeProjectId` if it still exists, else the most-recently-active
  * project in that org, else none (empty org).

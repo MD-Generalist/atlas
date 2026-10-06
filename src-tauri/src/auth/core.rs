@@ -1300,6 +1300,36 @@ impl AuthCore {
         Ok(())
     }
 
+    /// `POST /organization/leave` — the caller leaves the org themselves.
+    ///
+    /// Not `remove-member` addressed at oneself: that route is admin-only, so
+    /// a member could never leave through it. This one is open to every member
+    /// except the Owner, whom the server refuses (`owner_cannot_leave`); the
+    /// last admin is refused too. Both come back as a 403, i.e. `Denied`.
+    ///
+    /// Re-pulls the identity afterwards, like `remove_member`, so the account
+    /// menu stops listing the org at once. Best-effort; the leave happened.
+    pub async fn leave_org(&self, org_id: &str) -> Authed<()> {
+        #[derive(Serialize)]
+        struct LeaveBody<'a> {
+            #[serde(rename = "organizationId")]
+            organization_id: &'a str,
+        }
+
+        self.authed_post(
+            "/organization/leave",
+            &LeaveBody {
+                organization_id: org_id,
+            },
+        )
+        .await?;
+
+        self.refresh_identity(self.stored().and_then(|s| s.identity), None)
+            .await;
+
+        Ok(())
+    }
+
     /// Force a server re-pull of profile + organisations onto the stored
     /// credential, out of band from the launch path. Backs the manual "refresh"
     /// affordance; the caller broadcasts the resulting snapshot.

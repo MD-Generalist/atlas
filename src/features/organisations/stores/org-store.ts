@@ -144,6 +144,10 @@ interface OrgState {
     /** Remove an org. Refuses if it's the last org or still owns projects
      *  (the caller must reassign/close those first). Returns whether removed. */
     deleteOrg: (id: string) => boolean;
+    /** Cut an org loose from the server — drop its `remoteId` and turn sync
+     *  off — keeping its projects as a local-only org. For an org the user has
+     *  left but cannot delete locally (it is their only one). */
+    unlinkOrg: (id: string) => void;
     /** Record the per-org last-active project (restore target on switch). */
     setActiveProjectForOrg: (orgId: string, projectId: string | null) => void;
     /** Low-level setter used by the org-switch orchestration + overlay gate. */
@@ -314,6 +318,18 @@ export const useOrgStore = createSelectors(
         }));
         scheduleAppStateSave();
         return true;
+      },
+
+      unlinkOrg: (id) => {
+        if (!get().organisations.some((o) => o.id === id && (o.remoteId || o.syncEnabled))) return;
+        set((s) => ({
+          organisations: s.organisations.map((o) => {
+            if (o.id !== id) return o;
+            const { remoteId: _remoteId, ...rest } = o;
+            return { ...rest, syncEnabled: false };
+          }),
+        }));
+        scheduleAppStateSave();
       },
 
       setActiveProjectForOrg: (orgId, projectId) => {
