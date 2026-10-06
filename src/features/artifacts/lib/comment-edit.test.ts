@@ -40,3 +40,23 @@ describe("toWireBody", () => {
     expect(toWireBody(toEditable(stored, directory), directory)).toBe(stored);
   });
 });
+
+describe("a name two members share", () => {
+  const twins: OrgDirectory = {
+    byId: new Map([
+      ["u-sam-1", { userId: "u-sam-1", name: "Sam" } as OrgMember],
+      ["u-sam-2", { userId: "u-sam-2", name: "Sam" } as OrgMember],
+    ]),
+    currentUserId: null,
+  };
+
+  it("stays a token through an edit, so the mention keeps its person", () => {
+    const stored = "cc <@u-sam-2>";
+    expect(toEditable(stored, twins)).toBe(stored);
+    expect(toWireBody(toEditable(stored, twins), twins)).toBe(stored);
+  });
+
+  it("is never guessed at when typed", () => {
+    expect(toWireBody("cc @Sam", twins)).toBe("cc @Sam");
+  });
+});

@@ -407,6 +407,19 @@ const CommentRow = memo(function CommentRow({
   const [busy, setBusy] = useState(false);
   /** The body is open in a composer in place of the text. */
   const [editing, setEditing] = useState(false);
+  const editButton = useRef<HTMLButtonElement | null>(null);
+  /** Leaving the edit hands focus back to the pencil that opened it, rather
+   *  than dropping it on the body when the field unmounts. */
+  const returnFocus = useRef(false);
+  const stopEditing = useCallback(() => {
+    returnFocus.current = true;
+    setEditing(false);
+  }, []);
+  useEffect(() => {
+    if (editing || !returnFocus.current) return;
+    returnFocus.current = false;
+    editButton.current?.focus();
+  }, [editing]);
   // A guest is never resolved against the roster, even if an id collides.
   const member = comment.guestName ? null : (directory.byId.get(comment.authorId) ?? null);
   // Never the raw id: an opaque key in a byline is not a name, and it is what
@@ -482,6 +495,7 @@ const CommentRow = memo(function CommentRow({
              *  menu: two actions are not worth a click in front of them. */}
             {mine && !busy && !editing && actions.edit && (
               <button
+                ref={editButton}
                 type="button"
                 aria-label="Edit comment"
                 title="Edit"
@@ -509,14 +523,19 @@ const CommentRow = memo(function CommentRow({
                 placeholder="Edit comment…"
                 directory={directory}
                 autoFocus
+                ariaLabel="Edit comment"
                 initial={toEditable(comment.body ?? "", directory)}
-                onCancel={() => setEditing(false)}
+                onCancel={stopEditing}
                 onSend={async (text) => {
-                  const body = toWireBody(text, directory).trim();
                   // Saving what was already there is not an edit — no request,
-                  // and no "edited" marker for a change nobody made.
-                  if (body !== comment.body) await actions.edit?.(comment.id, body);
-                  setEditing(false);
+                  // and no "edited" marker for a change nobody made. Compared
+                  // as the person saw it: re-encoding an untouched body can
+                  // still differ from the stored one (a plain "@Ada" typed
+                  // before it was a mention would quietly become one).
+                  if (text.trim() !== toEditable(comment.body ?? "", directory).trim()) {
+                    await actions.edit?.(comment.id, toWireBody(text, directory).trim());
+                  }
+                  stopEditing();
                 }}
               />
             </div>
@@ -620,8 +639,12 @@ function Composer({
   autoFocus,
   initial,
   onCancel,
+  ariaLabel,
 }: {
   placeholder: string;
+  /** The field's accessible name. The placeholder vanishes once there is
+   *  text, which an edit always starts with. */
+  ariaLabel?: string;
   onSend: (body: string) => Promise<void>;
   directory: OrgDirectory;
   autoFocus?: boolean;
@@ -632,6 +655,16 @@ function Composer({
 }) {
   const editing = initial !== undefined;
   const [value, setValue] = useState(initial ?? "");
+  const field = useRef<HTMLTextAreaElement | null>(null);
+  // An edit opens with the caret after the text, where a correction starts —
+  // not before the first word, where a bare focus leaves it.
+  useEffect(() => {
+    const el = field.current;
+    if (!editing || !el) return;
+    el.setSelectionRange(el.value.length, el.value.length);
+    // Mount only: the caret belongs to the person once they start typing.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const me = directory.currentUserId ? directory.byId.get(directory.currentUserId) : null;
@@ -678,8 +711,10 @@ function Composer({
          *  right edge rather than stealing width from it. */}
         <div className="relative min-w-0 flex-1">
           <textarea
+            ref={field}
             value={value}
             autoFocus={autoFocus}
+            aria-label={ariaLabel ?? placeholder.replace(/…$/, "")}
             placeholder={placeholder}
             rows={1}
             onChange={(e) => setValue(e.target.value)}

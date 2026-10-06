@@ -11,11 +11,19 @@
 
 import type { OrgDirectory } from "@/features/organisations/lib/use-org-directory";
 
-/** `<@id>` → `@Name`. An id the roster cannot name stays a token. */
+/**
+ * `<@id>` → `@Name`. An id the roster cannot name stays a token, and so does
+ * one whose name another member shares: `@Sam` would come back as whichever
+ * Sam {@link toWireBody} met first, re-pointing the mention at someone else.
+ */
 export function toEditable(body: string, directory: OrgDirectory): string {
+  const holders = new Map<string, number>();
+  for (const m of directory.byId.values()) {
+    if (m.name) holders.set(m.name, (holders.get(m.name) ?? 0) + 1);
+  }
   return body.replace(/<@([^>\s]+)>/g, (whole, id: string) => {
     const name = directory.byId.get(id)?.name;
-    return name ? `@${name}` : whole;
+    return name && holders.get(name) === 1 ? `@${name}` : whole;
   });
 }
 
@@ -25,8 +33,13 @@ export function toEditable(body: string, directory: OrgDirectory): string {
  * mentions nobody.
  */
 export function toWireBody(text: string, directory: OrgDirectory): string {
+  const holders = new Map<string, number>();
+  for (const m of directory.byId.values()) {
+    if (m.name) holders.set(m.name, (holders.get(m.name) ?? 0) + 1);
+  }
+  // A name two members share names neither: it stays text.
   const people = [...directory.byId.entries()]
-    .filter(([, m]) => m.name)
+    .filter(([, m]) => m.name && holders.get(m.name) === 1)
     .sort((a, b) => b[1].name.length - a[1].name.length);
   let out = text;
   for (const [id, m] of people) {
