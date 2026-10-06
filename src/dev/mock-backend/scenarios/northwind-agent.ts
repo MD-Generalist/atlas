@@ -18,6 +18,7 @@ import {
   finishTurn,
   playTranscript,
   raisePermission,
+  setAgentCommands,
   setAgentDisplayNames,
   setAgentModels,
   setPromptHandler,
@@ -78,6 +79,42 @@ const MODELS: Record<AgentKey, AgentModels> = {
       { id: "gpt-5", name: "GPT-5" },
     ],
   },
+};
+
+/**
+ * What each agent offers under `/`. `remember` is the skill Atlas installs for
+ * every agent (video 11 beat 1); `release-notes` is northwind-shop's project
+ * skill, delivered to all three (video 11 beat 5). The rest is each agent's
+ * own short list.
+ */
+const SKILL_COMMANDS = [
+  {
+    name: "remember",
+    description: "Save a decision, fact or rule to Atlas's shared memory for this repo",
+    input: { hint: "what to remember" },
+  },
+  {
+    name: "release-notes",
+    description: "Write release notes for northwind-shop from the commits since the last tag.",
+    input: null,
+  },
+];
+const COMMANDS: Record<AgentKey, unknown[]> = {
+  "claude-code": [
+    ...SKILL_COMMANDS,
+    { name: "review", description: "Review the current changes", input: null },
+    { name: "compact", description: "Summarise the conversation to free up context", input: null },
+    { name: "init", description: "Write a CLAUDE.md for this project", input: null },
+  ],
+  codex: [
+    ...SKILL_COMMANDS,
+    { name: "review", description: "Review the working tree", input: null },
+    { name: "status", description: "Show the model, approvals and token use", input: null },
+  ],
+  "atlas-agent": [
+    ...SKILL_COMMANDS,
+    { name: "plan", description: "Plan before changing anything", input: { hint: "task" } },
+  ],
 };
 
 // ── Steps as a chat transcript ────────────────────────────────────────────
@@ -526,6 +563,10 @@ export function installNorthwindAgent(runHooks: RunHooks): void {
   setAgentModels((pluginId) => {
     const key = agentKeyOf(pluginId);
     return key ? MODELS[key] : null;
+  });
+  setAgentCommands((pluginId) => {
+    const key = agentKeyOf(pluginId);
+    return key ? COMMANDS[key] : null;
   });
   setAgentDisplayNames((pluginId) => {
     const key = agentKeyOf(pluginId);

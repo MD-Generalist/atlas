@@ -186,7 +186,7 @@ function initSession(content: SessionContent): SessionState {
 
 /** Whether a Session exists in the current world (video options applied). */
 function exists(content: SessionContent): boolean {
-  return !(BEFORE_VIDEO_1 && content.createdOnCamera === "video1");
+  return !(BEFORE_VIDEO_1 && (content.createdOnCamera === "video1" || content.afterVideo1));
 }
 
 function seedSessions(): void {
@@ -254,9 +254,12 @@ export function liveSession(): SessionState | undefined {
 
 // ── Commits ───────────────────────────────────────────────────────────────
 
-/** Is this content commit one that video 1 makes on camera? */
-const madeOnCamera = (c: CommitContent): boolean =>
-  c.sessions.some((id) => sessionContent(id)?.createdOnCamera === "video1");
+/** Is this content commit one that video 1 makes on camera, or one made after it? */
+const notYetMade = (c: CommitContent): boolean =>
+  c.sessions.some((id) => {
+    const s = sessionContent(id);
+    return s?.createdOnCamera === "video1" || s?.afterVideo1 === true;
+  });
 
 /**
  * Commits in the world, oldest first. `?video=1` leaves out the one video 1
@@ -264,7 +267,7 @@ const madeOnCamera = (c: CommitContent): boolean =>
  * its place (`addCommit`).
  */
 export function commits(): CommitContent[] {
-  const seeded = BEFORE_VIDEO_1 ? CONTENT.commits.filter((c) => !madeOnCamera(c)) : CONTENT.commits;
+  const seeded = BEFORE_VIDEO_1 ? CONTENT.commits.filter((c) => !notYetMade(c)) : CONTENT.commits;
   return [...seeded, ...extraCommits];
 }
 

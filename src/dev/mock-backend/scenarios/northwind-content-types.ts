@@ -130,6 +130,11 @@ export interface SessionContent {
    * and the scripted run creates it instead.
    */
   createdOnCamera?: "video1";
+  /**
+   * The Session happens after video 1 in the story (it builds on the
+   * discount-code field), so `?video=1` leaves it out too, with its commit.
+   */
+  afterVideo1?: true;
   steps: Step[];
   /** Present on a stub: who/agent/what/files, for whoever fills it in. */
   brief?: string;

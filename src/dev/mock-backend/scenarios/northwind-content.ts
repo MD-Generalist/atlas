@@ -707,6 +707,7 @@ export const CONTENT: NorthwindContent = {
     {
       // TODO(content): Zuhayer · Codex · read-only walkthrough of how an order total is computed, cart page → POST /api/orders → confirmation; NO commit. Its tool results (not its title) must mention "discount" (the client-only DISCOUNT_CODES table) — video 3's search.
       id: "s-total-walk",
+      afterVideo1: true,
       title: "Walk me through how an order's total is computed",
       author: "zuhayer",
       agent: "codex",
@@ -754,6 +755,7 @@ export const CONTENT: NorthwindContent = {
     {
       // TODO(content): you · Claude Code · creates src/server/discounts.ts (valid codes + check function) and makes POST /api/orders reject an invalid code and apply a valid one; no tests ("someone else is doing that") · src/server/discounts.ts, src/server/orders.ts, src/server/api.ts. First half of video 10's "Produced by 2 sessions".
       id: "s-server-discounts",
+      afterVideo1: true,
       title: "Move discount code validation to the server",
       author: "uzayer",
       agent: "claude-code",
@@ -803,6 +805,7 @@ export const CONTENT: NorthwindContent = {
     {
       // TODO(content): you · Codex · writes tests/discounts.test.ts for src/server/discounts.ts and for POST /api/orders with a valid code, an invalid code and no code · tests/discounts.test.ts. Second half of video 10's "Produced by 2 sessions".
       id: "s-discount-tests",
+      afterVideo1: true,
       title: "Write tests for discount validation",
       author: "uzayer",
       agent: "codex",
@@ -851,6 +854,7 @@ export const CONTENT: NorthwindContent = {
     {
       // TODO(content): you · Claude Code · makes discount codes case-insensitive by normalising to uppercase once at the API boundary, plus a test; the decision `/remember` stores in video 11 comes from here · src/server/api.ts, src/server/discounts.ts, tests/discounts.test.ts. Zuhayer's open comment (video 7) sits on `e-api`.
       id: "s-normalise",
+      afterVideo1: true,
       title: "Make discount codes case-insensitive",
       author: "uzayer",
       agent: "claude-code",
@@ -1377,7 +1381,7 @@ export const CONTENT: NorthwindContent = {
         },
         {
           kind: "text",
-          text: "Zuhayer has one session **running right now**: *Add tests for the cart and order helpers* (Codex), adding tests for the uncovered exports in `cart.ts` and `orders.ts`.\n\nBefore that: a read-only walkthrough of how order totals are computed (yesterday), the order details page, and sold-out badges.",
+          text: "Zuhayer has one session **running right now**: *Add tests for the cart and order helpers* (Codex), adding tests for the uncovered exports in `cart.ts` and `orders.ts`.\n\nBefore that: the order details page at `/orders/:id`, sold-out badges on the product list, and stock tracking that refuses to oversell.",
         },
       ],
     },

@@ -145,6 +145,8 @@ const CONTENT_KEYS = [
   /^atlas-notifications$/,
   /^atlas-chat-pins$/,
   /^atlas:fileindex-cache:/,
+  // Per-agent model and mode lists cached by whatever scenario ran last.
+  /^atlas:acp-(models|modes|config-options):/,
 ];
 
 function clearStoredContent(): void {

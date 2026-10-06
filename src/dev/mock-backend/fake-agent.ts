@@ -80,6 +80,13 @@ export function setAgentModels(lookup: typeof modelsFor): void {
   modelsFor = lookup;
 }
 
+/** The slash commands a session advertises, per agent (ACP
+ *  `available_commands`: `{ name, description, input? }`). */
+let commandsFor: ((pluginId: string) => unknown[] | null) | null = null;
+export function setAgentCommands(lookup: typeof commandsFor): void {
+  commandsFor = lookup;
+}
+
 /** The name `agents_spawn` reports, per agent. */
 let displayNameFor: ((pluginId: string) => string | null) | null = null;
 export function setAgentDisplayNames(lookup: typeof displayNameFor): void {
@@ -138,7 +145,7 @@ function snapshot(s: FakeSession, withMessages: boolean): SessionSnapshot {
     current_model: models?.current ?? "mock-model",
     available_modes: MODES,
     available_models: models?.available ?? [{ id: "mock-model", name: "Mock model" }],
-    available_commands: [],
+    available_commands: commandsFor?.(s.pluginId) ?? [],
     config_options: [],
     prompt_image_supported: true,
     plan: [],
