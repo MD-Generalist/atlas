@@ -261,6 +261,7 @@ impl ArtifactsManager {
                     self.board.forget_project(&slot.key);
                 }
             }
+            self.clear_orphaned_presence(&registry, stale.iter().map(|slot| &slot.key));
 
             let mut to_start: Vec<Slot> = project_ids
                 .iter()
@@ -299,7 +300,13 @@ impl ArtifactsManager {
     pub fn shutdown(&self) {
         if let Ok(mut registry) = self.registry.lock() {
             let n = registry.connections.len();
+            let dropped: Vec<ProjectKey> = registry
+                .connections
+                .keys()
+                .map(|slot| slot.key.clone())
+                .collect();
             registry.connections.clear();
+            self.clear_orphaned_presence(&registry, dropped.iter());
             registry.active_org = None;
             tracing::info!(target: "atlas_artifacts", "shutdown: dropped {n} sockets");
         }
@@ -360,15 +367,54 @@ impl ArtifactsManager {
             // Any Organisation: a follower that outlived an org switch has no
             // one left to serve either. Removing the slot ends its task, and
             // `run` sends Close when the outbound end goes away.
+            let closing: Vec<ProjectKey> = registry
+                .connections
+                .keys()
+                .filter(|slot| {
+                    slot.key.1 == project_id && slot.session.as_deref() == Some(session_id)
+                })
+                .map(|slot| slot.key.clone())
+                .collect();
             registry.connections.retain(|slot, _| {
                 !(slot.key.1 == project_id && slot.session.as_deref() == Some(session_id))
             });
+            self.clear_orphaned_presence(&registry, closing.iter());
         }
         tracing::info!(
             target: "atlas_artifacts",
             "unfollow {session_id} on {project_id}: {}",
             if remaining == 0 { "closing" } else { "still followed" }
         );
+    }
+
+    /// Announce an empty roster for every Project this machine no longer has
+    /// any socket on.
+    ///
+    /// The server only says who is here while a socket is open, and it says
+    /// nothing to a socket that has gone. Without this, the last roster a
+    /// closed follower heard would stay on screen indefinitely — teammates
+    /// "online" on a Project nobody here is listening to any more. A Project
+    /// still served by another slot (its board socket, another follower) keeps
+    /// its roster: that socket is still hearing the truth.
+    fn clear_orphaned_presence<'a>(
+        &self,
+        registry: &Registry,
+        keys: impl Iterator<Item = &'a ProjectKey>,
+    ) {
+        let mut seen: Vec<&ProjectKey> = Vec::new();
+        for key in keys {
+            if seen.contains(&key) {
+                continue;
+            }
+            seen.push(key);
+            if registry.connections.keys().any(|slot| &slot.key == key) {
+                continue;
+            }
+            let _ = self.events.send(ArtifactsEvent::Presence {
+                key: key.clone(),
+                online: Vec::new(),
+            });
+        }
     }
 
     /// Install the current attempt's sender — only if the slot is still ours.
@@ -994,6 +1040,82 @@ mod tests {
         server.none(Duration::from_millis(300)).await;
         assert!(!manager.has_connection(&follower("ses_1")));
         assert_eq!(manager.refs("ws_1", "ses_1"), 0);
+    }
+
+    /// The next `Presence` event for `key`, skipping everything else.
+    async fn next_presence(
+        events: &mut broadcast::Receiver<ArtifactsEvent>,
+        key: &ProjectKey,
+        within: Duration,
+    ) -> Vec<String> {
+        let deadline = tokio::time::Instant::now() + within;
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            match timeout(remaining, events.recv())
+                .await
+                .expect("a presence event within the window")
+            {
+                Ok(ArtifactsEvent::Presence { key: k, online }) if &k == key => return online,
+                Ok(_) => continue,
+                Err(e) => panic!("event channel: {e}"),
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_last_socket_on_a_project_closing_empties_its_roster() {
+        // A roster heard on a follower must not outlive the follower: the
+        // server never tells a closed socket that anybody left.
+        let mut server = Loopback::start(Mode::Normal).await;
+        let manager = manager(&server.base);
+        let mut events = manager.subscribe();
+
+        manager.retarget("org_1", vec![]);
+        manager.follow("ws_1", "ses_1");
+        let mut ws = server.socket(SOON).await;
+        let _ = next_text(&mut ws, SOON).await; // the subscribe
+        ws.send(WsMessage::Text(
+            r#"{"t":"presence","online":["user_ada"]}"#.into(),
+        ))
+        .await
+        .unwrap();
+        assert_eq!(
+            next_presence(&mut events, &key(), SOON).await,
+            vec!["user_ada".to_string()]
+        );
+
+        manager.unfollow("ws_1", "ses_1");
+        assert!(
+            next_presence(&mut events, &key(), SOON).await.is_empty(),
+            "closing the only socket on the Project clears who is on it"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_project_still_on_a_board_socket_keeps_its_roster_when_a_follower_closes() {
+        let mut server = Loopback::start(Mode::Normal).await;
+        let manager = manager(&server.base);
+
+        manager.retarget("org_1", vec!["ws_1".into()]);
+        let _board = server.socket(SOON).await;
+        manager.follow("ws_1", "ses_1");
+        let _follower = server.socket(SOON).await;
+        let mut events = manager.subscribe();
+
+        manager.unfollow("ws_1", "ses_1");
+        // Nothing to say: the board socket is still hearing the truth.
+        let quiet = timeout(Duration::from_millis(200), async {
+            loop {
+                if let Ok(ArtifactsEvent::Presence { .. }) = events.recv().await {
+                    return;
+                }
+            }
+        })
+        .await;
+        assert!(
+            quiet.is_err(),
+            "no presence event while the board socket lives"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
