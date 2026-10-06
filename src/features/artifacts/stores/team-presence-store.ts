@@ -9,7 +9,8 @@
  * blank, for the next person to come or go.
  *
  * Rust sends an empty roster when this machine stops listening to a Project,
- * so an entry here is always what a live socket last heard.
+ * or when its only socket there drops and is redialling, so an entry here is
+ * always what a live socket last heard.
  */
 
 import { create } from "zustand";

@@ -417,6 +417,37 @@ impl ArtifactsManager {
         }
     }
 
+    /// Empty a Project's roster while this slot's socket is down — unless
+    /// another slot on the same Project is still there to hear it.
+    ///
+    /// Held under the registry lock, like [`Self::clear_orphaned_presence`]
+    /// and the `presence` arm of [`Self::apply`], so a roster and its clearing
+    /// can never be broadcast in the wrong order.
+    fn clear_presence_while_down(&self, slot: &Slot, epoch: u64) {
+        let Ok(registry) = self.registry.lock() else {
+            return;
+        };
+        // A slot that has been replaced is somebody else's to speak for.
+        if registry
+            .connections
+            .get(slot)
+            .is_some_and(|conn| conn.epoch != epoch)
+        {
+            return;
+        }
+        if registry
+            .connections
+            .keys()
+            .any(|other| other.key == slot.key && other != slot)
+        {
+            return;
+        }
+        let _ = self.events.send(ArtifactsEvent::Presence {
+            key: slot.key.clone(),
+            online: Vec::new(),
+        });
+    }
+
     /// Install the current attempt's sender — only if the slot is still ours.
     fn install_outbound(
         &self,
@@ -609,7 +640,7 @@ impl ArtifactsManager {
                                 }
                                 backoff = cfg.backoff_min;
                                 remint_used = false;
-                                manager.apply(&slot, *frame);
+                                manager.apply(&slot, epoch, *frame);
                             }
                             Some(ConnEvent::Closed(reason)) => {
                                 exit = reason;
@@ -630,6 +661,10 @@ impl ArtifactsManager {
                     return;
                 }
                 attempts += 1;
+                // The socket dropped on its own (network, idle, refusal). Until
+                // it is back, nothing here hears who comes or goes on this
+                // Project, so the roster it last heard is no longer the truth.
+                manager.clear_presence_while_down(&slot, epoch);
 
                 match exit {
                     ExitReason::Revoked => {
@@ -679,7 +714,7 @@ impl ArtifactsManager {
     }
 
     /// Fold one frame into the cache and announce what changed.
-    fn apply(&self, slot: &Slot, frame: ServerFrame) {
+    fn apply(&self, slot: &Slot, epoch: u64, frame: ServerFrame) {
         let key = &slot.key;
         match frame {
             // Nothing to record: the roster arrives again as `presence`, and
@@ -725,6 +760,20 @@ impl ArtifactsManager {
                 });
             }
             ServerFrame::Presence { online } => {
+                // Only while this socket is still the slot's, and sent under the
+                // registry lock: a frame read just as the slot was removed must
+                // not land after the empty roster that removal announced, or a
+                // teammate would stay "online" on a Project nobody here hears.
+                let Ok(registry) = self.registry.lock() else {
+                    return;
+                };
+                if !registry
+                    .connections
+                    .get(slot)
+                    .is_some_and(|conn| conn.epoch == epoch)
+                {
+                    return;
+                }
                 let _ = self.events.send(ArtifactsEvent::Presence {
                     key: key.clone(),
                     online,
@@ -1092,6 +1141,35 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_socket_that_drops_on_its_own_empties_its_roster_until_it_is_back() {
+        // Reconnecting can take up to the backoff ceiling; the roster heard
+        // before the drop must not stand in for the truth meanwhile.
+        let mut server = Loopback::start(Mode::Normal).await;
+        let manager = manager(&server.base);
+        let mut events = manager.subscribe();
+
+        manager.retarget("org_1", vec![]);
+        manager.follow("ws_1", "ses_1");
+        let mut ws = server.socket(SOON).await;
+        let _ = next_text(&mut ws, SOON).await; // the subscribe
+        ws.send(WsMessage::Text(
+            r#"{"t":"presence","online":["user_ada"]}"#.into(),
+        ))
+        .await
+        .unwrap();
+        assert_eq!(
+            next_presence(&mut events, &key(), SOON).await,
+            vec!["user_ada".to_string()]
+        );
+
+        drop(ws);
+        assert!(
+            next_presence(&mut events, &key(), SOON).await.is_empty(),
+            "a dropped socket hears nobody, so it claims nobody"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_project_still_on_a_board_socket_keeps_its_roster_when_a_follower_closes() {
         let mut server = Loopback::start(Mode::Normal).await;
         let manager = manager(&server.base);
@@ -1198,6 +1276,15 @@ mod tests {
         assert_eq!(frame["t"], "session.subscribe");
         assert_eq!(frame["session_id"], "ses_1");
 
+        // The drop itself empties the roster first: nobody was listening.
+        let event = timeout(SOON, events.recv())
+            .await
+            .expect("an event")
+            .expect("channel open");
+        assert!(
+            matches!(&event, ArtifactsEvent::Presence { online, .. } if online.is_empty()),
+            "{event:?}"
+        );
         let event = timeout(SOON, events.recv())
             .await
             .expect("an event")
