@@ -163,7 +163,12 @@ export function CommentsPanelBase({
           value={filters.query}
           onChange={(e) => setFilters((f) => ({ ...f, query: e.target.value }))}
           onKeyDown={(e) => {
-            if (e.key === "Escape") setFilters((f) => ({ ...f, query: "" }));
+            // First Escape clears the search; only an empty box lets it
+            // through to whatever hosts the panel (which closes on it).
+            if (e.key === "Escape" && filters.query) {
+              e.preventDefault();
+              setFilters((f) => ({ ...f, query: "" }));
+            }
           }}
           placeholder="Search comments…"
           spellCheck={false}

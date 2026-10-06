@@ -32,16 +32,37 @@ export function ChatCommentsPanel({ tabId, onClose }: { tabId: string; onClose: 
   const bashPanel = useLayoutStore.use.bashPanel();
   const { setBashPanelWidth } = useLayoutStore.use.actions();
 
+  // Focus. The panel is docked, not modal: the composer and transcript stay
+  // usable beside it, so keys typed there are theirs. Escape therefore closes
+  // the panel only when focus is IN it — a window-wide listener here also
+  // fired on the composer's Escape (closing a slash picker), on a permission
+  // card's Escape (cancel), and in every hidden chat tab that had the panel
+  // open. Opening moves focus into the panel, so Escape closes it straight
+  // away; closing hands focus back to whatever opened it (the header button)
+  // when the panel was holding it, instead of dropping it on <body>.
+  const rootRef = useRef<HTMLDivElement>(null);
+  const ready = tab?.actions != null && tab.directory != null;
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        onClose();
-      }
+    if (!ready) return;
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const root = rootRef.current;
+    root?.focus({ preventScroll: true });
+    return () => {
+      const active = document.activeElement;
+      const lost = !active || active === document.body || (root?.contains(active) ?? false);
+      if (lost && opener?.isConnected) opener.focus({ preventScroll: true });
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [ready]);
+  const onKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      // A control inside that consumed its own Escape (a menu closing, the
+      // search box clearing) has said so with `preventDefault`.
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      e.preventDefault();
+      onClose();
+    },
+    [onClose],
+  );
 
   const resizeStartXRef = useRef<number | null>(null);
   const resizeStartWidthRef = useRef<number>(0);
@@ -49,7 +70,10 @@ export function ChatCommentsPanel({ tabId, onClose }: { tabId: string; onClose: 
     (e: React.MouseEvent) => {
       e.preventDefault();
       resizeStartXRef.current = e.clientX;
-      resizeStartWidthRef.current = bashPanel.width;
+      // From the width ON SCREEN, not the stored one: the half-pane cap can
+      // hold the panel narrower than the store says, and starting from the
+      // stored width made the first stretch of a drag do nothing.
+      resizeStartWidthRef.current = rootRef.current?.offsetWidth ?? bashPanel.width;
       const onMove = (ev: MouseEvent) => {
         if (resizeStartXRef.current === null) return;
         setBashPanelWidth(resizeStartWidthRef.current + (resizeStartXRef.current - ev.clientX));
@@ -126,8 +150,13 @@ export function ChatCommentsPanel({ tabId, onClose }: { tabId: string; onClose: 
   // conversation — and its composer — usable.
   return (
     <div
+      ref={rootRef}
+      role="complementary"
+      aria-label="Comments"
+      tabIndex={-1}
+      onKeyDown={onKeyDown}
       style={{ width: bashPanel.width }}
-      className="relative h-full max-w-[50%] shrink-0 flex flex-col border-l border-[var(--border)] bg-[var(--sidebar)] animate-slide-in-right"
+      className="relative h-full max-w-[50%] shrink-0 flex flex-col border-l border-[var(--border)] bg-[var(--sidebar)] outline-none animate-slide-in-right"
     >
       <div
         onMouseDown={onResizeStart}
