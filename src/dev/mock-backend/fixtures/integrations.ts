@@ -622,7 +622,7 @@ export const integrationsHandlers: TypedHandlers<IntegrationsResponses> = {
     snapshot = {
       status: "connecting",
       userCode: "WDJB-MJHT",
-      verificationUri: "https://atlas.dev/device",
+      verificationUri: "https://app.tryatlas.cc/device",
       expiresAt: new Date(Date.now() + 600_000).toISOString(),
     };
     broadcast();
