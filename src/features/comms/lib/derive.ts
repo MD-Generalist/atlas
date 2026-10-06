@@ -59,6 +59,9 @@ export function groupMessages(messages: CommsMessage[], me: string): MessageGrou
       last &&
       previous &&
       last.authorId === m.author_id &&
+      // One webhook can post under many names ("CI", "Deploy"); the group head
+      // shows one, so a different name starts a new stack.
+      (previous.author_name ?? null) === (m.author_name ?? null) &&
       // A reply starts a new stack — the quoted parent needs its own head.
       !m.reply_to_id &&
       // A day boundary always starts a new stack. The day divider is drawn

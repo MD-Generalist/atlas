@@ -3,8 +3,9 @@ import { Popover } from "@base-ui/react/popover";
 import { Loader2, Pin, Search } from "lucide-react";
 import { timeAgo } from "@/lib/time-ago";
 import { Hint } from "@/ui/tooltip";
-import { CommsAvatar } from "./comms-avatar";
+import { CommsAvatar, IntegrationAvatar } from "./comms-avatar";
 import { comms } from "../lib/comms-api";
+import { authorLabel, isWebhookMessage } from "../lib/message-author";
 import { toPlainText } from "../lib/to-plain-text";
 import type { ChatPin, OrgMemberProfile } from "../types";
 
@@ -134,9 +135,19 @@ export function PinnedMenu({
                       }
                     >
                       <div className="flex min-w-0 items-center gap-1.5">
-                        <CommsAvatar member={author} size={16} />
+                        {msg && isWebhookMessage(msg) ? (
+                          <IntegrationAvatar
+                            id={msg.author_id}
+                            name={msg.author_name ?? "Integration"}
+                            size={16}
+                          />
+                        ) : (
+                          <CommsAvatar member={author} size={16} />
+                        )}
                         <span className="min-w-0 truncate text-xs font-medium text-foreground">
-                          {author?.name ?? "Unknown"}
+                          {msg && isWebhookMessage(msg)
+                            ? authorLabel(msg, () => "Unknown")
+                            : (author?.name ?? "Unknown")}
                         </span>
                         <span className="ml-auto shrink-0 text-3xs text-[var(--muted-foreground)]">
                           {timeAgo(new Date(pin.at).toISOString(), { suffix: true })}

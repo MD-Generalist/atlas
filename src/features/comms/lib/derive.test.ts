@@ -85,6 +85,19 @@ describe("groupMessages", () => {
     expect(groups).toHaveLength(2);
   });
 
+  it("breaks the stack when one webhook posts under a different name", () => {
+    const hook = { author_id: "whk_1", author_kind: "webhook" as const };
+    const groups = groupMessages(
+      [
+        msg({ id: "m1", ...hook, author_name: "CI" }),
+        msg({ id: "m2", ...hook, author_name: "CI" }),
+        msg({ id: "m3", ...hook, author_name: "Deploy" }),
+      ],
+      "u_b",
+    );
+    expect(groups.map((g) => g.messages.map((m) => m.id))).toEqual([["m1", "m2"], ["m3"]]);
+  });
+
   it("breaks the stack once the time window lapses", () => {
     const groups = groupMessages(
       [msg({ id: "m1", created_at: 1788170400000 }), msg({ id: "m2", created_at: 1788172200000 })],

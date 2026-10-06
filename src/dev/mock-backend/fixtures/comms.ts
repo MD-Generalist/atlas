@@ -224,6 +224,10 @@ interface Seed {
   reactions?: [emoji: string, users: string[]][];
   pinned?: boolean;
   draftId?: string;
+  /** Posted by an incoming webhook, not a person: `by` is then the webhook's
+   *  `whk_…` id, `name` the frozen `author_name`, and `via` the webhook's own
+   *  name when the post overrode it. */
+  webhook?: { name: string; via?: string };
 }
 
 const IMAGE_ATTACHMENT: ChatAttachment = {
@@ -542,6 +546,22 @@ const DESKTOP_SEEDS: Seed[] = [
     ],
   },
   {
+    // An incoming webhook (ADR-0020 on the server): the id is the webhook's,
+    // never a member's, so without `author_kind` this rendered as "Unknown".
+    by: "whk_ci",
+    gap: 2,
+    webhook: { name: "GitHub Actions" },
+    body: "Build #412 passed on `feature/auth-v2` in 3m 12s.",
+  },
+  {
+    // The same webhook posting under a per-message username: drawn as
+    // "Release · via GitHub Actions", so the override can never stand alone.
+    by: "whk_ci",
+    gap: 1,
+    webhook: { name: "Release", via: "GitHub Actions" },
+    body: "Draft release **v0.4.0** created from `feature/auth-v2`.",
+  },
+  {
     by: ME,
     gap: 5,
     // A send that failed and STAYED in the transcript. Rust keeps the row and
@@ -683,6 +703,14 @@ function build(convId: string, startAt: number, seeds: Seed[]): CommsMessage[] {
       code_refs: seed.codeRefs ?? [],
       ...(seed.sessionRefs ? { artifact_refs: seed.sessionRefs } : {}),
       draft_id: seed.draftId ?? null,
+      ...(seed.webhook
+        ? {
+            author_kind: "webhook" as const,
+            author_name: seed.webhook.name,
+            author_via: seed.webhook.via ?? seed.webhook.name,
+            author_avatar_hash: null,
+          }
+        : {}),
       ...(seed.deleted ? { deleted: true } : {}),
       ...(seed.status ? { status: seed.status } : {}),
     } satisfies CommsMessage;

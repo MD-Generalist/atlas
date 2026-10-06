@@ -18,6 +18,10 @@ import { fileURLToPath } from "node:url";
  * 4. Rust's `GraphEdge` sends a `weight` field the frontend's `MemoryEdge`
  *    interface didn't declare.
  *
+ * Two more joined later, in the same spirit: #5, a call start that named no
+ * provider; and #6, a chat message's author kind (a person, or an incoming
+ * webhook), which neither side's types carried.
+ *
  * Unlike `tests/state-payload-contract.test.ts` (which is specifically the
  * `save_app_state` / `bootstrap_app_state` payload and generalises over many
  * struct pairs), these four are one-off, unrelated commands — plain regression
@@ -202,5 +206,38 @@ describe("comms_start_call names its provider; comms_features ↔ ChatFeatures (
     expect(rustFields).toEqual(["features", "mesh_call_max"]);
     const tsFields = tsInterfaceProps(types, "ChatFeatures");
     expect(rustFields.filter((f) => !tsFields.includes(f))).toEqual([]);
+  });
+});
+
+describe("chat Message ↔ ChatMessage, and who wrote it (#6)", () => {
+  // The regression: the server marks a message an incoming webhook posted
+  // (`author_kind: "webhook"`, `author_name`, …) and neither the Rust wire
+  // types nor the frontend's knew the fields, so serde dropped them and the
+  // transcript looked the webhook's `whk_…` id up as a member: "Unknown".
+  const wire = read("crates", "atlas-comms", "src", "wire.rs");
+  const events = read("crates", "atlas-comms", "src", "events.rs");
+  const types = read("src", "features", "comms", "types.ts");
+  const AUTHOR_FIELDS = ["author_kind", "author_name", "author_via", "author_avatar_hash"];
+
+  it("every wire Message field reaches the renderer's WireMessage and ChatMessage", () => {
+    const message = rustStructFields(rustItem(wire, "struct", "Message").body);
+    const messageNew = rustStructFields(rustItem(wire, "struct", "MessageNew").body);
+    const renderer = rustStructFields(rustItem(events, "struct", "WireMessage").body);
+    for (const field of AUTHOR_FIELDS) {
+      expect(message).toContain(field);
+      expect(messageNew).toContain(field);
+    }
+    expect(message.filter((f) => !renderer.includes(f))).toEqual([]);
+    const ts = tsInterfaceProps(types, "ChatMessage");
+    expect(message.filter((f) => !ts.includes(f))).toEqual([]);
+  });
+
+  it("every Rust AuthorKind is a ChatAuthorKind", () => {
+    const variants = rustEnumVariants(rustItem(wire, "enum", "AuthorKind").body).map(pascalToSnake);
+    expect(variants).toEqual(["user", "webhook"]);
+    const ts = tsUnionLiterals(types, "ChatAuthorKind");
+    expect(variants.filter((v) => !ts.includes(v))).toEqual([]);
+    // The catch-all serialises as `other`; the renderer has to accept it.
+    expect(ts).toContain("other");
   });
 });

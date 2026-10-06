@@ -817,6 +817,10 @@ impl CommsManager {
             code_refs: Vec::new(),
             artifact_refs: artifact_refs.clone(),
             draft_id: None,
+            author_kind: crate::wire::AuthorKind::User,
+            author_name: None,
+            author_via: None,
+            author_avatar_hash: None,
         };
 
         self.inner.pending.lock().unwrap().insert(
@@ -1826,6 +1830,10 @@ pub fn to_wire(row: &LocalMessage) -> WireMessage {
         code_refs: row.message.code_refs.clone(),
         artifact_refs: row.message.artifact_refs.clone(),
         draft_id: row.message.draft_id.clone(),
+        author_kind: row.message.author_kind,
+        author_name: row.message.author_name.clone(),
+        author_via: row.message.author_via.clone(),
+        author_avatar_hash: row.message.author_avatar_hash.clone(),
         client_msg_id: row.client_msg_id.clone(),
         status: match row.status {
             SendStatus::Sending => "sending",
@@ -2278,6 +2286,10 @@ mod tests {
             code_refs: vec![],
             artifact_refs: vec![],
             draft_id: None,
+            author_kind: crate::wire::AuthorKind::User,
+            author_name: None,
+            author_via: None,
+            author_avatar_hash: None,
         };
         assert!(!mgr.adopt_page(&stale, "c1", vec![message], false));
         assert!(mgr.with_state(|s| s.messages("c1").is_empty()));
@@ -2461,6 +2473,10 @@ mod tests {
                     code_refs: vec![],
                     artifact_refs: vec![],
                     draft_id: None,
+                    author_kind: crate::wire::AuthorKind::User,
+                    author_name: None,
+                    author_via: None,
+                    author_avatar_hash: None,
                 })],
             );
         });
@@ -2514,6 +2530,10 @@ mod tests {
                     code_refs: vec![],
                     artifact_refs: vec![],
                     draft_id: None,
+                    author_kind: crate::wire::AuthorKind::User,
+                    author_name: None,
+                    author_via: None,
+                    author_avatar_hash: None,
                 })],
             );
             state.pins.insert("c1".into(), vec!["m1".into()]);
