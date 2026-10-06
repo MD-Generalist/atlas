@@ -289,7 +289,12 @@ const ThreadRow = memo(function ThreadRow({
         {thread.root.deletedAt ? (
           <span className="italic text-[var(--atlas-text-disabled)]">deleted this comment</span>
         ) : (
-          thread.root.body
+          // Mentions are stored as `<@user-id>`; the preview names them, as
+          // the thread itself does.
+          (thread.root.body ?? "").replace(
+            /<@([A-Za-z0-9_.:-]{1,128})>/g,
+            (_, id: string) => `@${directory.byId.get(id)?.name ?? id}`,
+          )
         )}
       </span>
 
