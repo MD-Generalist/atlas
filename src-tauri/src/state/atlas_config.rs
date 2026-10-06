@@ -685,9 +685,9 @@ const SETTINGS_DOCS: &[(&str, &str)] = &[
     ),
     (
         "curatedPluginSync",
-        "# Let the Atlas Agent's engine fetch OpenAI's curated plugin catalogue\n\
-         # (github.com/openai/plugins) when it starts — a network request at\n\
-         # every launch. Applies the next time the agent starts. (default: false)",
+        "# Let Atlas Agent download the latest curated plugin catalogue when it\n\
+         # starts — a network request at every launch. Applies the next time the\n\
+         # agent starts. (default: false)",
     ),
     (
         "instructionSync",
