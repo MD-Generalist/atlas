@@ -42,7 +42,7 @@ export function memberRowAccess({
 }): MemberRowAccess {
   if (isSelf) {
     const blockedReason = member.isOwner
-      ? "The owner can't leave the organisation they created."
+      ? "The owner can't leave the organization they created."
       : soleAdmin
         ? "You're the only admin — give someone else the Admin role first."
         : null;
@@ -62,7 +62,7 @@ export function memberRowAccess({
         menu: true,
         roles: true,
         actionAllowed: false,
-        blockedReason: "The organisation's owner can't be removed.",
+        blockedReason: "The organization's owner can't be removed.",
       }
     : { menu: true, roles: true, actionAllowed: true, blockedReason: null };
 }

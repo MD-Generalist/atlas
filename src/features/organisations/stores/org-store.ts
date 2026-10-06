@@ -190,7 +190,7 @@ export const useOrgStore = createSelectors(
       },
 
       createOrg: (name, slug) => {
-        const trimmed = name.trim() || "New organisation";
+        const trimmed = name.trim() || "New organization";
         const handle = slugify(slug || trimmed);
         // GitHub-style: names are globally unique (case-insensitive). The slug
         // is what the SERVER enforces globally; locally we only stop obvious
@@ -218,13 +218,13 @@ export const useOrgStore = createSelectors(
       createOrgSynced: async (name, slug, cloud) => {
         const trimmed = name.trim();
         const handle = slugify(slug || trimmed);
-        if (!trimmed) throw "Enter a name for the organisation.";
-        if (!handle) throw "Enter a handle for the organisation.";
+        if (!trimmed) throw "Enter a name for the organization.";
+        if (!handle) throw "Enter a handle for the organization.";
         if (nameTaken(trimmed, get().organisations)) {
-          throw `An organisation named “${trimmed}” already exists.`;
+          throw `An organization named “${trimmed}” already exists.`;
         }
         if (get().organisations.some((o) => o.slug === handle)) {
-          throw `The handle “${handle}” is already used by another organisation.`;
+          throw `The handle “${handle}” is already used by another organization.`;
         }
 
         // Server FIRST for a cloud org: the unique index on `organization.slug`
@@ -468,7 +468,7 @@ export const useOrgStore = createSelectors(
             payload: { orgId: id, remoteId },
           });
         } catch (e) {
-          toast.error(typeof e === "string" ? e : "Couldn't sync organisation.");
+          toast.error(typeof e === "string" ? e : "Couldn't sync organization.");
         }
       },
 

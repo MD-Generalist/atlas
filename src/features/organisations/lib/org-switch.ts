@@ -63,7 +63,7 @@ export async function switchOrg(id: string): Promise<void> {
   if (busy > 0) {
     const ok = await useStopAgentsConfirmStore.getState().actions.ask({
       count: busy,
-      actionLabel: "Switching organisations",
+      actionLabel: "Switching organizations",
       confirmLabel: "Stop agents & switch",
     });
     if (!ok) {
@@ -163,7 +163,7 @@ export async function switchOrg(id: string): Promise<void> {
       }
     }
     if (!pushed) {
-      toast.error("Couldn't switch team chat to this organisation. Switch away and back to retry.");
+      toast.error("Couldn't switch team chat to this organization. Switch away and back to retry.");
     }
     //    Rust has (re)targeted synchronously inside that command: pull the
     //    incoming org's disk-painted snapshot now, and ask Rust to re-announce
@@ -280,7 +280,7 @@ export async function deleteOrgAndData(id: string): Promise<boolean> {
  */
 export async function leaveOrgAndData(id: string): Promise<boolean> {
   const target = useOrgStore.getState().organisations.find((o) => o.id === id);
-  if (!target?.remoteId) throw "This organisation isn't synced, so there's nothing to leave.";
+  if (!target?.remoteId) throw "This organization isn't synced, so there's nothing to leave.";
 
   const others = useOrgStore.getState().organisations.filter((o) => o.id !== id);
   if (useOrgStore.getState().activeOrganisationId === id && others.length > 0) {

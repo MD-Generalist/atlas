@@ -925,7 +925,7 @@ impl AgentHost {
             // Written anyway: the next connect will refuse on the same
             // grounds, honestly, rather than run on the previous list.
             return Err(HostError::new(
-                "the gateway lists no models this organisation may use",
+                "the gateway lists no models this organization may use",
                 ErrorClass::Fatal,
             ));
         };

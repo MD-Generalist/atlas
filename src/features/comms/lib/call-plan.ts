@@ -33,5 +33,5 @@ export function callButtonPlan(features: ChatFeatures["features"] | undefined): 
 }
 
 /** Why a call button that the plan rules out is drawn disabled. */
-export const NO_MEETINGS_REASON = "Video meetings aren't included in this organisation's plan";
-export const NO_CALLS_REASON = "Calls aren't available on this organisation's plan";
+export const NO_MEETINGS_REASON = "Video meetings aren't included in this organization's plan";
+export const NO_CALLS_REASON = "Calls aren't available on this organization's plan";

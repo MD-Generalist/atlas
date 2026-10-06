@@ -133,7 +133,7 @@ export function MembersModal({
       setConfirmLeave(false);
       onOpenChange(false);
     } catch (e) {
-      toast.error(typeof e === "string" ? e : "Couldn't leave the organisation.");
+      toast.error(typeof e === "string" ? e : "Couldn't leave the organization.");
     } finally {
       setLeaving(false);
     }
@@ -321,7 +321,7 @@ export function MembersModal({
 
                 {!signedIn ? (
                   <div className="grid place-items-center h-[160px] text-xs text-muted-foreground px-6 text-center">
-                    Sign in to manage this organisation's members.
+                    Sign in to manage this organization's members.
                   </div>
                 ) : firstLoad ? (
                   <div className="grid place-items-center h-[160px] text-xs text-muted-foreground">
@@ -422,7 +422,7 @@ function LeaveOrgDialog({
             You lose access to its chat, projects and shared sessions at once. Coming back takes a
             new invitation.{" "}
             {onlyOrg
-              ? "It stays on this desktop as a local-only organisation, with its projects."
+              ? "It stays on this desktop as a local-only organization, with its projects."
               : "Atlas stops listing its projects here."}{" "}
             Your project files on this machine are not touched.
           </Dialog.Description>
@@ -440,7 +440,7 @@ function LeaveOrgDialog({
               className="px-3 h-8 rounded-md text-sm font-medium bg-error text-destructive-foreground hover:opacity-90 transition-opacity cursor-pointer inline-flex items-center gap-1.5 disabled:opacity-70 disabled:cursor-not-allowed"
             >
               {leaving && <Loader2 size={12} className="animate-spin" />}
-              {leaving ? "Leaving…" : "Leave organisation"}
+              {leaving ? "Leaving…" : "Leave organization"}
             </button>
           </div>
         </Dialog.Popup>
@@ -559,7 +559,7 @@ function MemberRow({
                       )}
                     >
                       {isSelf ? <LogOut size={11} /> : <Trash2 size={11} />}
-                      {isSelf ? "Leave organisation…" : "Remove from organisation"}
+                      {isSelf ? "Leave organization…" : "Remove from organization"}
                     </DropdownMenu.Item>
                   </DropdownMenu.Popup>
                 </DropdownMenu.Positioner>

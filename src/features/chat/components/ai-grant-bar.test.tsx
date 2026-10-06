@@ -113,7 +113,7 @@ describe("the no-grant setup state (bar 14)", () => {
     activeDesktopOrgId = null;
     seed(NO_GRANT);
     render(<AiGrantBar />);
-    expect((await screen.findByTestId("ai-grant-bar")).textContent).toContain("This organisation");
+    expect((await screen.findByTestId("ai-grant-bar")).textContent).toContain("This organization");
   });
 
   it("waits for a running turn to end before it shows", () => {

@@ -1397,7 +1397,7 @@ export const commsHandlers: TypedHandlers<CommsResponses> = {
         if (live.conv_id === String(convId) && live.ended_at === null) return live;
       }
     } else if (!MOCK_FEATURES.features["calls.paid"]) {
-      throw refuse("feature_disabled", "Meetings are not available on this Organisation's plan.");
+      throw refuse("feature_disabled", "Meetings are not available on this Organization's plan.");
     }
     const call: ChatCall = {
       id: `call_${Date.now()}`,

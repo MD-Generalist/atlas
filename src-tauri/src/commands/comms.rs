@@ -233,19 +233,19 @@ pub(crate) fn manager(app: &AppHandle) -> Result<CommsManager, String> {
 
 pub(crate) fn org(mgr: &CommsManager) -> Result<String, String> {
     mgr.org_id()
-        .ok_or_else(|| "no organisation is connected".to_string())
+        .ok_or_else(|| "no organization is connected".to_string())
 }
 
 /// The error a command answers when the socket moved to another organisation
 /// between its REST round trip and its adopt. The renderer treats it like any
 /// other transient: the retry runs against whatever org is current by then.
-const ORG_CHANGED: &str = "organisation changed";
+const ORG_CHANGED: &str = "organization changed";
 
 /// For commands that await and then ADOPT into state — `org()` is enough for a
 /// pure REST passthrough, but an adopt needs the generation too.
 pub(crate) fn session(mgr: &CommsManager) -> Result<atlas_comms::Session, String> {
     mgr.session()
-        .ok_or_else(|| "no organisation is connected".to_string())
+        .ok_or_else(|| "no organization is connected".to_string())
 }
 
 /// Errors reach the UI as their code plus message; the structured `detail` is

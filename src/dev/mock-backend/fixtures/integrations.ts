@@ -716,7 +716,7 @@ export const integrationsHandlers: TypedHandlers<IntegrationsResponses> = {
   auth_list_invitations: ({ orgId }): OrgInvitation[] => {
     const id = String(orgId);
     if (id === SECOND_ORG_ID) {
-      fail("Only an admin can see this organisation's invites.");
+      fail("Only an admin can see this organization's invites.");
     }
     return invites(id).map((i) => ({ ...i }));
   },
@@ -763,7 +763,7 @@ export const integrationsHandlers: TypedHandlers<IntegrationsResponses> = {
     if (!target) fail("Only an admin can change a member's role.");
     const admins = list.filter((m) => m.role === "admin");
     if (target.role === "admin" && admins.length === 1 && role !== "admin") {
-      fail("An organisation needs at least one admin.");
+      fail("An organization needs at least one admin.");
     }
     target.role = (role ?? null) as Role | null;
     return null;
@@ -797,7 +797,7 @@ export const integrationsHandlers: TypedHandlers<IntegrationsResponses> = {
     const id = String(orgId);
     const list = roster(id);
     const me = list.find((m) => m.userId === "usr_dev");
-    if (!me) fail("You're not a member of this organisation.");
+    if (!me) fail("You're not a member of this organization.");
     if (me.isOwner) fail("The organization's owner cannot leave it.");
     if (me.role === "admin" && list.filter((m) => m.role === "admin").length === 1) {
       fail("You're the only admin — make someone else an admin first.");

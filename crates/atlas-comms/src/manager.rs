@@ -782,7 +782,7 @@ impl CommsManager {
         artifact_refs: Vec<SessionReference>,
     ) -> Result<String> {
         if self.session().is_none() {
-            return Err(CommsError::Protocol("no organisation is connected".into()));
+            return Err(CommsError::Protocol("no organization is connected".into()));
         }
         let client_msg_id = uuid::Uuid::new_v4().to_string();
         let now = now_ms();
@@ -1165,7 +1165,7 @@ impl CommsManager {
     ) -> Result<String> {
         let org_id = self
             .org_id()
-            .ok_or_else(|| CommsError::Protocol("no organisation is connected".into()))?;
+            .ok_or_else(|| CommsError::Protocol("no organization is connected".into()))?;
 
         let filename = path
             .file_name()
@@ -1207,7 +1207,7 @@ impl CommsManager {
             if self.upload_cancelled(upload_id) {
                 let _ = self.inner.rest.abort_upload(&org_id, &intent.file_id).await;
                 self.finish_upload(upload_id);
-                return Err(CommsError::Protocol("upload cancelled".into()));
+                return Err(CommsError::Protocol("upload canceled".into()));
             }
 
             // Every part but the last is exactly `part_bytes`; the last is
@@ -1338,7 +1338,7 @@ impl CommsManager {
     pub async fn download_attachment(&self, file_id: &str, download_id: &str) -> Result<Vec<u8>> {
         let org = self
             .org_id()
-            .ok_or_else(|| CommsError::Protocol("no organisation is connected".into()))?;
+            .ok_or_else(|| CommsError::Protocol("no organization is connected".into()))?;
         let progress = self.progress_reporter(download_id);
         let mut on_chunk = progress;
         let result = self
@@ -1525,7 +1525,7 @@ impl CommsManager {
     ) -> Result<crate::wire::Call> {
         let session = self
             .session()
-            .ok_or_else(|| CommsError::Token("no organisation is connected".into()))?;
+            .ok_or_else(|| CommsError::Token("no organization is connected".into()))?;
         let call = self
             .inner
             .rest
@@ -1534,7 +1534,7 @@ impl CommsManager {
         {
             let mut state = self.inner.state.lock().unwrap();
             if !self.live(session.generation) {
-                return Err(CommsError::Protocol("organisation changed".into()));
+                return Err(CommsError::Protocol("organization changed".into()));
             }
             state.calls.insert(call.id.clone(), call.clone());
         }
@@ -1546,7 +1546,7 @@ impl CommsManager {
     pub async fn download_transcript(&self, call_id: &str) -> Result<Vec<u8>> {
         let org = self
             .org_id()
-            .ok_or_else(|| CommsError::Token("no organisation is connected".into()))?;
+            .ok_or_else(|| CommsError::Token("no organization is connected".into()))?;
         self.inner.rest.download_transcript(&org, call_id).await
     }
 

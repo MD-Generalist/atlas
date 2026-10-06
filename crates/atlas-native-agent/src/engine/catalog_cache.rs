@@ -179,7 +179,7 @@ impl std::fmt::Display for FetchError {
             }
             Self::Http { status, .. } => write!(f, "the gateway answered HTTP {status}"),
             Self::Transport(why) => write!(f, "could not reach the gateway: {why}"),
-            Self::Shape(why) => write!(f, "the gateway's catalogue did not parse: {why}"),
+            Self::Shape(why) => write!(f, "the gateway's catalog did not parse: {why}"),
         }
     }
 }
@@ -400,7 +400,7 @@ impl std::fmt::Display for CatalogueUnavailable {
                 "Atlas Agent can't load its model list ({error}). Check your connection and try again."
             ),
             None => f.write_str(
-                "Atlas Agent has no models to offer: the gateway lists none this organisation may use.",
+                "Atlas Agent has no models to offer: the gateway lists none this organization may use.",
             ),
         }
     }

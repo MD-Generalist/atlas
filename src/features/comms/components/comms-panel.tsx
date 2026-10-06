@@ -374,9 +374,9 @@ function CommsConnecting({
         <div className="text-sm font-medium text-foreground">Chat is unavailable</div>
         <p className="max-w-[220px] text-xs leading-relaxed text-secondary-foreground">
           {reason === "not_a_member"
-            ? "Your account isn't a member of this organisation's chat."
+            ? "Your account isn't a member of this organization's chat."
             : reason === "evicted"
-              ? "You were removed from this organisation."
+              ? "You were removed from this organization."
               : "Couldn't authenticate with the chat service."}
         </p>
         <button

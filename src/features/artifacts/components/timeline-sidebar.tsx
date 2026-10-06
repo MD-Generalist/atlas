@@ -637,7 +637,7 @@ const SessionMeta = memo(function SessionMeta({
             ? "text-[var(--atlas-status-success-foreground)]"
             : "text-[var(--atlas-text-disabled)]",
         )}
-        aria-label={session.synced ? "Shared with your Organisation" : "This machine only"}
+        aria-label={session.synced ? "Shared with your Organization" : "This machine only"}
       />
       {/* The Project first, because it is what a reader scanning the day is
        *  grouping by. It is the part that gives way when the pane is narrow. */}

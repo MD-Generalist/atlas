@@ -631,7 +631,7 @@ const SETTINGS_DOCS: &[(&str, &str)] = &[
     ),
     (
         "iconTheme",
-        "# File and folder icons, on their own track from the colour theme.\n\
+        "# File and folder icons, on their own track from the color theme.\n\
          # \"minimal\" keeps Atlas's own lucide icons; anything else names a VS\n\
          # Code icon theme, bundled or installed from Open VSX.\n\
          # (default: \"material-icon-theme\")",
@@ -685,7 +685,7 @@ const SETTINGS_DOCS: &[(&str, &str)] = &[
     ),
     (
         "curatedPluginSync",
-        "# Let Atlas Agent download the latest curated plugin catalogue when it\n\
+        "# Let Atlas Agent download the latest curated plugin catalog when it\n\
          # starts — a network request at every launch. Applies the next time the\n\
          # agent starts. (default: false)",
     ),
@@ -718,10 +718,10 @@ const SETTINGS_DOCS: &[(&str, &str)] = &[
     ),
     (
         "agentOrgAccess",
-        "# Let Atlas Agent act in your organisation, as you: read the recorded\n\
-         # sessions, comments, members and conversations of the organisation a\n\
+        "# Let Atlas Agent act in your organization, as you: read the recorded\n\
+         # sessions, comments, members and conversations of the organization a\n\
          # cloud-bound Project belongs to. Anything that reaches another person\n\
-         # asks you first. Off: its organisation tools are withdrawn and every\n\
+         # asks you first. Off: its organization tools are withdrawn and every\n\
          # call is refused. (default: true)",
     ),
     (

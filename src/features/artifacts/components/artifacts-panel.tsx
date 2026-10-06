@@ -337,7 +337,7 @@ export function ArtifactsPanel() {
       }
       if (cloudFailureToldFor.current === orgId) return;
       cloudFailureToldFor.current = orgId;
-      toast.error("Couldn't load this Organisation's shared sessions.", {
+      toast.error("Couldn't load this Organization's shared sessions.", {
         id: "timeline-cloud-failed",
         description: "Showing the sessions recorded on this machine.",
         action: { label: "Retry", onClick: retryCloud },
@@ -769,7 +769,7 @@ export function ArtifactsPanel() {
                     place, whichever state you are in. */}
                 <HintGroup>
                   <DockButton
-                    label={showSidebar ? "Maximise session" : "Show timeline"}
+                    label={showSidebar ? "Maximize session" : "Show timeline"}
                     active={!showSidebar}
                     onClick={toggleTimelineSidebar}
                   >

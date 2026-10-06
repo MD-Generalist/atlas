@@ -409,7 +409,7 @@ function GeneralSettings() {
       </SettingRow>
       <NotificationsSettings />
 
-      <SectionTitle title="Behaviour" subtitle="Files, logs and the editor" />
+      <SectionTitle title="Behavior" subtitle="Files, logs and the editor" />
       <SettingRow
         label={devProfile ? `Keep ${atlasDir} out of git` : `Auto-add ${atlasDir} to .gitignore`}
         description={
@@ -555,8 +555,8 @@ function GeneralSettings() {
         />
       </SettingRow>
       <SettingRow
-        label="Let Atlas Agent act in your organisation"
-        description="In a Project bound to the cloud, Atlas Agent can read your organisation's recorded sessions, comments, members and conversations, and act there as you. Anything that reaches another person asks you first. Each action shows in the chat and the Logs panel."
+        label="Let Atlas Agent act in your organization"
+        description="In a Project bound to the cloud, Atlas Agent can read your organization's recorded sessions, comments, members and conversations, and act there as you. Anything that reaches another person asks you first. Each action shows in the chat and the Logs panel."
       >
         <Toggle
           checked={settings.agentOrgAccess}
@@ -745,8 +745,8 @@ function UpdatesSettings() {
         />
       </SettingRow>
       <SettingRow
-        label="Keep Atlas Agent's plugin catalogue up to date"
-        description="Let Atlas Agent download the latest curated plugin catalogue when it starts. Off by default — it is a network request at every launch. Applies the next time the agent starts."
+        label="Keep Atlas Agent's plugin catalog up to date"
+        description="Let Atlas Agent download the latest curated plugin catalog when it starts. Off by default — it is a network request at every launch. Applies the next time the agent starts."
       >
         <Toggle
           checked={settings.curatedPluginSync}

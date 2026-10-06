@@ -106,11 +106,11 @@ export function AiGrantBar({ turnRunning = false }: { turnRunning?: boolean }) {
       <div
         data-testid="ai-grant-bar"
         className={STRIP}
-        title="Atlas Agent works with organisations synced to your account"
+        title="Atlas Agent works with organizations synced to your account"
       >
         <span className="min-w-0 truncate">
           <span className="font-semibold text-[var(--foreground)]">
-            {orgName ?? "This organisation"}
+            {orgName ?? "This organization"}
           </span>
           <span className="text-[var(--muted-foreground)]">
             {" "}
@@ -125,8 +125,8 @@ export function AiGrantBar({ turnRunning = false }: { turnRunning?: boolean }) {
             disabled={syncing}
             title={
               account
-                ? "Create this organisation in your Atlas account"
-                : "Sign in to sync this organisation"
+                ? "Create this organization in your Atlas account"
+                : "Sign in to sync this organization"
             }
             className={cn(ACTION, syncing ? "cursor-default" : "cursor-pointer")}
           >
@@ -153,7 +153,7 @@ export function AiGrantBar({ turnRunning = false }: { turnRunning?: boolean }) {
     <div data-testid="ai-grant-bar" className={STRIP} title={entitlement.message}>
       <span className="min-w-0 truncate">
         <span className="font-semibold text-[var(--foreground)]">
-          {orgName ?? "This organisation"}
+          {orgName ?? "This organization"}
         </span>
         <span className="text-[var(--muted-foreground)]"> doesn&apos;t have AI grants</span>
       </span>
@@ -173,7 +173,7 @@ export function AiGrantBar({ turnRunning = false }: { turnRunning?: boolean }) {
         <button
           type="button"
           onClick={onRequest}
-          title="Request AI credits for your organisation"
+          title="Request AI credits for your organization"
           className={cn(ACTION, "cursor-pointer")}
         >
           <MoveUpRight size={11} />

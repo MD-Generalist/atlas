@@ -393,7 +393,7 @@ pub async fn auth_list_members(
         .core()
         .list_members(&org_id)
         .await
-        .map_err(|e| e.user_message_denied("You don't have access to this organisation's members."))
+        .map_err(|e| e.user_message_denied("You don't have access to this organization's members."))
 }
 
 /// Pending + past invitations. Admin-scoped server-side, so a non-admin's call
@@ -407,7 +407,7 @@ pub async fn auth_list_invitations(
         .core()
         .list_invitations(&org_id)
         .await
-        .map_err(|e| e.user_message_denied("Only an admin can see this organisation's invites."))
+        .map_err(|e| e.user_message_denied("Only an admin can see this organization's invites."))
 }
 
 /// Invite someone by email. The server emails the invitee; the returned
@@ -492,7 +492,7 @@ pub async fn auth_leave_org(
     let core = state.core();
     core.leave_org(&org_id).await.map_err(|e| {
         e.user_message_denied(
-            "Couldn't leave. The owner can't leave their organisation, and an organisation's \
+            "Couldn't leave. The owner can't leave their organization, and an organization's \
              last admin has to make someone else an admin first.",
         )
     })?;
