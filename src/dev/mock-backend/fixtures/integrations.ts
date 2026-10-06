@@ -132,6 +132,7 @@ const member = (
   role,
   createdAt: iso(-200),
   avatarPath: null,
+  isOwner: false,
   ...extra,
 });
 
@@ -148,10 +149,12 @@ const member = (
  */
 const ACME_MEMBERS: OrgMember[] = [
   member("mem-dev", "Dev Halvorsen", "dev@acme.dev", "admin", {
-    // Same id as the signed-in user, which is what `isSelf` compares.
+    // Same id as the signed-in user, which is what `isSelf` compares. Created
+    // Acme, so they are its Owner: no Leave, and no Remove for anyone else.
     userId: "usr_dev",
     avatarPath: abs("public/logo.png"),
     createdAt: iso(-412),
+    isOwner: true,
   }),
   member("mem-priya", "Priya Raghunathan", "priya@acme.dev", "product_owner", {
     userId: "usr_priya",
@@ -191,6 +194,7 @@ const ACME_MEMBERS: OrgMember[] = [
 const NORTHWIND_MEMBERS: OrgMember[] = [
   member("mem-nw-lead", "Ingrid Solberg", "ingrid@northwind.example", "admin", {
     createdAt: iso(-520),
+    isOwner: true,
   }),
   member("mem-nw-dev", "Dev Halvorsen", "dev@acme.dev", "member", {
     userId: "usr_dev",

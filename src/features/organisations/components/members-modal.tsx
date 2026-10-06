@@ -355,11 +355,18 @@ function MemberRow({
   onRole: (role: Role) => void;
   onRemove: () => void;
 }) {
-  /** An admin removing themselves could leave the org with no admin at all —
+  /** The Owner (whoever created the org) can't be removed and can't leave —
+   *  the server refuses both, since some powers are theirs alone. Separately,
+   *  an admin removing themselves could leave the org with no admin at all —
    *  nobody able to invite, change roles, or delete it. Removing OTHER people
-   *  (including other admins) stays allowed; it's only self-removal that can
-   *  strand the org. */
-  const canLeave = !(isSelf && member.role === "admin");
+   *  (including other admins) stays allowed. */
+  const canLeave = !member.isOwner && !(isSelf && member.role === "admin");
+  const blockedReason = member.isOwner
+    ? isSelf
+      ? "The owner can't leave the organisation they created."
+      : "The organisation's owner can't be removed."
+    : "Admins can't leave — give someone else the Admin role first.";
+  const roleLabel = member.role ? ROLE_LABELS[member.role] : null;
 
   return (
     <div className="border-b border-border-subtle">
@@ -387,7 +394,12 @@ function MemberRow({
           </span>
         </span>
         <span className={cn(COL.role, "text-xs text-secondary-foreground")}>
-          {member.role ? ROLE_LABELS[member.role] : "—"}
+          {/* Owner isn't a role, so a demoted Owner shows both. */}
+          {member.isOwner
+            ? member.role === "admin" || !roleLabel
+              ? "Owner"
+              : `Owner · ${roleLabel}`
+            : (roleLabel ?? "—")}
         </span>
         <span className={cn(COL.joined, "text-2xs text-muted-foreground")}>
           {timeAgo(member.createdAt, { suffix: true }) || "—"}
@@ -421,17 +433,13 @@ function MemberRow({
                       </DropdownMenu.Item>
                     ))}
                     <DropdownMenu.Separator className="my-0.5 h-px bg-[var(--border)]" />
-                    {/* An admin can't leave: doing so could strip the org of its
-                        last admin, leaving nobody able to invite, change roles or
-                        delete it. Hand the role over first. */}
+                    {/* The Owner can't be removed or leave; an admin can't leave
+                        either, since that could strip the org of its last admin.
+                        See `canLeave` above. */}
                     <DropdownMenu.Item
                       disabled={!canLeave}
                       onClick={canLeave ? onRemove : undefined}
-                      title={
-                        canLeave
-                          ? undefined
-                          : "Admins can't leave — give someone else the Admin role first."
-                      }
+                      title={canLeave ? undefined : blockedReason}
                       className={cn(
                         "px-2.5 h-6 flex items-center gap-1.5 outline-none",
                         canLeave

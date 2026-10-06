@@ -1039,13 +1039,17 @@ impl AuthCore {
             image: Option<String>,
         }
 
-        let res = self
-            .authed_get_query(
-                "/organization/get-full-organization",
-                &[("organizationId", org_id)],
-            )
-            .await?;
-        let full: FullOrg = res
+        // The roster rides alongside for one fact the member list lacks: who
+        // the Owner is. Best-effort — a server without the endpoint, or any
+        // failure reading it, leaves nobody marked Owner rather than costing
+        // the members list. A real 401 still surfaces through the members call.
+        let query = [("organizationId", org_id)];
+        let (res, owner_id) = futures::join!(
+            self.authed_get_query("/organization/get-full-organization", &query),
+            self.org_owner_id(org_id),
+        );
+        let owner_id = owner_id.as_deref();
+        let full: FullOrg = res?
             .json()
             .await
             .map_err(|e| AuthFailure::indeterminate(format!("unreadable members: {e}")))?;
@@ -1065,6 +1069,7 @@ impl AuthCore {
                 });
                 let avatar_path =
                     avatar::resolve_member(&self.http, &self.dir, user.image.as_deref()).await;
+                let is_owner = !user.id.is_empty() && owner_id == Some(user.id.as_str());
                 OrgMember {
                     id: m.id,
                     user_id: user.id,
@@ -1076,6 +1081,7 @@ impl AuthCore {
                     role: m.role.as_deref().and_then(Role::from_claim),
                     created_at: m.created_at,
                     avatar_path,
+                    is_owner,
                 }
             })
             .buffered(8)
@@ -1083,6 +1089,24 @@ impl AuthCore {
             .await;
 
         Ok(members)
+    }
+
+    /// `GET /organization/roster` — the user id of the Organisation's Owner
+    /// (the member who created it), or `None`: nobody owns it, the owner has
+    /// left, or the roster could not be read. Only `ownerId` is taken; the
+    /// rest of the roster is not used here.
+    async fn org_owner_id(&self, org_id: &str) -> Option<String> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Roster {
+            #[serde(default)]
+            owner_id: Option<String>,
+        }
+        let res = self
+            .authed_get_query("/organization/roster", &[("organizationId", org_id)])
+            .await
+            .ok()?;
+        res.json::<Roster>().await.ok()?.owner_id
     }
 
     /// `GET /organization/list-invitations` — pending + past invites (API §6).
@@ -1540,6 +1564,11 @@ pub struct OrgMember {
     /// Absolute path to the cached photo, or `None` — no photo, or the fetch
     /// failed. Both render as initials; the UI draws no distinction.
     pub avatar_path: Option<String>,
+    /// This member is the Organisation's **Owner** — the person who created it.
+    /// Not a role: the Owner also holds one (normally admin). The server will
+    /// not let the Owner be removed or leave. `false` when the server could
+    /// not say.
+    pub is_owner: bool,
 }
 
 /// A pending (or past) invitation to an organisation.

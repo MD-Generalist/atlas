@@ -224,6 +224,10 @@ export interface OrgMember {
   /** Absolute path to the cached photo, or `null` (no photo / fetch failed).
    *  Both render as initials. Feed it through `convertFileSrc`. */
   avatarPath: string | null;
+  /** The Organisation's Owner — the person who created it. Not a role: the
+   *  Owner also holds one (normally admin). The server refuses to remove the
+   *  Owner or let them leave. `false` when the server couldn't say. */
+  isOwner: boolean;
 }
 
 /** A pending/past invitation. Mirrors Rust `OrgInvitation`. */
