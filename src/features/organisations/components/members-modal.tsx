@@ -151,14 +151,14 @@ export function MembersModal({
     setInviteEmails([]);
     setEmailDraft("");
     setTab("invitations");
-    // Email delivery is deferred server-side, so the links ARE the invite —
-    // copy them so the inviter can paste them straight out.
+    // The server emails each invitee their accept link; copy the links too so
+    // the inviter can also share them directly (chat, DM) if they prefer.
     if (links.length > 0) {
       void copy(
         links.join("\n"),
         links.length === 1
-          ? "Invite link copied — send it to them."
-          : `${links.length} invite links copied.`,
+          ? "Invitation emailed. Link copied — you can share it directly too."
+          : `${links.length} invitations emailed. Links copied — you can share them directly too.`,
       );
     } else {
       toast.success(`Invited ${sent.join(", ")}.`);

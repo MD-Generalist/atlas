@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
 import { toast } from "sonner";
 import { ScrollArea } from "@/ui/scroll-area";
 import { cn } from "@/lib/utils";
@@ -769,6 +770,19 @@ function UpdatesSettings() {
 }
 
 function AboutSettings() {
+  // Read from the bundle, not hardcoded: `bun run bump` doesn't touch this file.
+  const [version, setVersion] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    void getVersion()
+      .then((v) => {
+        if (live) setVersion(v);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
   return (
     <div className="space-y-4">
       <SectionTitle title="About" subtitle="Atlas IDE" />
@@ -777,12 +791,14 @@ function AboutSettings() {
           <AtlasIcon size={40} className="rounded-xl" />
           <div>
             <p className="text-sm font-semibold text-foreground">Atlas</p>
-            <p className="text-2xs text-muted-foreground">v0.4.0 — The second brain IDE</p>
+            <p className="text-2xs text-muted-foreground">
+              {version ? `v${version} — ` : ""}Multiplayer AI development
+            </p>
           </div>
         </div>
         <p className="text-xs text-secondary-foreground leading-relaxed pt-2">
-          Built with Tauri, React, and Rust. An everything app for agentic development — from code
-          analysis to task management, research, and AI orchestration.
+          Built with Tauri, React, and Rust. Atlas records the work your team's coding agents do,
+          links it to the commits it produced, and shares it with the whole team.
         </p>
       </div>
     </div>

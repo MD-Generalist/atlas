@@ -712,9 +712,9 @@ export const integrationsHandlers: TypedHandlers<IntegrationsResponses> = {
     return invites(id).map((i) => ({ ...i }));
   },
   /**
-   * The resolved `acceptUrl` is the whole point: email delivery is deferred,
-   * so that link is the only way the invitee ever hears about it, and the
-   * modal copies it straight out of this response.
+   * The resolved `acceptUrl` is the same link the server emails the invitee;
+   * the modal copies it straight out of this response so the inviter can also
+   * share it directly.
    */
   auth_invite_member: ({ orgId, email, role }): OrgInvitation => {
     const id = String(orgId);

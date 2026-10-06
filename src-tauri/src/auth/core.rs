@@ -1133,9 +1133,9 @@ impl AuthCore {
 
     /// `POST /organization/invite-member` (API §6.1).
     ///
-    /// Email delivery is deferred server-side, so the response's `acceptUrl` is
-    /// the ONLY way the invitee ever learns of the invite — it must reach the
-    /// UI to be shared out of band. Returning it is the point of this call.
+    /// The server emails the invitee their accept link; the response's
+    /// `acceptUrl` is that same link, returned so the UI can also offer it for
+    /// the inviter to copy and share directly.
     pub async fn invite_member(
         &self,
         org_id: &str,
@@ -1544,10 +1544,9 @@ pub struct OrgMember {
 
 /// A pending (or past) invitation to an organisation.
 ///
-/// `accept_url` is present only on the response to `/invite-member`: email
-/// delivery is deferred server-side, so that URL is the only way the invitee
-/// ever hears about it and the inviter has to be able to copy it. Listing
-/// invitations later does not re-issue one.
+/// `accept_url` is present only on the response to `/invite-member`: it is the
+/// same link the server emails the invitee, returned so the inviter can also
+/// copy it. Listing invitations later does not re-issue one.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct OrgInvitation {

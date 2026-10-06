@@ -410,9 +410,9 @@ pub async fn auth_list_invitations(
         .map_err(|e| e.user_message_denied("Only an admin can see this organisation's invites."))
 }
 
-/// Invite someone by email. The returned `acceptUrl` is the whole point —
-/// email delivery is deferred, so that link is the only way the invitee hears
-/// about it. Changes server state only; the snapshot holds no members, so
+/// Invite someone by email. The server emails the invitee; the returned
+/// `acceptUrl` is the same link, for the inviter to copy too. Changes server
+/// state only; the snapshot holds no members, so
 /// there is nothing to broadcast.
 #[tauri::command]
 pub async fn auth_invite_member(

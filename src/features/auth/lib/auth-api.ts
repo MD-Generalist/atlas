@@ -186,9 +186,9 @@ export const auth = {
    *  caller should render an empty invitations tab rather than an error. */
   listInvitations: (orgId: string) => invoke<OrgInvitation[]>("auth_list_invitations", { orgId }),
   /**
-   * Invite by email. Email delivery is deferred server-side, so the resolved
-   * `acceptUrl` is the ONLY way the invitee learns of the invite — surface it
-   * for the inviter to copy.
+   * Invite by email. The server emails the invitee their accept link; the
+   * resolved `acceptUrl` is that same link, surfaced so the inviter can also
+   * copy and share it directly.
    */
   inviteMember: (orgId: string, email: string, role: Role) =>
     invoke<OrgInvitation>("auth_invite_member", { orgId, email, role }),
