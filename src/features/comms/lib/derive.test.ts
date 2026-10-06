@@ -3,7 +3,9 @@ import {
   aggregateReactions,
   conversationTitle,
   groupMessages,
+  initials,
   isNewDay,
+  memberName,
   utf8Bytes,
 } from "./derive";
 import { parseMentions } from "../types";
@@ -213,5 +215,37 @@ describe("isNewDay", () => {
         msg({ id: "m2", created_at: new Date(2026, 8, 1, 0, 1).getTime() }),
       ),
     ).toBe(true);
+  });
+});
+
+describe("memberName", () => {
+  it("uses the display name when there is one", () => {
+    expect(memberName("  Priya Raghunathan ", "priya@acme.dev")).toBe("Priya Raghunathan");
+  });
+
+  it("falls back to the email for an account with no display name", () => {
+    expect(memberName("", "j.okonkwo@acme.dev")).toBe("j.okonkwo@acme.dev");
+    expect(memberName("   ", "j.okonkwo@acme.dev")).toBe("j.okonkwo@acme.dev");
+    expect(memberName(null, "j.okonkwo@acme.dev")).toBe("j.okonkwo@acme.dev");
+  });
+
+  it("never returns an empty label", () => {
+    expect(memberName("", "")).toBe("Unknown");
+  });
+});
+
+describe("initials", () => {
+  it("takes the first and last word of a name", () => {
+    expect(initials("Mirabel Fitzgerald-Okonkwo")).toBe("MF");
+    expect(initials("Sam")).toBe("SA");
+  });
+
+  it("reads an email label by its local part", () => {
+    expect(initials("j.okonkwo@acme.dev")).toBe("JO");
+    expect(initials("wren@acme.dev")).toBe("WR");
+  });
+
+  it("is ? only when there is nothing to draw", () => {
+    expect(initials("  ")).toBe("?");
   });
 });

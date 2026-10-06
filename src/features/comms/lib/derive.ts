@@ -142,8 +142,28 @@ export function dmCounterpart(
   return other ? (members.get(other) ?? null) : null;
 }
 
+/**
+ * What to call a member. The server can hold an account with no display name —
+ * an invite accepted from an email link and never completed — so the email
+ * stands in, as the web's members list labels such a row. Applied once, where
+ * the roster becomes `OrgMemberProfile`s, so every `member.name` reader (DM and
+ * contact rows, bylines, mentions, typing hints) gets a real label.
+ */
+export function memberName(name: string | null | undefined, email: string): string {
+  return name?.trim() || email.trim() || "Unknown";
+}
+
+/**
+ * Avatar initials. A label that is an email (see `memberName`) is read by its
+ * local part with `.`/`_`/`-` as word breaks — `j.okonkwo@acme.dev` is "JO",
+ * as the web's `initialsOf` draws it — not "J." off the raw address.
+ */
 export function initials(name: string): string {
-  const parts = name.trim().split(/\s+/).filter(Boolean);
+  let source = name.trim();
+  if (!/\s/.test(source) && source.includes("@")) {
+    source = source.slice(0, source.indexOf("@")).replace(/[._-]/g, " ");
+  }
+  const parts = source.split(/\s+/).filter(Boolean);
   if (parts.length === 0) return "?";
   if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
