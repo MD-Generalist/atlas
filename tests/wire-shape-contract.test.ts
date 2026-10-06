@@ -182,3 +182,25 @@ describe("MemoryEdge ↔ GraphEdge (#4)", () => {
     expect(rustFields.filter((f) => !tsFields.includes(f))).toEqual([]);
   });
 });
+
+describe("comms_start_call names its provider; comms_features ↔ ChatFeatures (#5)", () => {
+  const command = read("src-tauri", "src", "commands", "comms.rs");
+  const rest = read("crates", "atlas-comms", "src", "rest.rs");
+  const api = read("src", "features", "comms", "lib", "comms-api.ts");
+  const types = read("src", "features", "comms", "types.ts");
+
+  it("the Rust command takes `provider`, and the wrapper sends it", () => {
+    // The regression: the start carried no provider, the server defaulted it
+    // to a paid Meeting, and an Organisation without Meetings could start no
+    // call from the desktop at all — not even the free Voice Call.
+    expect(command).toMatch(/pub async fn comms_start_call\([^)]*provider: Option<String>/);
+    expect(api).toMatch(/invoke<ChatCall>\("comms_start_call",\s*\{[^}]*\bprovider\b[^}]*\}\)/);
+  });
+
+  it("every ChatFeatures field is on the frontend's ChatFeatures", () => {
+    const rustFields = rustStructFields(rustItem(rest, "struct", "ChatFeatures").body);
+    expect(rustFields).toEqual(["features", "mesh_call_max"]);
+    const tsFields = tsInterfaceProps(types, "ChatFeatures");
+    expect(rustFields.filter((f) => !tsFields.includes(f))).toEqual([]);
+  });
+});

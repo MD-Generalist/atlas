@@ -41,6 +41,7 @@ import {
   type ChatCall,
   type ChatCodeRef,
   type ChatConversation,
+  type ChatFeatures,
   type ChatPin,
   type ChatReaction,
   type ChatReadState,
@@ -803,6 +804,18 @@ const calls = new Map<string, ChatCall>([
   ],
 ]);
 
+/**
+ * The org's plan, as `GET /features` answers it. The catalogue defaults —
+ * free Voice Calls on, paid Meetings off — because that is what nearly every
+ * Organisation has, and it is the plan the header has to get right: the
+ * phone starts a Voice Call and the camera is disabled with its reason.
+ * Flip `calls.paid` to see the Meeting rows.
+ */
+const MOCK_FEATURES: ChatFeatures = {
+  features: { "calls.mesh": true, "calls.paid": false, "chat.webhooks": true },
+  mesh_call_max: 20,
+};
+
 const RECORDINGS = new Map<string, RecordingsResponse>([
   [
     "call_desktop_sync",
@@ -997,6 +1010,7 @@ export interface CommsResponses {
   comms_draft_update: Unit;
   comms_draft_awareness: Unit;
   comms_start_call: ChatCall;
+  comms_features: ChatFeatures;
   comms_call_recordings: RecordingsResponse;
   comms_fetch_recording: string;
   comms_save_recording: Unit;
@@ -1341,7 +1355,22 @@ export const commsHandlers: TypedHandlers<CommsResponses> = {
   comms_draft_awareness: (): null => null,
 
   // ── calls ───────────────────────────────────────────────────────────────
-  comms_start_call: ({ convId, mode, public: isPublic }): ChatCall => {
+  // The server's rules, as far as the header can see them: no provider means
+  // a Meeting, a Meeting needs `calls.paid` (off here, per MOCK_FEATURES),
+  // and a Voice Call is audio-only, guest-less, one live per conversation.
+  comms_start_call: ({ convId, mode, public: isPublic, provider }): ChatCall => {
+    // Thrown as the Rust bridge rejects: the refusal envelope as a string.
+    const refuse = (code: string, message: string) => JSON.stringify({ code, message });
+    if (provider === "mesh") {
+      if (mode !== "audio" || isPublic) {
+        throw refuse("bad_request", "A voice call is audio only and has no guest link.");
+      }
+      for (const live of calls.values()) {
+        if (live.conv_id === String(convId) && live.ended_at === null) return live;
+      }
+    } else if (!MOCK_FEATURES.features["calls.paid"]) {
+      throw refuse("feature_disabled", "Meetings are not available on this Organisation's plan.");
+    }
     const call: ChatCall = {
       id: `call_${Date.now()}`,
       conv_id: String(convId),
@@ -1358,6 +1387,7 @@ export const commsHandlers: TypedHandlers<CommsResponses> = {
     push({ kind: "callChanged", call });
     return call;
   },
+  comms_features: (): ChatFeatures => MOCK_FEATURES,
   // Links are minted per read and die in ~60s, so this is asked at open time
   // and never cached. A call with nothing kept answers with an empty list.
   comms_call_recordings: ({ callId }): RecordingsResponse =>

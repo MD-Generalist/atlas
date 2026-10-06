@@ -124,6 +124,23 @@ export interface ChatReadState {
 }
 
 export type CallMode = "audio" | "video";
+/**
+ * Which kind of call a start asks for: `mesh` is a free Voice Call (audio
+ * only, no guest link, peers capped by `mesh_call_max`), `rtk` a paid
+ * Meeting. The server reads a start that names neither as a Meeting.
+ */
+export type CallProvider = "mesh" | "rtk";
+
+/**
+ * `GET /features` (via `comms_features`): what the Organisation's plan
+ * allows. A hint for drawing the call buttons — every start is checked again
+ * server-side. `features` is open-ended: the server adds flags ahead of any
+ * given client.
+ */
+export interface ChatFeatures {
+  features: Record<string, boolean>;
+  mesh_call_max: number;
+}
 export type CallRecordingState =
   | "off"
   | "starting"

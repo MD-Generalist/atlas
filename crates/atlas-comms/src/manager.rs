@@ -1517,6 +1517,7 @@ impl CommsManager {
         conv_id: &str,
         mode: &str,
         public: bool,
+        provider: Option<&str>,
     ) -> Result<crate::wire::Call> {
         let session = self
             .session()
@@ -1524,7 +1525,7 @@ impl CommsManager {
         let call = self
             .inner
             .rest
-            .start_call(&session.org_id, conv_id, mode, public)
+            .start_call(&session.org_id, conv_id, mode, public, provider)
             .await?;
         {
             let mut state = self.inner.state.lock().unwrap();
