@@ -318,6 +318,16 @@ export const miscHandlers: MockHandlers = {
     return { settings, generation };
   },
   open_atlas_config: nothing,
+  // No `config.toml` on a browser's disk: the settings shown come from the
+  // boot snapshot, and `null` is the "no file read" answer the API allows.
+  get_atlas_config_info: nothing,
+
+  // ── OS notifications and the dock badge ─────────────────────────────────
+  // A browser has neither. `null` is what the wrappers read as "no native
+  // backend" / "not granted", the honest state here.
+  notifier_init: nothing,
+  notifier_request_authorization: nothing,
+  "plugin:window|set_badge_count": nothing,
 
   // ── updater ─────────────────────────────────────────────────────────────
   // An update IS available, because "you are up to date" hides the whole
