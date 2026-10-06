@@ -258,25 +258,29 @@ export async function deleteOrgAndData(id: string): Promise<boolean> {
 
 /**
  * Leave a synced organisation on the server, then take the desktop off it.
+ * Resolves `true` once left; `false` when the user backed out first.
  *
- * The server call goes first and its refusal is thrown to the caller (a
- * user-facing string) with nothing local touched — the Owner and the last
- * admin are refused, and they are still members.
+ * Leaving the org on screen when there is another to go to switches there
+ * FIRST, and only then asks the server. The switch can be declined (agents
+ * still running → "Go back") or swallowed by one already in flight, and the
+ * user must still be a member when that happens — not left on the server and
+ * stranded in an org whose every read now 403s.
  *
- * Once it has succeeded the org is gone for this account, so nothing that
- * points at it may stay: every read would 403. With another org to go to, the
- * desktop switches there first (if this one is active) and then drops the left
- * org's tracking, exactly as deleting it would — the project files on disk are
- * not touched. If it is the only org, it cannot be removed; it is unlinked
- * instead and kept as a local-only org, with team chat and the gateway told
- * there is no server org any more.
+ * The server's refusal (the Owner, the last admin) is thrown to the caller as
+ * a user-facing string, with the org's local tracking untouched.
+ *
+ * Once it has succeeded the org is gone for this account. With another org to
+ * go to, the left org's tracking is dropped exactly as deleting it would — the
+ * project files on disk are not touched. If it is the only org it cannot be
+ * removed (the desktop always has one); it is unlinked instead and kept as a
+ * local-only org with its projects, with team chat and the gateway told there
+ * is no server org any more. The web has no such step: an account there with
+ * no org simply has none, while a desktop org is also the local container its
+ * project folders are listed under.
  */
-export async function leaveOrgAndData(id: string): Promise<void> {
+export async function leaveOrgAndData(id: string): Promise<boolean> {
   const target = useOrgStore.getState().organisations.find((o) => o.id === id);
   if (!target?.remoteId) throw "This organisation isn't synced, so there's nothing to leave.";
-
-  await auth.leaveOrg(target.remoteId);
-  logEvent({ source: "project", kind: "org-leave", summary: id });
 
   const others = useOrgStore.getState().organisations.filter((o) => o.id !== id);
   if (useOrgStore.getState().activeOrganisationId === id && others.length > 0) {
@@ -284,13 +288,15 @@ export async function leaveOrgAndData(id: string): Promise<void> {
     // with a team, so a team is the less surprising place to land.
     const next = others.find((o) => o.syncEnabled && o.remoteId) ?? others[0];
     await switchOrg(next.id);
+    if (useOrgStore.getState().activeOrganisationId === id) return false;
   }
 
-  // The switch can be declined (agents still running → "Go back") or be
-  // coalesced into one already in flight. Never purge the org on screen.
-  if (useOrgStore.getState().activeOrganisationId !== id && others.length > 0) {
+  await auth.leaveOrg(target.remoteId);
+  logEvent({ source: "project", kind: "org-leave", summary: id });
+
+  if (others.length > 0) {
     useOrgStore.getState().actions.deleteOrg(id);
-    return;
+    return true;
   }
 
   useOrgStore.getState().actions.unlinkOrg(id);
@@ -304,6 +310,7 @@ export async function leaveOrgAndData(id: string): Promise<void> {
     });
     commsActions().endSwitch();
   }
+  return true;
 }
 
 /**

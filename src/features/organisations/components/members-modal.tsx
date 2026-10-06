@@ -30,6 +30,7 @@ import {
 import { memberRowAccess } from "../lib/member-access";
 import { leaveOrgAndData } from "../lib/org-switch";
 import { useMembersStore } from "../stores/members-store";
+import { useOrgStore } from "../stores/org-store";
 import type { Organisation } from "../types";
 
 const ROLES: Role[] = ["admin", "product_owner", "developer", "member"];
@@ -116,6 +117,9 @@ export function MembersModal({
    *  refuses that leave, so the menu says why instead of offering it. */
   const soleAdmin = isAdmin && members.filter((m) => m.role === "admin").length <= 1;
 
+  /** How many orgs this desktop tracks: leaving the only one keeps it here
+   *  as a local-only org instead of dropping it (see `leaveOrgAndData`). */
+  const orgCount = useOrgStore((s) => s.organisations.length);
   /** The leave confirmation is open. */
   const [confirmLeave, setConfirmLeave] = useState(false);
   const [leaving, setLeaving] = useState(false);
@@ -123,7 +127,8 @@ export function MembersModal({
     if (!org) return;
     setLeaving(true);
     try {
-      await leaveOrgAndData(org.id);
+      // `false`: the switch away was declined, and nothing was left.
+      if (!(await leaveOrgAndData(org.id))) return;
       toast.success(`You left ${org.name}.`);
       setConfirmLeave(false);
       onOpenChange(false);
@@ -364,6 +369,7 @@ export function MembersModal({
           </div>
           <LeaveOrgDialog
             orgName={org.name}
+            onlyOrg={orgCount <= 1}
             open={confirmLeave}
             leaving={leaving}
             onCancel={() => setConfirmLeave(false)}
@@ -384,12 +390,15 @@ export function MembersModal({
  */
 function LeaveOrgDialog({
   orgName,
+  onlyOrg,
   open,
   leaving,
   onCancel,
   onConfirm,
 }: {
   orgName: string;
+  /** It is the only org on this desktop, so it stays as a local-only one. */
+  onlyOrg: boolean;
   open: boolean;
   leaving: boolean;
   onCancel: () => void;
@@ -411,7 +420,11 @@ function LeaveOrgDialog({
           </Dialog.Title>
           <Dialog.Description className="mt-2 text-sm leading-relaxed text-[var(--secondary-foreground)]">
             You lose access to its chat, projects and shared sessions at once. Coming back takes a
-            new invitation. Your project files on this machine are not touched.
+            new invitation.{" "}
+            {onlyOrg
+              ? "It stays on this desktop as a local-only organisation, with its projects."
+              : "Atlas stops listing its projects here."}{" "}
+            Your project files on this machine are not touched.
           </Dialog.Description>
           <div className="mt-5 flex justify-end gap-2">
             <button
@@ -500,7 +513,11 @@ function MemberRow({
               <Hint label={access.roles ? "Manage" : "Options"}>
                 <DropdownMenu.Trigger
                   render={
-                    <button className="p-1 rounded text-muted-foreground hover:bg-element-hover hover:text-foreground outline-none transition-colors cursor-pointer">
+                    <button
+                      type="button"
+                      aria-label={`${access.roles ? "Manage" : "Options for"} ${member.name || member.email}`}
+                      className="p-1 rounded text-muted-foreground hover:bg-element-hover hover:text-foreground outline-none focus-visible:ring-1 focus-visible:ring-[var(--ring)] transition-colors cursor-pointer"
+                    >
                       <MoreHorizontal size={12} />
                     </button>
                   }

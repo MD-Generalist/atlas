@@ -37,10 +37,14 @@ vi.mock("@/features/app/stores/app-store", () => ({
 vi.mock("@/features/auth/stores/auth-store", () => ({
   useAuthStore: { getState: () => ({ snapshot: { status: "signed-in" } }) },
 }));
+// A running agent, and the user's answer to "stop agents & switch?".
+const agents = { busy: 0, stop: false };
 vi.mock("@/features/projects/lib/stop-agents-confirm", () => ({
-  busySessions: () => [],
+  busySessions: () => Array.from({ length: agents.busy }),
   cancelBusySessions: async () => {},
-  useStopAgentsConfirmStore: { getState: () => ({ actions: {} }) },
+  useStopAgentsConfirmStore: {
+    getState: () => ({ actions: { ask: async () => agents.stop } }),
+  },
 }));
 const leaveOrg = vi.fn(async (_remoteId: string) => {});
 vi.mock("@/features/auth/lib/auth-api", () => ({
@@ -79,6 +83,8 @@ const org = (id: string, remoteId?: string): Organisation => ({
 beforeEach(() => {
   vi.clearAllMocks();
   leaveOrg.mockImplementation(async () => {});
+  agents.busy = 0;
+  agents.stop = false;
 });
 
 describe("leaveOrgAndData", () => {
@@ -86,7 +92,7 @@ describe("leaveOrgAndData", () => {
     state.organisations = [org("local-a", "org_a"), org("local-b", "org_b")];
     state.activeOrganisationId = "local-a";
 
-    await leaveOrgAndData("local-b");
+    await expect(leaveOrgAndData("local-b")).resolves.toBe(true);
 
     expect(leaveOrg).toHaveBeenCalledWith("org_b");
     expect(state.actions.deleteOrg).toHaveBeenCalledWith("local-b");
@@ -123,6 +129,21 @@ describe("leaveOrgAndData", () => {
     expect(state.actions.deleteOrg).not.toHaveBeenCalled();
     expect(state.actions.unlinkOrg).not.toHaveBeenCalled();
     expect(state.organisations).toHaveLength(2);
+  });
+
+  it("asks nothing of the server when the switch away from it is declined", async () => {
+    // Leaving the org on screen switches first. "Go back" on the running-
+    // agents prompt must leave the user a member, not stranded in an org
+    // they have already left.
+    state.organisations = [org("local-a", "org_a"), org("local-b", "org_b")];
+    state.activeOrganisationId = "local-a";
+    agents.busy = 1;
+
+    await expect(leaveOrgAndData("local-a")).resolves.toBe(false);
+
+    expect(leaveOrg).not.toHaveBeenCalled();
+    expect(state.actions.deleteOrg).not.toHaveBeenCalled();
+    expect(state.actions.unlinkOrg).not.toHaveBeenCalled();
   });
 
   it("refuses an org that was never synced without calling the server", async () => {
