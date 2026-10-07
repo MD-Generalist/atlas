@@ -492,6 +492,8 @@ function seedThreads(): ThreadRow[] {
       // The branch the Session itself records: `main`, except the run that
       // built server-side discount validation on `server-discounts`.
       branch: s.content.branch,
+      // The demo's own sessions: no other process is writing any of them.
+      liveElsewhere: false,
     }));
 }
 

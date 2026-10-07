@@ -73,6 +73,7 @@ function renderCard(props: Partial<SessionCardProps> = {}) {
         liveTabId={null}
         active={false}
         agent="claude"
+        liveElsewhere={false}
         {...handlers}
         {...props}
       />
@@ -166,6 +167,15 @@ describe("SessionCard", () => {
     expect(document.body.textContent).toMatch(/atlas, /);
   });
 
+  it("marks a session another process is writing, for sight and for screen readers", () => {
+    renderCard();
+    expect(screen.queryByTestId("live-elsewhere-dot")).toBeNull();
+    cleanup();
+    renderCard({ liveElsewhere: true });
+    expect(screen.getByTestId("live-elsewhere-dot")).toBeTruthy();
+    expect(document.body.textContent).toMatch(/Active in another process/);
+  });
+
   it("keeps the status on the title line when the project is not named", () => {
     renderCard({ status: "waiting" });
     const status = screen.getByText("Needs input");
@@ -191,6 +201,7 @@ describe("SessionCard", () => {
         liveTabId={null}
         active={false}
         agent="claude"
+        liveElsewhere={false}
         onOpen={noop}
         onArchive={noop}
         onDelete={noop}

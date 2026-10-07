@@ -62,6 +62,9 @@ const THREADS: ThreadRow[] = [
     archived: false,
     projectName: MOCK_PROJECT.name,
     folderPaths: [MOCK_PROJECT.path],
+    // Another process is writing this one: the live dot, and the composer's
+    // "Send anyway" hold when it is opened.
+    liveElsewhere: true,
     // One of the fake repo's own branches (`fixtures/git.ts`).
     branch: "feature/auth-v2",
   },
@@ -76,6 +79,7 @@ const THREADS: ThreadRow[] = [
     archived: false,
     projectName: MOCK_PROJECT.name,
     folderPaths: [MOCK_PROJECT.path],
+    liveElsewhere: false,
     branch: "main",
   },
   {
@@ -89,6 +93,7 @@ const THREADS: ThreadRow[] = [
     archived: false,
     projectName: MOCK_PROJECT.name,
     folderPaths: [MOCK_PROJECT.path, abs("src/styles")],
+    liveElsewhere: false,
     branch: "main",
   },
   {
@@ -101,6 +106,7 @@ const THREADS: ThreadRow[] = [
     archived: false,
     projectName: OTHER_PROJECTS[0].name,
     folderPaths: [OTHER_PROJECTS[0].path],
+    liveElsewhere: false,
     branch: "main",
   },
   {
@@ -114,6 +120,7 @@ const THREADS: ThreadRow[] = [
     archived: true,
     projectName: MOCK_PROJECT.name,
     folderPaths: [MOCK_PROJECT.path],
+    liveElsewhere: false,
     // Detached HEAD when it ran, so Atlas never learned a branch.
     branch: null,
   },
@@ -262,8 +269,11 @@ const models: ModelStatus[] = MODELS.map((model) => ({ ...model }));
 
 export const miscHandlers: MockHandlers = {
   // ── chat history ────────────────────────────────────────────────────────
+  // As in Rust: `archivedOnly` narrows to archived rows, otherwise every row,
+  // archived or not (the composer's live-elsewhere feed relies on that).
   threads_history: ({ archivedOnly }): ThreadRow[] =>
-    threads.filter((thread) => (archivedOnly ? thread.archived : !thread.archived)),
+    archivedOnly ? threads.filter((thread) => thread.archived) : threads,
+  threads_sync_project: () => 0,
   threads_projects: ({ cwd }): ThreadProject[] =>
     threadProjects(cwd === null || cwd === undefined ? null : String(cwd)),
   threads_resume: ({ threadId }): ResumedThread => {
