@@ -36,7 +36,7 @@ src/features/<feature>/components  →  stores (Zustand)  →  lib/*-api.ts (inv
 │                                                                        │
 │  Persistence:                                                          │
 │  • Per-project: <project>/.atlas/ (knowledge, canvas.json,             │
-│    editor-state.json, logs.jsonl, memory index, codebase-index,        │
+│    editor-state.json, logs.jsonl, memory index, code-index,            │
 │    cloned repos, skills, packs)                                        │
 │  • Global:      ~/.atlas/ (pinned log rows),                           │
 │                 <app-config-dir>/threads.db (session history)          │
@@ -108,7 +108,7 @@ One Rust module per IPC domain under `src-tauri/src/commands/`. `commands/mod.rs
 | Models & usage | models, models_pricing, usage, tool_stats |
 | Session chat | session_chat, session_chat_sessions, modelchat |
 | Auth & environment | auth, byok, shell_profile, mcp |
-| Other | app_state, canvas, cli, clipboard, codebase_index, compose_prompt, feedback, fileindex, log, mention_search, mission_control, pdf_annotations, plans, project_session, recent_files, search, skills, telemetry, updater, window |
+| Other | app_state, canvas, cli, clipboard, code_index, code_server, compose_prompt, feedback, fileindex, log, mention_search, mission_control, pdf_annotations, plans, project_session, recent_files, skills, telemetry, updater, window |
 
 Adding a command is a three-edit rule:
 
@@ -139,7 +139,7 @@ Streaming from Rust to the UI runs on Tauri events, `atlas:*` channels, most pay
 | `atlas:modelchat` | model-chat streaming |
 | `atlas:browser-nav` | embedded-webview navigation state |
 | `atlas:git-changed`, `atlas:git-status-fresh`, `atlas:git:op` | git state invalidation from the fs-watcher, and long-op progress |
-| `atlas:codebase-index:progress` | codebase-index build progress |
+| `atlas:codebase-index:progress` | a code index job finished (or build progress); the status pill re-reads `codebase_index_status` |
 | `atlas:update-checking` / `-available` / `-progress` / `-ready` / `-applied` / `-error` | auto-updater lifecycle |
 | `atlas:auth-changed` / `-signed-out` / `-error` | account/session state |
 | `atlas:byok-env-updated` | shell-profile API-key environment changed |
@@ -236,7 +236,9 @@ All wired in as `path` dependencies from `src-tauri/Cargo.toml`, and all members
 | `atlas-memory` | On-device RAG/memory engine: MiniLM → usearch HNSW behind a `MemorySearchFn` seam; the shared-memory record store (`record`: SQLite per repository scope, redact-on-write, one-time legacy migration); and global promotion of Facts seen in two or more repositories to `~/.atlas/memory` (`global`). Read its `README.md` and `MIGRATION.md` before changing on-disk index formats. |
 | `atlas-instruction-sync` | Mirrors `CLAUDE.md` and `.claude/rules/` into one marked block of a project's `AGENTS.md`, for agents that read only `AGENTS.md`. Plain file I/O, no async, no Tauri; every byte outside the block is kept, and anything it cannot be sure of is skipped and logged. `commands::instruction_sync` decides when it runs. |
 | `atlas-embed` | On-device text embeddings (BERT-family sentence-transformers) and a small vector store, isolated so `candle`'s heavy dependency tree doesn't slow everything else's incremental builds. Embedding only — on-device generation was removed 2026-08-22. |
-| `atlas-codeindex` | Deterministic codebase scanner: turns live source into structural, embeddable docs via its own tree-sitter code intelligence (Rust/TS/TSX/JS/Python/Go). |
+| `atlas-codeindex` | The per-project code index: parallel tree-sitter extraction (Rust/TS/TSX/JS/Python/Go) into SQLite + FTS5 at `<project>/.atlas/code-index/index.db`, updated per file from the watchers; symbol search, outlines and symbol source for the `atlas_code` tools. |
+| `atlas-search` | In-process code search: grep on ripgrep's crates and glob/fuzzy file finding over a session root, with one compact, byte-budgeted output format for the `atlas_code` tools (ADR-0015). |
+| `atlas-retrieval` | The retrieval core memory and the code index share: content-keyed embedding cache codec, per-model usearch vector files that heal on open, RRF fusion, the `Embedder` trait. |
 | `atlas-profile` | Which data this process owns: the default profile or the dev profile `bun run dev:app` runs under. Derived once from the bundle identifier; every `.atlas` and `~/.config/atlas` name goes through it. Names only — no I/O, no dependencies. |
 | `atlas-kb-server` | Standalone static-server binary produced by the knowledge base's "Export server" action. Embeds the exported HTML/CSS via `include_dir!`, serves on `localhost:4747`. |
 
@@ -262,7 +264,7 @@ Everything else is per-project files under `<project-root>/.atlas/`:
 ├── knowledge/                markdown notes, in subdirectories
 ├── shared-memory/            legacy cross-agent event log (migrated into memory/memory.sqlite; kept one release)
 ├── memory/                   shared-memory record (memory.sqlite, at the scope root) + on-device RAG index (atlas-memory)
-├── codebase-index/           atlas-codeindex output
+├── code-index/               atlas-codeindex SQLite index (index.db)
 ├── repos/                    repos cloned via the GitHub panel
 ├── skills/, agent-skills/    SKILL.md files
 ├── packs/                    installed packs
@@ -336,7 +338,9 @@ atlas/
 │   ├── atlas-memory               on-device RAG/memory engine
 │   ├── atlas-instruction-sync     CLAUDE.md + .claude/rules → AGENTS.md block
 │   ├── atlas-embed                on-device embeddings (candle)
-│   ├── atlas-codeindex            tree-sitter codebase scanner
+│   ├── atlas-codeindex            code index (tree-sitter → SQLite + FTS5)
+│   ├── atlas-search               in-process grep / find_files
+│   ├── atlas-retrieval            shared retrieval core (vectors, RRF)
 │   ├── atlas-profile              default vs dev data profile (directory names)
 │   └── atlas-kb-server            self-contained KB static-server binary
 │

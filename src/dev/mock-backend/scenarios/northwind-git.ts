@@ -25,7 +25,7 @@ import type {
   FolderMatch,
 } from "@/features/file-picker/lib/file-picker-api";
 import type { RecentFile } from "@/features/chat/stores/recent-files-store";
-import type { SearchResult } from "@/components/search-overlay";
+import type { CodeGrepMatch, CodeGrepResult } from "@/components/code-search-api";
 import type { BlameLine } from "@/features/git/lib/git-blame-api";
 import type { BranchPullRequest, RepoPullRequests } from "@/features/git/lib/git-pr-api";
 import type { CommitFile, DiffLineStatus, FileDiff } from "@/features/git/lib/git-diff-api";
@@ -678,31 +678,37 @@ function ranked(paths: string[], query: unknown, limit: unknown, fallback: numbe
 /** What Rust's search walks (`search.rs`'s allowlist, trimmed to this repo's types). */
 const SEARCHABLE = new Set(["ts", "tsx", "js", "json", "html", "css", "md", "txt", "toml", "yml"]);
 
-function searchFiles(query: string, max: number): SearchResult[] {
-  const needle = query.toLowerCase();
-  const results: SearchResult[] = [];
-  if (!needle) return results;
+function grepWorktree(args: MockArgs): CodeGrepResult {
+  const query = String(args.query ?? "");
+  const max = Number(args.maxResults ?? 100);
+  const source = args.regex ? query : query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const needle = new RegExp(
+    args.wholeWord ? `\\b(?:${source})\\b` : source,
+    args.caseSensitive ? "" : "i",
+  );
+  const matches: CodeGrepMatch[] = [];
+  const matchedFiles = new Set<string>();
+  let totalMatches = 0;
   for (const path of worktreePaths()) {
-    if (results.length >= max) break;
     const segments = path.split("/");
     if (segments.some((name) => name.startsWith(".") || name === "node_modules")) continue;
     const name = segments[segments.length - 1];
     const dot = name.lastIndexOf(".");
     if (dot <= 0 || !SEARCHABLE.has(name.slice(dot + 1))) continue;
     for (const [index, line] of linesOf(worktreeText(path) ?? "").entries()) {
-      if (results.length >= max) break;
-      const at = line.toLowerCase().indexOf(needle);
-      if (at === -1) continue;
-      results.push({
-        file_path: path,
-        line: index + 1,
-        content: line,
-        match_start: at,
-        match_end: at + needle.length,
-      });
+      if (!needle.test(line)) continue;
+      totalMatches += 1;
+      matchedFiles.add(path);
+      if (matches.length < max) matches.push({ path, line: index + 1, text: line });
     }
   }
-  return results;
+  return {
+    matches,
+    totalMatches,
+    totalFiles: matchedFiles.size,
+    truncated: totalMatches > matches.length,
+    partial: false,
+  };
 }
 
 let recents: RecentFile[] = [
@@ -816,10 +822,7 @@ export const northwindGitCommands: Partial<TypedHandlers<MockResponses>> = {
     }).catch(() => {});
     return recents;
   },
-  search_in_files: (args) =>
-    ours(args.path)
-      ? searchFiles(String(args.query ?? ""), Number(args.maxResults ?? 100))
-      : fsHandlers.search_in_files(args),
+  code_grep: (args) => (ours(args.path) ? grepWorktree(args) : fsHandlers.code_grep(args)),
 
   // ── git: status ─────────────────────────────────────────────────────────
   git_workspace_summary: (args) =>

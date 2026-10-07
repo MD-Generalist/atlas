@@ -360,6 +360,31 @@ pub fn offer_for(
     provider.map_or_else(SessionMcpOffer::none, |p| p.offer(request))
 }
 
+/// `_meta` for a session request carrying `servers`: the Claude Code adapter
+/// passes `_meta.claudeCode.options` to the Agent SDK, whose `allowedTools` rule
+/// `mcp__<server>` runs that server's tools without a permission prompt: the
+/// standing the native agent's servers have (`default_tools_approval_mode =
+/// approve`). A server with any tool in `ask_first` ([`AskFirst`]) is never
+/// listed, so its tools keep Claude Code's own prompt; an ACP session is not
+/// offered such a server today, and this keeps that true by construction.
+/// Other adapters ignore `claudeCode`. `None` when no server qualifies.
+pub fn preapproval_meta(servers: &[acp::McpServer], ask_first: &AskFirst) -> Option<acp::Meta> {
+    let rules: Vec<serde_json::Value> = servers
+        .iter()
+        .filter_map(|server| match server {
+            acp::McpServer::Http(http) if ask_first.tools_on(&http.name).next().is_none() => {
+                Some(format!("mcp__{}", http.name).into())
+            }
+            _ => None,
+        })
+        .collect();
+    if rules.is_empty() {
+        return None;
+    }
+    let meta = serde_json::json!({ "claudeCode": { "options": { "allowedTools": rules } } });
+    meta.as_object().cloned()
+}
+
 /// The servers an agent with `capabilities` may be sent: stdio always (ACP
 /// requires every agent to take it), HTTP and SSE only when advertised.
 pub fn admissible(
@@ -386,6 +411,29 @@ mod tests {
 
     fn http(name: &str) -> acp::McpServer {
         acp::McpServer::Http(acp::McpServerHttp::new(name, "http://127.0.0.1:1/mcp"))
+    }
+
+    /// Claude Code asked before every Atlas tool call (review of #354): the
+    /// offered HTTP servers ride the session request as pre-approved.
+    #[test]
+    fn offered_http_servers_are_preapproved_for_claude_code() {
+        let stdio = acp::McpServer::Stdio(acp::McpServerStdio::new("local", "/bin/true"));
+        let servers = [http("atlas_memory"), http("atlas_code"), stdio];
+        let meta = preapproval_meta(&servers, &AskFirst::none()).unwrap();
+        assert_eq!(
+            serde_json::Value::Object(meta),
+            serde_json::json!({
+                "claudeCode": { "options": { "allowedTools": ["mcp__atlas_memory", "mcp__atlas_code"] } }
+            })
+        );
+        assert_eq!(preapproval_meta(&[], &AskFirst::none()), None);
+        // A server with an outward action keeps Claude Code's own prompt.
+        let ask = AskFirst::none().on("atlas_memory", &["share"]);
+        let meta = preapproval_meta(&servers, &ask).unwrap();
+        assert_eq!(
+            meta["claudeCode"]["options"]["allowedTools"],
+            serde_json::json!(["mcp__atlas_code"])
+        );
     }
 
     /// Every settle call the offer made: one entry each, `None` when the

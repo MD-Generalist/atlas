@@ -53,14 +53,16 @@
     "clippy": true
   },
   {
-    "crate": "atlas-codeindex"
+    "crate": "atlas-codeindex",
+    "clippy": true
   },
   {
     "crate": "atlas-comms",
     "clippy": true
   },
   {
-    "crate": "atlas-embed"
+    "crate": "atlas-embed",
+    "clippy": true
   },
   {
     "crate": "atlas-git",
@@ -70,6 +72,10 @@
   {
     "crate": "atlas-gitdiff",
     "cross": true
+  },
+  {
+    "crate": "atlas-grepindex",
+    "clippy": true
   },
   {
     "crate": "atlas-icon-theme",
@@ -97,6 +103,14 @@
     "crate": "atlas-redact",
     "clippy": true,
     "cross": true
+  },
+  {
+    "crate": "atlas-retrieval",
+    "clippy": true
+  },
+  {
+    "crate": "atlas-search",
+    "clippy": true
   },
   {
     "crate": "atlas-terminal",

@@ -302,6 +302,11 @@ pub struct AppSettings {
     /// consumer via the shared provider. See `crate::commands::models`.
     #[serde(default = "default_embedding_model")]
     pub embedding_model_id: String,
+    /// On-device embedding model for semantic code search (the code index's
+    /// vectors), by catalog id. Separate from `embedding_model_id`: memory
+    /// never resolves to a code model. See `crate::commands::models`.
+    #[serde(default = "default_code_embedding_model")]
+    pub code_embedding_model_id: String,
     /// One theme covers Atlas chrome, editor, terminal, diffs and syntax.
     #[serde(default = "default_theme")]
     pub theme: String,
@@ -390,6 +395,12 @@ pub struct AppSettings {
     /// Default ON.
     #[serde(default = "default_true")]
     pub agent_org_access: bool,
+    /// Let agents search code through the code tool server (ADR-0015):
+    /// `grep` and `find_files` over the session's directory. Off: sessions
+    /// are not offered the server and every call in a running one is
+    /// refused. Default ON.
+    #[serde(default = "default_true")]
+    pub agent_code_tools: bool,
     /// "Command finished": a successful command longer than
     /// `terminal_notify_min_duration_ms` notifies. (Once the terminal master
     /// switch; `notifications_enabled` is the master now.)
@@ -478,6 +489,10 @@ pub fn default_embedding_model() -> String {
     "all-MiniLM-L6-v2".to_string()
 }
 
+pub fn default_code_embedding_model() -> String {
+    "granite-embedding-small-r2".to_string()
+}
+
 pub fn default_ui_scale() -> f32 {
     1.0
 }
@@ -496,6 +511,7 @@ impl Default for AppSettings {
             share_telemetry: true,
             link_telemetry_to_account: true,
             embedding_model_id: default_embedding_model(),
+            code_embedding_model_id: default_code_embedding_model(),
             theme: default_theme(),
             theme_mode: ThemeMode::default(),
             theme_overrides: ThemeOverride::default(),
@@ -516,6 +532,7 @@ impl Default for AppSettings {
             enter_to_send: true,
             agent_ui_navigation: true,
             agent_org_access: true,
+            agent_code_tools: true,
             terminal_notifications: true,
             terminal_notify_min_duration_ms: default_terminal_notify_min_duration_ms(),
             terminal_notify_on_failure: true,
@@ -616,6 +633,12 @@ const SETTINGS_DOCS: &[(&str, &str)] = &[
         "# On-device embedding model, named by its directory. Normally managed\n\
          # for you by the Local Model Manager. Must not be empty.\n\
          # (default: \"all-MiniLM-L6-v2\")",
+    ),
+    (
+        "codeEmbeddingModelId",
+        "# On-device embedding model for semantic code search, named by its\n\
+         # directory. Normally managed for you by the Local Model Manager.\n\
+         # Must not be empty. (default: \"granite-embedding-small-r2\")",
     ),
     (
         "theme",
@@ -727,6 +750,14 @@ const SETTINGS_DOCS: &[(&str, &str)] = &[
          # cloud-bound Project belongs to. Anything that reaches another person\n\
          # asks you first. Off: its organization tools are withdrawn and every\n\
          # call is refused. (default: true)",
+    ),
+    (
+        "agentCodeTools",
+        "# Let agents search this project's code through Atlas: grep for text\n\
+         # and find files by name, in-process, respecting .gitignore and never\n\
+         # reading secret files such as .env. Off: the code tools are withdrawn\n\
+         # and every call is refused; agents use their own shell instead.\n\
+         # (default: true)",
     ),
     (
         "terminalNotifications",
@@ -883,6 +914,12 @@ pub fn validate(settings: &AppSettings) -> Result<(), ValidationIssue> {
     if settings.embedding_model_id.trim().is_empty() {
         return Err(ValidationIssue {
             key: "embeddingModelId",
+            message: "must not be empty".to_string(),
+        });
+    }
+    if settings.code_embedding_model_id.trim().is_empty() {
+        return Err(ValidationIssue {
+            key: "codeEmbeddingModelId",
             message: "must not be empty".to_string(),
         });
     }
@@ -1106,6 +1143,7 @@ pub struct SettingsPatch {
     pub share_telemetry: Option<bool>,
     pub link_telemetry_to_account: Option<bool>,
     pub embedding_model_id: Option<String>,
+    pub code_embedding_model_id: Option<String>,
     pub theme: Option<String>,
     pub theme_mode: Option<ThemeMode>,
     pub theme_overrides: Option<ThemeOverride>,
@@ -1125,6 +1163,7 @@ pub struct SettingsPatch {
     pub enter_to_send: Option<bool>,
     pub agent_ui_navigation: Option<bool>,
     pub agent_org_access: Option<bool>,
+    pub agent_code_tools: Option<bool>,
     pub terminal_notifications: Option<bool>,
     pub terminal_notify_min_duration_ms: Option<u32>,
     pub terminal_notify_on_failure: Option<bool>,
@@ -1170,6 +1209,9 @@ impl SettingsPatch {
         }
         if let Some(v) = &self.embedding_model_id {
             settings.embedding_model_id = v.clone();
+        }
+        if let Some(v) = &self.code_embedding_model_id {
+            settings.code_embedding_model_id = v.clone();
         }
         if let Some(v) = &self.theme {
             settings.theme = v.clone();
@@ -1224,6 +1266,9 @@ impl SettingsPatch {
         }
         if let Some(v) = self.agent_org_access {
             settings.agent_org_access = v;
+        }
+        if let Some(v) = self.agent_code_tools {
+            settings.agent_code_tools = v;
         }
         if let Some(v) = self.terminal_notifications {
             settings.terminal_notifications = v;
@@ -1323,6 +1368,7 @@ impl SettingsPatch {
         set_bool!(enter_to_send, "enterToSend");
         set_bool!(agent_ui_navigation, "agentUiNavigation");
         set_bool!(agent_org_access, "agentOrgAccess");
+        set_bool!(agent_code_tools, "agentCodeTools");
         set_bool!(terminal_notifications, "terminalNotifications");
         set_bool!(terminal_notify_on_failure, "terminalNotifyOnFailure");
         set_bool!(terminal_notify_on_attention, "terminalNotifyOnAttention");
@@ -1366,6 +1412,9 @@ impl SettingsPatch {
         }
         if let Some(v) = &self.embedding_model_id {
             table["embeddingModelId"] = toml_edit::value(v.as_str());
+        }
+        if let Some(v) = &self.code_embedding_model_id {
+            table["codeEmbeddingModelId"] = toml_edit::value(v.as_str());
         }
         if let Some(v) = &self.theme {
             table["theme"] = toml_edit::value(v.as_str());
@@ -2389,6 +2438,27 @@ mod tests {
         assert!(!mgr.effective().agent_org_access);
     }
 
+    /// ADR-0015: on unless the user switched it off, and a file that predates
+    /// the key reads as on.
+    #[test]
+    fn agent_code_tools_is_on_by_default_and_read_from_the_file() {
+        assert!(AppSettings::default().agent_code_tools);
+        let (_dir, path) = tmp_config_path();
+        let mgr = ConfigManager::from_raw(
+            path,
+            "schemaVersion = 1\n\n[settings]\nenterToSend = false\n",
+        )
+        .unwrap();
+        assert!(mgr.effective().agent_code_tools);
+        let (_dir, path) = tmp_config_path();
+        let mgr = ConfigManager::from_raw(
+            path,
+            "schemaVersion = 1\n\n[settings]\nagentCodeTools = false\n",
+        )
+        .unwrap();
+        assert!(!mgr.effective().agent_code_tools);
+    }
+
     #[test]
     fn missing_keys_fall_back_to_defaults() {
         let (_dir, path) = tmp_config_path();
@@ -2751,6 +2821,7 @@ someFutureKey = \"left alone\"
             share_telemetry: Some(!defaults.share_telemetry),
             link_telemetry_to_account: Some(!defaults.link_telemetry_to_account),
             embedding_model_id: Some("another-model".to_string()),
+            code_embedding_model_id: Some("another-code-model".to_string()),
             theme: Some("dracula".to_string()),
             theme_mode: Some(ThemeMode::Light),
             theme_overrides: Some(ThemeOverride {
@@ -2776,6 +2847,7 @@ someFutureKey = \"left alone\"
             enter_to_send: Some(!defaults.enter_to_send),
             agent_ui_navigation: Some(!defaults.agent_ui_navigation),
             agent_org_access: Some(!defaults.agent_org_access),
+            agent_code_tools: Some(!defaults.agent_code_tools),
             terminal_notifications: Some(!defaults.terminal_notifications),
             terminal_notify_min_duration_ms: Some(defaults.terminal_notify_min_duration_ms + 1),
             terminal_notify_on_failure: Some(!defaults.terminal_notify_on_failure),
